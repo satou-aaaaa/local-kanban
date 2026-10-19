@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2563eb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>カンバン</title>
+<!--
+  Claude が使えないときに使うカンバン（PWA）。外部ライブラリなし。
+  データの置き場所は3通り（どれもこのページには載せない）:
+    GitHub   … 非公開リポジトリの local-board/cards.json を、端末に貼った鍵（fine-grained トークン）で読み書きする。PC・スマホ両方
+    フォルダ … PC のフォルダ（データのリポジトリを取ってきたもの）を File System Access API で読み書きする。Chrome・Edge の PC だけ
+    ファイル … cards.json を選んで読み、ダウンロードで保存する（どのブラウザでも）
+  読む: local-board/cards.json（無ければ board/cards.json＝毎日の写し）
+  書く: local-board/cards.json と local-board/BOARD.md だけ（board/ は毎日の書き出しが上書きするので触らない）
+  データの形はデータのリポジトリの local-board/AGENTS.md と cards.schema.json。
+-->
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--text:#1d2129;--muted:#5f6673;--line:#d9dde3;--accent:#2563eb;--warn:#b45309;--ok:#15803d;--danger:#b91c1c;--chip:#eef1f5;--ask:#fff7e6}
+@media (prefers-color-scheme:dark){:root{--bg:#15171b;--panel:#1f2228;--text:#e6e8ec;--muted:#9aa1ad;--line:#343944;--accent:#60a5fa;--warn:#f59e0b;--ok:#4ade80;--danger:#f87171;--chip:#2a2e36;--ask:#2d2616}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 system-ui,"Segoe UI","Yu Gothic UI","Hiragino Sans",sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);padding:8px 16px;padding-top:max(8px,env(safe-area-inset-top))}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+header h1{font-size:16px;margin:0 8px 0 0}
+#status{color:var(--muted);font-size:12px;margin-top:4px}
+#status.warn{color:var(--warn)}#status.err{color:var(--danger)}#status.ok{color:var(--ok)}
+button,select,input,textarea{font:inherit;color:inherit}
+button{background:var(--chip);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer;min-height:36px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:disabled{opacity:.5;cursor:default}
+.spacer{flex:1}
+#menu{position:relative}
+#menu summary{list-style:none;cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:6px 12px;background:var(--chip);min-height:36px}
+#menu summary::-webkit-details-marker{display:none}
+#menu .items{position:absolute;right:0;top:42px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px;display:flex;flex-direction:column;gap:4px;min-width:220px;box-shadow:0 6px 20px rgba(0,0,0,.15)}
+#menu .items button{text-align:left}
+#tabs{display:none;gap:6px;overflow-x:auto;padding:8px 0 0;scrollbar-width:none}
+#tabs button{white-space:nowrap;border-radius:16px;padding:4px 12px;min-height:32px}
+#tabs button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+main{padding:12px 16px 80px;padding-bottom:max(80px,env(safe-area-inset-bottom))}
+.intro{max-width:760px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px}
+.intro ol{padding-left:20px}
+.choices{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+#addForm{display:none;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 12px}
+#addForm input[name=title]{flex:1 1 260px}
+input,select,textarea{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-height:36px}
+#board{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;align-items:start}
+.lane{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;min-height:80px}
+.lane.over{outline:2px dashed var(--accent)}
+.lane h2{font-size:14px;margin:2px 4px 8px;display:flex;justify-content:space-between}
+.lane h2 small{color:var(--muted);font-weight:normal}
+.card{border:1px solid var(--line);border-radius:6px;padding:8px;margin-bottom:8px;background:var(--panel);cursor:grab}
+.card.ask{background:var(--ask)}
+.card .t{font-weight:600;word-break:break-word}
+.meta{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0;font-size:12px}
+.chip{background:var(--chip);border-radius:10px;padding:0 8px;color:var(--muted)}
+.chip.you{color:var(--accent)}.chip.high{color:var(--danger)}.chip.late{color:var(--danger)}
+.note{font-size:12px;color:var(--muted);white-space:pre-wrap;word-break:break-word}
+.opts{margin-top:6px;display:flex;flex-direction:column;gap:4px}
+.opts button{text-align:left;white-space:normal}
+.opts .rec{border-color:var(--accent)}
+.answered{font-size:12px;color:var(--ok);margin-top:4px}
+.actions{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap}
+.actions button,.actions select{font-size:13px;padding:4px 8px;min-height:32px}
+dialog{border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);width:min(560px,94vw);max-height:90vh}
+dialog label{display:block;margin:8px 0 2px;font-size:12px;color:var(--muted)}
+dialog input,dialog select,dialog textarea{width:100%}
+dialog textarea{min-height:80px}
+dialog .help{font-size:12px;color:var(--muted)}
+.row{display:flex;gap:8px}.row>div{flex:1}
+.toggle{font-size:12px}
+a{color:var(--accent)}
+/* スマホ: 列はタブで1つずつ */
+@media (max-width:760px){
+  header{padding-left:12px;padding-right:12px}
+  main{padding-left:12px;padding-right:12px}
+  #tabs.show{display:flex}
+  #board{display:block}
+  #board .lane{display:none;border:none;background:none;padding:0}
+  #board .lane.cur{display:block}
+  #board .lane h2{display:none}
+  .card{cursor:default}
+  #addForm input,#addForm select{flex:1 1 45%}
+  .row{flex-direction:column;gap:0}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>カンバン</h1>
+    <span class="spacer"></span>
+    <button id="addBtn" class="primary" hidden>＋ 足す</button>
+    <button id="reloadBtn" hidden title="最新を読み直す">↻</button>
+    <details id="menu">
+      <summary>⋯</summary>
+      <div class="items">
+        <button data-m="github">GitHub でつなぐ（PC・スマホ）</button>
+        <button data-m="folder">PC のフォルダを開く</button>
+        <button data-m="file">cards.json を選ぶ</button>
+        <button data-m="download" disabled>ダウンロードで保存</button>
+        <button data-m="install" hidden>アプリとしてインストール</button>
+      </div>
+    </details>
+  </div>
+  <div id="status">まだつないでいません。</div>
+  <nav id="tabs"></nav>
+  <input type="file" id="fileInput" accept=".json,application/json" hidden>
+</header>
+<main>
+  <form id="addForm">
+    <input name="title" placeholder="やること" required>
+    <select name="owner"><option value="you">自分</option><option value="agent">エージェント</option></select>
+    <select name="lane"></select>
+    <input name="due" type="date" title="期限">
+    <button class="primary">足す</button>
+    <button type="button" id="addCancel">やめる</button>
+  </form>
+  <section class="intro" id="intro">
+    <p><b>Claude が使えないあいだのカンバンです。</b>データの置き場所を選んでください。</p>
+    <div class="choices">
+      <button class="primary" data-m="github">GitHub でつなぐ（PC・スマホ）</button>
+      <button data-m="folder" id="folderChoice">PC のフォルダを開く</button>
+      <button id="reopenBtn" hidden>前回のフォルダを開く</button>
+      <button data-m="file">cards.json を選ぶ</button>
+    </div>
+    <ol>
+      <li><b>GitHub</b>：非公開リポジトリの <code>local-board/cards.json</code> を読み書きします。初回だけ鍵（トークン）を貼ります。鍵はこの端末の中にだけ保存されます。</li>
+      <li><b>PC のフォルダ</b>：GitHub Desktop で取ってきたデータのリポジトリのフォルダを選びます（Chrome・Edge の PC だけ）。</li>
+      <li><b>cards.json を選ぶ</b>：どのブラウザでも読めます。保存は「ダウンロードで保存」です。</li>
+    </ol>
+    <p class="note">使い方の全文は データのリポジトリの <code>local-board/README.md</code>。</p>
+  </section>
+  <div id="board" hidden></div>
+</main>
+
+<dialog id="editDlg">
+  <form method="dialog" id="editForm">
+    <h3 style="margin-top:0">カードを直す</h3>
+    <label>やること</label><input name="title" required>
+    <div class="row">
+      <div><label>担当</label><select name="owner"><option value="you">自分</option><option value="agent">エージェント</option></select></div>
+      <div><label>列</label><select name="lane"></select></div>
+    </div>
+    <div class="row">
+      <div><label>期限</label><input name="due" type="date"></div>
+      <div><label>優先度</label><select name="priority"><option value="">なし</option><option value="high">高</option><option value="mid">中</option><option value="low">低</option></select></div>
+    </div>
+    <label>リンク</label><input name="link" type="url">
+    <label>補足（note）</label><textarea name="note"></textarea>
+    <label>メモを足す（履歴に残る）</label><input name="comment" placeholder="例: 〇〇まで済んだ">
+    <div class="actions" style="justify-content:space-between;margin-top:12px">
+      <button type="button" id="delBtn">消す</button>
+      <span><button value="cancel" formnovalidate>やめる</button> <button value="ok" class="primary">保存</button></span>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="ghDlg">
+  <form method="dialog" id="ghForm">
+    <h3 style="margin-top:0">GitHub でつなぐ</h3>
+    <div class="row">
+      <div><label>持ち主</label><input name="owner" required placeholder="GitHub のユーザー名"></div>
+      <div><label>リポジトリ</label><input name="repo" required placeholder="データのある非公開リポジトリ"></div>
+      <div><label>ブランチ</label><input name="branch" required placeholder="main"></div>
+    </div>
+    <label>鍵（fine-grained トークン）</label>
+    <input name="token" type="password" autocomplete="off" placeholder="github_pat_…">
+    <p class="help">鍵の作り方：<a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub の鍵を作るページ</a>で、Repository access を「Only select repositories」→ 上のリポジトリだけ、Permissions の Contents を「Read and write」にして作る。出てきた文字列をここに貼る。鍵はこの端末のブラウザの中にだけ保存し、GitHub 以外には送りません。空のまま保存すると、前に貼った鍵を使います。</p>
+    <div class="actions" style="justify-content:space-between;margin-top:12px">
+      <button type="button" id="ghForget">この端末の鍵を消す</button>
+      <span><button value="cancel" formnovalidate>やめる</button> <button value="ok" class="primary">つなぐ</button></span>
+    </div>
+  </form>
+</dialog>
+
+<script>
+'use strict';
+const LANES = [['now','今やる'],['next','次にやる'],['later','時間があるとき'],['hold','保留'],['agent','エージェントが進行中'],['done','済み']];
+const LANE_LABEL = Object.fromEntries(LANES);
+const PRIO = {high:'高',mid:'中',low:'低'};
+const DONE_DAYS = 7;
+const LOCAL = 'local-board/cards.json', BASE = 'board/cards.json', MD = 'local-board/BOARD.md';
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const now = () => new Date().toISOString();
+const ls = { get(k){ try { return JSON.parse(localStorage.getItem('lk.'+k)); } catch { return null; } },
+             set(k,v){ try { v == null ? localStorage.removeItem('lk.'+k) : localStorage.setItem('lk.'+k, JSON.stringify(v)); } catch {} } };
+
+let cards = [];
+let store = null;        // いまの置き場所（github / folder / file）
+let showAllDone = false;
+let editing = null;
+let curLane = ls.get('lane') || 'now';
+let saveTimer = null, saving = false, dirty = false, lastWhy = '';
+
+function setStatus(msg, kind=''){ const s=$('#status'); s.textContent=msg; s.className=kind; }
+
+// ================= 置き場所 =================
+// GitHub: contents API。sha で「読んだあとに他で書き換えられていないか」を確かめる
+function ghStore(cfg){
+  const api = p => `https://api.github.com/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}/contents/${p}`;
+  const hdr = () => ({ 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' });
+  const dec = b64 => new TextDecoder().decode(Uint8Array.from(atob(b64.replace(/\s/g,'')), c => c.charCodeAt(0)));
+  const enc = s => { const b = new TextEncoder().encode(s); let t = ''; for (let i = 0; i < b.length; i += 0x8000) t += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(t); };
+  const shas = {};
+  async function get(p){
+    const r = await fetch(api(p) + '?ref=' + encodeURIComponent(cfg.branch), { headers: hdr(), cache: 'no-store' });
+    if (r.status === 404) return null;
+    if (r.status === 401) throw new Error('鍵が違うか、期限が切れています（GitHub でつなぐ から貼り直す）');
+    if (r.status === 403) throw new Error('鍵にこのリポジトリを読む権限がありません');
+    if (!r.ok) throw new Error('GitHub から読めません（' + r.status + '）');
+    const j = await r.json(); shas[p] = j.sha; return dec(j.content);
+  }
+  async function put(p, text, why){
+    const body = { message: 'ローカル版ボード: ' + why, content: enc(text), branch: cfg.branch };
+    if (shas[p]) body.sha = shas[p];
+    const r = await fetch(api(p), { method: 'PUT', headers: { ...hdr(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (r.status === 409 || r.status === 422) { const e = new Error('conflict'); e.conflict = true; throw e; }
+    if (r.status === 401 || r.status === 403) throw new Error('鍵に書く権限がありません（Contents を Read and write にする）');
+    if (!r.ok) throw new Error('GitHub に書けません（' + r.status + '）');
+    shas[p] = (await r.json()).content.sha;
+  }
+  return {
+    kind: 'github', canSave: true,
+    label: `GitHub ${cfg.owner}/${cfg.repo}`,
+    async load(){
+      let t = await get(LOCAL), from = 'local-board/cards.json';
+      if (t == null) { t = await get(BASE); from = 'board/cards.json（毎日の写し。保存すると local-board に書きます）'; delete shas[LOCAL]; }
+      if (t == null) throw new Error('このリポジトリに board/cards.json がありません');
+      if (!(MD in shas)) { try { await get(MD); } catch {} }
+      return { text: t, from };
+    },
+    async save(json, md, why){ await put(LOCAL, json, why); try { await put(MD, md, why); } catch (e) { if (e.conflict) { delete shas[MD]; try { await get(MD); await put(MD, md, why); } catch {} } } },
+  };
+}
+
+// PC のフォルダ（File System Access API）
+function folderStore(root){
+  let stamp = 0;
+  async function file(path){ const parts = path.split('/'); let d = root; for (const p of parts.slice(0,-1)) d = await d.getDirectoryHandle(p); return (await d.getFileHandle(parts.at(-1))).getFile(); }
+  async function write(path, text){ const parts = path.split('/'); let d = root; for (const p of parts.slice(0,-1)) d = await d.getDirectoryHandle(p, {create:true}); const fh = await d.getFileHandle(parts.at(-1), {create:true}); const w = await fh.createWritable(); await w.write(text); await w.close(); return (await fh.getFile()).lastModified; }
+  return {
+    kind: 'folder', canSave: true, label: 'PC のフォルダ',
+    async load(){
+      let f, from;
+      try { f = await file(LOCAL); from = 'local-board/cards.json'; stamp = f.lastModified; }
+      catch { f = await file(BASE); from = 'board/cards.json（毎日の写し。保存すると local-board に書きます）'; stamp = 0; }
+      return { text: await f.text(), from };
+    },
+    async save(json, md){
+      try { const cur = await file(LOCAL); if (stamp && cur.lastModified !== stamp) { const e = new Error('conflict'); e.conflict = true; throw e; } } catch (e) { if (e.conflict) throw e; }
+      stamp = await write(LOCAL, json); await write(MD, md);
+    },
+  };
+}
+
+function fileStore(name, text){
+  return { kind: 'file', canSave: false, label: name, async load(){ return { text, from: name }; }, async save(){} };
+}
+
+// ================= 前回のフォルダを覚える（IndexedDB）=================
+function idb(){ return new Promise((ok,ng)=>{ const r=indexedDB.open('local-board',1); r.onupgradeneeded=()=>r.result.createObjectStore('h'); r.onsuccess=()=>ok(r.result); r.onerror=()=>ng(r.error); }); }
+async function saveHandle(h){ try{ const db=await idb(); db.transaction('h','readwrite').objectStore('h').put(h,'root'); }catch(e){} }
+async function loadHandle(){ try{ const db=await idb(); return await new Promise(ok=>{ const r=db.transaction('h').objectStore('h').get('root'); r.onsuccess=()=>ok(r.result||null); r.onerror=()=>ok(null); }); }catch(e){ return null; } }
+
+async function useFolder(h, ask=true){
+  let p = await h.queryPermission({mode:'readwrite'});
+  if (p !== 'granted' && ask) p = await h.requestPermission({mode:'readwrite'});
+  if (p !== 'granted') { if (ask) setStatus('フォルダへの書き込みが許可されませんでした。','err'); return false; }
+  try { await h.getDirectoryHandle('board'); }
+  catch { setStatus('このフォルダには board がありません。データのリポジトリのフォルダそのものを選んでください。','err'); return false; }
+  await saveHandle(h); ls.set('mode','folder');
+  await connect(folderStore(h)); return true;
+}
+
+// ================= 読む・保存する =================
+async function connect(s){
+  store = s;
+  try { await reload(); }
+  catch (e) {
+    const cached = s.kind === 'github' ? ls.get('cache') : null;
+    if (cached) { cards = cached; store = { ...s, canSave: false }; showBoard(); setStatus('読めませんでした（' + e.message + '）。前に読んだ写しを表示しています。直すのはつながってからにしてください。','err'); }
+    else setStatus('読めませんでした: ' + e.message, 'err');
+  }
+}
+
+async function reload(){
+  setStatus('読んでいます…');
+  const { text, from } = await store.load();
+  const d = JSON.parse(text);
+  if (!Array.isArray(d)) throw new Error('cards.json が配列ではありません');
+  cards = d; dirty = false;
+  if (store.kind === 'github') ls.set('cache', cards);
+  showBoard();
+  setStatus(`${store.label} から読みました: ${from}・${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
+}
+
+function showBoard(){
+  $('#intro').hidden = true; $('#board').hidden = false;
+  $('#addBtn').hidden = false; $('#reloadBtn').hidden = false;
+  $('[data-m=download]').disabled = false;
+  render();
+}
+
+// 変更のたびに呼ぶ。続けて押しても1回にまとめて保存する（GitHub の書き込み回数を減らす）
+function persist(why){
+  render();
+  if (store?.kind === 'github') ls.set('cache', cards);
+  if (!store?.canSave) { setStatus(`変更しました（${why}）。「⋯ → ダウンロードで保存」で cards.json を local-board に置いてください。`,'warn'); return; }
+  dirty = true; lastWhy = why;
+  setStatus(`保存待ち（${why}）…`);
+  clearTimeout(saveTimer); saveTimer = setTimeout(flush, 1200);
+}
+
+async function flush(){
+  if (!dirty || saving) return;
+  saving = true; const why = lastWhy;
+  try {
+    await store.save(JSON.stringify(cards, null, 2) + '\n', boardMd(cards), why);
+    dirty = false;
+    setStatus(`保存しました（${why}）${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
+  } catch (e) {
+    if (e.conflict) { dirty = false; await reload().catch(()=>{}); setStatus('ほかの端末か AI が先に書き換えていたので、今の変更は保存せずに読み直しました。もう一度やり直してください。','err'); }
+    else if (!navigator.onLine) setStatus('オフラインのため、まだ保存していません。つながったら自動で保存します。','warn');
+    else setStatus('保存できませんでした: ' + e.message, 'err');
+  } finally { saving = false; if (dirty && navigator.onLine && !saveTimer) flush(); saveTimer = null; }
+}
+window.addEventListener('online', () => { if (dirty) flush(); });
+window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && dirty) flush(); });
+
+function touch(c, text){
+  c.updated = now();
+  if (text) c.history = (c.history || []).concat({at:c.updated, who:'you', text}).slice(-50);
+  c.local_edit = true;   // Claude が戻ったときの取り込みの目印
+}
+
+// データのリポジトリの tools/export.py の board_md と同じ形
+function boardMd(cs){
+  const live = cs.filter(c => !c.deleted);
+  const rows = ['# ボード（ローカル版の写し）','', 'local-board のカンバンで直したもの。Claude が戻ったら取り込む（local-board/README.md）。',''];
+  for (const [lane,label] of LANES){
+    let l = live.filter(c => c.lane === lane).sort((a,b)=>(a.order||0)-(b.order||0));
+    if (lane === 'done') l = l.sort((a,b)=>(b.done_at||'').localeCompare(a.done_at||'')).slice(0,20);
+    rows.push(`## ${label}（${l.length}）`,'');
+    for (const c of l){
+      const who = c.owner === 'you' ? '自分' : 'エージェント';
+      let line = `- [${lane==='done'?'x':' '}] ${c.title||''}（${who}${c.due?'・期限 '+c.due:''}）`;
+      if (c.link) line += ` [リンク](${c.link})`;
+      rows.push(line);
+      const d = c.decision;
+      if (d){ (d.options||[]).forEach((o,i)=>rows.push(`  - ${o.label}${i===d.recommended?'（おすすめ）':''}: ${o.consequence}`)); if (c.answer) rows.push(`  - 答え: ${c.answer}`); }
+      else if (c.note) rows.push(`  - ${c.note}`);
+    }
+    rows.push('');
+  }
+  return rows.join('\n');
+}
+
+// ================= 表示 =================
+function laneCards(lane){
+  const live = cards.filter(c => !c.deleted);
+  let l = live.filter(c => (c.lane||'next') === lane).sort((a,c)=>(a.order||0)-(c.order||0));
+  let hidden = 0;
+  if (lane === 'done'){
+    l.sort((a,c)=>(c.done_at||'').localeCompare(a.done_at||''));
+    if (!showAllDone){ const cutoff = Date.now() - DONE_DAYS*864e5; const k = l.filter(c => !c.done_at || Date.parse(c.done_at) >= cutoff); hidden = l.length - k.length; l = k; }
+  }
+  return [l, hidden];
+}
+
+function render(){
+  const tabs = $('#tabs'); tabs.innerHTML = ''; tabs.classList.add('show');
+  for (const [lane,label] of LANES){
+    const b = document.createElement('button');
+    const asks = cards.filter(c => !c.deleted && c.lane === lane && c.decision && !c.answer).length;
+    b.textContent = `${label} ${laneCards(lane)[0].length}${asks ? ' ●' : ''}`;
+    if (lane === curLane) b.className = 'on';
+    b.onclick = () => { curLane = lane; ls.set('lane', lane); render(); window.scrollTo(0,0); };
+    tabs.appendChild(b);
+  }
+  const board = $('#board'); board.innerHTML = '';
+  for (const [lane,label] of LANES){
+    const [l, hidden] = laneCards(lane);
+    const sec = document.createElement('section');
+    sec.className = 'lane' + (lane === curLane ? ' cur' : ''); sec.dataset.lane = lane;
+    sec.innerHTML = `<h2>${label}<small>${l.length}${lane==='now'&&l.length>3?'（3枚まで）':''}</small></h2>`;
+    if (!l.length) sec.insertAdjacentHTML('beforeend', '<p class="note">カードはありません。</p>');
+    for (const c of l) sec.appendChild(cardEl(c));
+    if (lane === 'done' && (hidden || showAllDone)) {
+      const t = document.createElement('button'); t.className = 'toggle';
+      t.textContent = showAllDone ? `${DONE_DAYS}日分だけ見る` : `古いもの ${hidden} 枚も見る`;
+      t.onclick = () => { showAllDone = !showAllDone; render(); };
+      sec.appendChild(t);
+    }
+    sec.addEventListener('dragover', e => { e.preventDefault(); sec.classList.add('over'); });
+    sec.addEventListener('dragleave', () => sec.classList.remove('over'));
+    sec.addEventListener('drop', e => { e.preventDefault(); sec.classList.remove('over'); const c = cards.find(x => x.doc_id === e.dataTransfer.getData('text/plain')); if (c) moveTo(c, lane); });
+    board.appendChild(sec);
+  }
+}
+
+function cardEl(c){
+  const el = document.createElement('article');
+  el.className = 'card' + (c.decision && !c.answer ? ' ask' : '');
+  el.draggable = !matchMedia('(max-width:760px)').matches;
+  el.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', c.doc_id));
+  const late = c.due && c.lane !== 'done' && c.due < new Date().toISOString().slice(0,10);
+  const chips = [
+    c.no ? `<span class="chip">${esc(c.no)}</span>` : '',
+    `<span class="chip ${c.owner==='you'?'you':''}">${c.owner==='you'?'自分':'エージェント'}</span>`,
+    c.due ? `<span class="chip ${late?'late':''}">期限 ${esc(c.due)}</span>` : '',
+    c.priority ? `<span class="chip ${c.priority==='high'?'high':''}">優先 ${PRIO[c.priority]||esc(c.priority)}</span>` : '',
+    /^https?:\/\//.test(c.link||'') ? `<a class="chip" href="${esc(c.link)}" target="_blank" rel="noopener">リンク</a>` : '',
+  ].join('');
+  let html = `<div class="t">${esc(c.title)}</div><div class="meta">${chips}</div>`;
+  const d = c.decision;
+  if (d){
+    html += `<div class="note">${esc(d.question)}${d.context?'\n'+esc(d.context):''}</div>`;
+    if (c.answer) html += `<div class="answered">答え: ${esc(c.answer)}${c.answer_status==='local'?'（Claude が戻ったら届けます）':''}</div>`;
+    else html += `<div class="opts">${(d.options||[]).map((o,i)=>`<button data-opt="${i}" class="${i===d.recommended?'rec':''}"><b>${esc(o.label)}${i===d.recommended?'（おすすめ）':''}</b><br><span class="note">${esc(o.consequence)}</span></button>`).join('')}</div>`;
+  }
+  const note = c.progress || c.note;
+  if (note && !d) html += `<div class="note">${esc(note)}</div>`;
+  html += `<div class="actions">${c.lane!=='done'?'<button data-act="done">済み</button>':'<button data-act="undo">戻す</button>'}<select data-act="move" aria-label="列を移す">${LANES.map(([k,v])=>`<option value="${k}" ${k===c.lane?'selected':''}>${v}</option>`).join('')}</select><button data-act="edit">直す</button></div>`;
+  el.innerHTML = html;
+  el.querySelectorAll('[data-opt]').forEach(btn => btn.onclick = () => answer(c, +btn.dataset.opt));
+  el.querySelector('[data-act=edit]').onclick = () => openEdit(c);
+  el.querySelector('[data-act=move]').onchange = e => moveTo(c, e.target.value);
+  const dn = el.querySelector('[data-act=done]'); if (dn) dn.onclick = () => moveTo(c, 'done');
+  const un = el.querySelector('[data-act=undo]'); if (un) un.onclick = () => moveTo(c, c.owner==='agent'?'agent':'next');
+  return el;
+}
+
+// ================= 操作 =================
+function nextOrder(lane, except){ return Math.max(0, ...cards.filter(x => x.lane === lane && x !== except).map(x => x.order || 0)) + 1; }
+
+function moveTo(c, lane){
+  if (c.lane === lane) return;
+  const from = LANE_LABEL[c.lane] || c.lane;
+  c.lane = lane; c.order = nextOrder(lane, c);
+  if (lane === 'done') c.done_at = now(); else delete c.done_at;
+  touch(c, `${from} → ${LANE_LABEL[lane]}`);
+  persist(`「${c.title}」を${LANE_LABEL[lane]}へ`);
+}
+
+function answer(c, i){
+  const o = c.decision.options[i];
+  c.answer = o.label; c.answered_at = now(); c.answer_status = 'local';
+  touch(c, `答え: ${o.label}`);
+  persist(`「${c.title}」に「${o.label}」と答えた`);
+}
+
+function addCard(f){
+  const t = now();
+  // 番号（no）は付けない。Claude が戻って取り込むときにボードの番号を振る
+  const c = { doc_id: 'local-' + Date.now().toString(36), title: f.title.value.trim(), owner: f.owner.value, lane: f.lane.value,
+    created: t, updated: t, by: 'you-local', order: nextOrder(f.lane.value) };
+  if (f.due.value) c.due = f.due.value;
+  if (c.lane === 'done') c.done_at = t;
+  touch(c, 'ローカル版で足した');
+  cards.push(c); f.reset(); f.lane.value = curLane; f.style.display = 'none';
+  persist(`「${c.title}」を足した`);
+}
+
+function openEdit(c){
+  editing = c; const f = $('#editForm');
+  for (const k of ['title','owner','lane','due','priority','link','note']) f[k].value = c[k] || '';
+  f.comment.value = '';
+  $('#editDlg').showModal();
+}
+
+function laneOptions(sel){ sel.innerHTML = LANES.map(([k,v]) => `<option value="${k}">${v}</option>`).join(''); }
+
+// ================= つなぐ =================
+function openGithub(){
+  const f = $('#ghForm'), cfg = ls.get('gh') || {};
+  f.owner.value = cfg.owner || ''; f.repo.value = cfg.repo || ''; f.branch.value = cfg.branch || 'main'; f.token.value = '';
+  f.token.placeholder = cfg.token ? '（前に貼った鍵を使う）' : 'github_pat_…';
+  $('#ghDlg').showModal();
+}
+$('#ghForm').onsubmit = e => {
+  if (e.submitter?.value !== 'ok') return;
+  const f = e.target, old = ls.get('gh') || {};
+  const cfg = { owner: f.owner.value.trim(), repo: f.repo.value.trim(), branch: f.branch.value.trim() || 'main', token: f.token.value.trim() || old.token };
+  if (!cfg.token) { e.preventDefault(); f.token.focus(); return; }
+  ls.set('gh', cfg); ls.set('mode', 'github');
+  connect(ghStore(cfg));
+};
+$('#ghForget').onclick = () => { ls.set('gh', null); ls.set('cache', null); if (ls.get('mode') === 'github') ls.set('mode', null); $('#ghDlg').close(); setStatus('この端末の鍵を消しました。','warn'); };
+
+async function openFolder(){
+  if (!window.showDirectoryPicker) { setStatus('このブラウザは PC のフォルダを開けません（スマホ・Firefox・Safari）。「GitHub でつなぐ」を使ってください。','err'); return; }
+  try { await useFolder(await window.showDirectoryPicker({id:'kanban-data', mode:'readwrite'})); }
+  catch (e) { if (e.name !== 'AbortError') setStatus('開けませんでした: ' + e.message, 'err'); }
+}
+
+function download(){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(cards, null, 2) + '\n'], {type:'application/json'}));
+  a.download = 'cards.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  setStatus('cards.json をダウンロードしました。データのリポジトリの local-board フォルダに置いてください。','warn');
+}
+
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('[data-m=install]').hidden = false; });
+
+const actions = { github: openGithub, folder: openFolder, file: () => $('#fileInput').click(), download,
+  install: async () => { if (installEvt) { installEvt.prompt(); installEvt = null; $('[data-m=install]').hidden = true; } } };
+document.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { $('#menu').open = false; actions[b.dataset.m](); });
+
+$('#reopenBtn').onclick = async () => { const h = await loadHandle(); if (h) { try { await useFolder(h); } catch { setStatus('前回のフォルダを開けませんでした。「PC のフォルダを開く」から選び直してください。','err'); } } };
+$('#reloadBtn').onclick = async () => { if (!store) return; if (dirty) await flush(); try { await reload(); } catch (e) { setStatus('読めませんでした: ' + e.message, 'err'); } };
+$('#fileInput').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try { ls.set('mode', null); await connect(fileStore(f.name, await f.text())); setStatus(`読みました: ${f.name}（このやり方では自動で保存しません。「⋯ → ダウンロードで保存」を使います）`,'warn'); }
+  catch (err) { setStatus('読めませんでした: ' + err.message, 'err'); }
+  e.target.value = '';
+};
+$('#addBtn').onclick = () => { const f = $('#addForm'); f.lane.value = curLane === 'done' ? 'next' : curLane; f.style.display = 'flex'; f.title.focus(); };
+$('#addCancel').onclick = () => { $('#addForm').style.display = 'none'; };
+$('#addForm').onsubmit = e => { e.preventDefault(); addCard(e.target); };
+$('#editForm').onsubmit = e => {
+  const f = e.target;
+  if (e.submitter?.value !== 'ok' || !editing) return;
+  const c = editing, oldLane = c.lane;
+  for (const k of ['title','owner','due','priority','link','note']) { const v = f[k].value.trim(); if (v) c[k] = v; else delete c[k]; }
+  if (f.lane.value !== oldLane) { c.lane = f.lane.value; c.order = nextOrder(c.lane, c); if (c.lane === 'done') c.done_at = now(); else delete c.done_at; }
+  touch(c, f.comment.value.trim() || '内容を直した');
+  persist(`「${c.title}」を直した`);
+};
+$('#delBtn').onclick = () => {
+  const c = editing; if (!c) return;
+  const btn = $('#delBtn');
+  if (btn.dataset.sure !== '1') { btn.dataset.sure = '1'; btn.textContent = 'もう一度押すと消します'; return; }
+  c.deleted = true; c.deleted_at = now(); touch(c, '消した');
+  $('#editDlg').close(); persist(`「${c.title}」を消した`);
+};
+$('#editDlg').addEventListener('close', () => { const b = $('#delBtn'); b.dataset.sure = ''; b.textContent = '消す'; editing = null; });
+document.addEventListener('click', e => { if (!$('#menu').contains(e.target)) $('#menu').open = false; });
+
+laneOptions($('#addForm').lane); laneOptions($('#editForm').lane);
+if (!window.showDirectoryPicker) $('#folderChoice').hidden = true;
+
+// PWA（https か localhost で開いたときだけ。ダブルクリックで開いたときは使わない）
+if (location.protocol !== 'file:' && 'serviceWorker' in navigator) {
+  const m = document.createElement('link'); m.rel = 'manifest'; m.href = 'manifest.webmanifest'; document.head.appendChild(m);
+  const i = document.createElement('link'); i.rel = 'apple-touch-icon'; i.href = 'icon-192.png'; document.head.appendChild(i);
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+// 前回の置き場所に自動でつなぐ
+(async () => {
+  const mode = ls.get('mode'), gh = ls.get('gh');
+  if (mode === 'github' && gh?.token) return connect(ghStore(gh));
+  const h = window.showDirectoryPicker ? await loadHandle() : null;
+  if (h) { $('#reopenBtn').hidden = false; if (mode === 'folder') { try { await useFolder(h, false); } catch {} } }
+})();
+</script>
+</body>
+</html>
