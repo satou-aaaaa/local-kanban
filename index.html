@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>カンバン</title>
 <!--
-  Claude が使えないときに使うカンバン（PWA）。外部ライブラリなし。
+  Claude が使えないときに使うカンバン（PWA）。外部ライブラリなし（声の命令は voice.js、QR は qrcode.js を同じ場所に置く）。
   データの置き場所は3通り（どれもこのページには載せない）:
     GitHub   … 非公開リポジトリの local-board/cards.json を、端末に貼った鍵（fine-grained トークン）で読み書きする。PC・スマホ両方
     フォルダ … PC のフォルダ（データのリポジトリを取ってきたもの）を File System Access API で読み書きする。Chrome・Edge の PC だけ
@@ -72,6 +72,9 @@ dialog textarea{min-height:80px}
 dialog .help{font-size:12px;color:var(--muted)}
 .row{display:flex;gap:8px}.row>div{flex:1}
 .toggle{font-size:12px}
+#micBtn.on{background:var(--danger);border-color:var(--danger);color:#fff}
+#voiceHint{font-size:12px;color:var(--muted);flex-basis:100%}
+#said{font-size:12px;color:var(--accent);margin-top:2px}
 a{color:var(--accent)}
 /* スマホ: 列はタブで1つずつ */
 @media (max-width:760px){
@@ -97,6 +100,7 @@ a{color:var(--accent)}
   <div class="bar">
     <h1>カンバン</h1>
     <span class="spacer"></span>
+    <button id="micBtn" hidden title="話して操作（例：〇〇を追加・〇〇を済み・今やるを読んで）" aria-label="話して操作">🎤</button>
     <button id="addBtn" class="primary" hidden>＋ 足す</button>
     <button id="reloadBtn" hidden title="最新を読み直す">↻</button>
     <details id="menu">
@@ -105,13 +109,15 @@ a{color:var(--accent)}
         <button data-m="github">GitHub でつなぐ（PC・スマホ）</button>
         <button data-m="folder">PC のフォルダを開く</button>
         <button data-m="file">cards.json を選ぶ</button>
+        <button data-m="cmd" disabled>命令を打つ（Ctrl+K）</button>
         <button data-m="phone" hidden>スマホでも開く（QR）</button>
         <button data-m="download" disabled>ダウンロードで保存</button>
         <button data-m="install" hidden>アプリとしてインストール</button>
       </div>
     </details>
   </div>
-  <div id="status">まだつないでいません。</div>
+  <div id="status" role="status" aria-live="polite">まだつないでいません。</div>
+  <div id="said" hidden></div>
   <nav id="tabs"></nav>
   <input type="file" id="fileInput" accept=".json,application/json" hidden>
 </header>
@@ -123,6 +129,7 @@ a{color:var(--accent)}
     <input name="due" type="date" title="期限">
     <button class="primary">足す</button>
     <button type="button" id="addCancel">やめる</button>
+    <span id="voiceHint" hidden>声で足すときは、この欄で Win+H（スマホはキーボードのマイク）。🎤ボタンは Chrome・Safari で出ます。</span>
   </form>
   <section class="intro" id="intro">
     <p><b>Claude が使えないあいだのカンバンです。</b>データの置き場所を選んでください。</p>
@@ -184,6 +191,14 @@ a{color:var(--accent)}
   </form>
 </dialog>
 
+<dialog id="cmdDlg">
+  <form method="dialog" id="cmdForm">
+    <label for="cmdIn">命令（声と同じ言い方）</label>
+    <input id="cmdIn" name="cmd" autocomplete="off" placeholder="例：牛乳を買うを追加 ／ 請求書を済み ／ 請求書を保留へ ／ 今やるを読んで ／ 戻す">
+    <p class="help">「〇〇を追加」「今やるに〇〇を追加」「〇〇を済み」「〇〇を&lt;列&gt;へ」「〇〇を消して」「&lt;列&gt;を読んで」「戻す」。N でカードを足す欄、M で🎤、Esc で閉じる。</p>
+  </form>
+</dialog>
+
 <dialog id="qrDlg">
   <h3 style="margin-top:0">スマホでも開く</h3>
   <p class="help">スマホのカメラでこの QR を読んで開くと、つなぎ先（持ち主・リポジトリ）が入った状態で始まります。鍵は入っていないので、スマホでも「鍵を作るページを開く」から1つ作って貼ってください。</p>
@@ -191,6 +206,7 @@ a{color:var(--accent)}
   <div class="actions" style="justify-content:flex-end;margin-top:12px"><button id="qrClose" class="primary">閉じる</button></div>
 </dialog>
 
+<script src="voice.js"></script>
 <script>
 'use strict';
 const LANES = [['now','今やる'],['next','次にやる'],['later','時間があるとき'],['hold','保留'],['agent','エージェントが進行中'],['done','済み']];
@@ -312,12 +328,14 @@ async function reload(){
   $('[data-m=phone]').hidden = store.kind !== 'github';
   showBoard();
   setStatus(`${store.label} から読みました: ${from}・${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
+  runEntry();
 }
 
 function showBoard(){
   $('#intro').hidden = true; $('#board').hidden = false;
   $('#addBtn').hidden = false; $('#reloadBtn').hidden = false;
-  $('[data-m=download]').disabled = false;
+  $('[data-m=download]').disabled = false; $('[data-m=cmd]').disabled = false;
+  $('#micBtn').hidden = !window.Voice?.supported; $('#voiceHint').hidden = !!window.Voice?.supported;
   render();
 }
 
@@ -398,6 +416,8 @@ function render(){
     b.onclick = () => { curLane = lane; ls.set('lane', lane); render(); window.scrollTo(0,0); };
     tabs.appendChild(b);
   }
+  // アイコンのバッジに「今やる」の枚数（Windows・Mac のインストールしたアプリ）
+  if (navigator.setAppBadge) { const n = laneCards('now')[0].length; (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); }
   const board = $('#board'); board.innerHTML = '';
   for (const [lane,label] of LANES){
     const [l, hidden] = laneCards(lane);
@@ -494,17 +514,152 @@ function answer(c, i){
   persist(`「${c.title}」に「${o.label}」と答えた`);
 }
 
-function addCard(f){
+function newCard({ title, owner = 'you', lane = 'next', due = '', link = '', note = '' }, how = 'ローカル版で足した'){
   const t = now();
   // 番号（no）は付けない。Claude が戻って取り込むときにボードの番号を振る
-  const c = { doc_id: 'local-' + Date.now().toString(36), title: f.title.value.trim(), owner: f.owner.value, lane: f.lane.value,
-    created: t, updated: t, by: 'you-local', order: nextOrder(f.lane.value) };
-  if (f.due.value) c.due = f.due.value;
-  if (c.lane === 'done') c.done_at = t;
-  c.moves = [{at: t, from: null, to: c.lane}];
-  touch(c, 'ローカル版で足した');
-  cards.push(c); f.reset(); f.lane.value = curLane; f.style.display = 'none';
+  const c = { doc_id: 'local-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4), title: String(title).trim().slice(0, 200), owner, lane,
+    created: t, updated: t, by: 'you-local', order: nextOrder(lane) };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(due)) c.due = due;
+  if (/^https?:\/\//.test(link)) c.link = link;
+  if (note) c.note = String(note).slice(0, 2000);
+  if (lane === 'done') c.done_at = t;
+  c.moves = [{at: t, from: null, to: lane}];
+  touch(c, how);
+  cards.push(c);
+  return c;
+}
+function addCard(f){
+  const c = newCard({ title: f.title.value, owner: f.owner.value, lane: f.lane.value, due: f.due.value });
+  f.reset(); f.lane.value = curLane; f.style.display = 'none';
   persist(`「${c.title}」を足した`);
+}
+
+// ================= 声・命令欄・URL で操作 =================
+// 文の読み取りは voice.js の Voice.parse（claude.ai のボードと同じ文型）。ここでは命令をカードに当てはめるだけ
+const LANE_WORDS = [['now','今やる','いまやる','今','いま'],['next','次にやる','つぎにやる','次','つぎ'],['later','時間があるとき','あとで','後で','いつか'],['hold','保留','ほりゅう'],['agent','エージェントが進行中','エージェント'],['done','済み','すみ','完了','終わった']];
+let pending = null;            // 聞き返し中（候補えらび・消す確認）
+const undoStack = [];          // 「戻す」用（命令の前の状態）
+const live = () => cards.filter(c => !c.deleted);
+const remember = () => { undoStack.push(JSON.stringify(cards)); if (undoStack.length > 20) undoStack.shift(); };
+const writable = () => !!(store?.canSave || store?.kind === 'file');
+
+function say(text, voice){
+  setStatus(text, 'ok');
+  if (voice && window.Voice) Voice.speak(text);
+  return text;
+}
+
+// 命令を1つ実行して、返事の文を返す。voice=true なら読み上げる
+function runCommand(text, voice = false){
+  if (!store) return say('まだつないでいません。', voice);
+  if (!window.Voice) return say('声の部品（voice.js）を読めませんでした。', voice);
+  const cmd = Voice.parse(text, LANE_WORDS);
+  if (!cmd) return '';
+  // 聞き返しへの答え
+  if (pending) {
+    const p = pending; pending = null;
+    if (cmd.type === 'pick' && p.choices && p.choices[cmd.n - 1]) return apply({ ...p.cmd, card: p.choices[cmd.n - 1] }, voice);
+    if (cmd.type === 'yes' && p.confirm) return apply({ ...p.cmd, card: p.card, sure: true }, voice);
+    if (cmd.type === 'no' || cmd.type === 'yes' || cmd.type === 'pick') return say('やめました。', voice);
+  }
+  return apply(cmd, voice);
+}
+
+function apply(cmd, voice){
+  switch (cmd.type) {
+    case 'add': {
+      if (!writable()) return say('いまは保存できないので足せません。', voice);
+      const lane = cmd.lane || (curLane === 'done' ? 'next' : curLane);
+      remember(); const c = newCard({ title: cmd.title, lane }, '声・命令で足した');
+      persist(`「${c.title}」を足した`);
+      return say(`「${c.title}」を${LANE_LABEL[lane]}に足しました。`, voice);
+    }
+    case 'read': {
+      const l = laneCards(cmd.lane)[0];
+      curLane = cmd.lane; ls.set('lane', cmd.lane); render();
+      if (!l.length) return say(`${LANE_LABEL[cmd.lane]}は空です。`, voice);
+      return say(`${LANE_LABEL[cmd.lane]}は${l.length}枚。` + l.slice(0, 5).map((c, i) => `${i + 1}、${c.title}`).join('。') + (l.length > 5 ? `。ほか${l.length - 5}枚。` : '。'), voice);
+    }
+    case 'undo': {
+      if (!undoStack.length) return say('戻せるものがありません。', voice);
+      cards = JSON.parse(undoStack.pop()); persist('ひとつ前に戻した');
+      return say('ひとつ前に戻しました。', voice);
+    }
+    case 'done': case 'move': case 'delete': {
+      if (!writable()) return say('いまは保存できないので動かせません。', voice);
+      let c = cmd.card;
+      if (!c) {
+        const pool = cmd.type === 'done' ? live().filter(x => x.lane !== 'done') : live();
+        const hits = Voice.match(cmd.query, pool);
+        if (!hits.length) return say(`「${cmd.query}」に合うカードが見つかりません。`, voice);
+        if (hits.length > 1) { pending = { cmd, choices: hits }; return say('候補が' + hits.length + 'つあります。' + hits.map((h, i) => `${i + 1}番、${h.title}`).join('。') + '。何番ですか？', voice); }
+        c = hits[0];
+      }
+      if (cmd.type === 'delete') {
+        if (!cmd.sure) { pending = { cmd, card: c, confirm: true }; return say(`「${c.title}」を消しますか？ はい か いいえ で答えてください。`, voice); }
+        remember(); c.deleted = true; c.deleted_at = now(); touch(c, '声・命令で消した'); persist(`「${c.title}」を消した`);
+        return say(`「${c.title}」を消しました。戻すときは「戻す」。`, voice);
+      }
+      const lane = cmd.type === 'done' ? 'done' : cmd.lane;
+      if (c.lane === lane) return say(`「${c.title}」はもう${LANE_LABEL[lane]}です。`, voice);
+      remember(); moveTo(c, lane);
+      return say(`「${c.title}」を${LANE_LABEL[lane]}にしました。`, voice);
+    }
+    case 'pick': case 'yes': case 'no': return say('いまは聞き返していません。', voice);
+    default: return say(`「${cmd.text}」は分かりませんでした。例：〇〇を追加、〇〇を済み、今やるを読んで。`, voice);
+  }
+}
+
+let listening = false;
+async function listenOnce(){
+  if (listening || !window.Voice?.supported || !store) return;
+  listening = true; $('#micBtn').classList.add('on'); setStatus('聞いています…（例：〇〇を追加・〇〇を済み・今やるを読んで）');
+  let heard = false;
+  try {
+    const { text } = await Voice.listen({ onInfo: m => { $('#said').hidden = false; $('#said').textContent = m; } });
+    heard = true;
+    $('#said').hidden = false; $('#said').textContent = '「' + text + '」';
+    runCommand(text, true);
+  } catch (e) { setStatus(e.message, 'warn'); }
+  finally { listening = false; $('#micBtn').classList.remove('on'); }
+  // 聞き返したときは、読み上げが終わってから続けて聞く
+  if (heard && pending) setTimeout(listenOnce, 2500);
+}
+
+// URL・共有・ショートカットから来た操作（つながってから1回だけ）
+//   #add=題&lane=now&due=2026-10-25&note=…  カードを足す（iPhone のショートカット・Siri・ブックマークから）
+//   #cmd=〇〇を済み                         命令を1つ実行
+//   #new  足す欄を開く   #voice  🎤で聞く   #lane=now  その列を出す
+//   ?title=&text=&url=                      共有メニュー（Web Share Target）
+let entry = null;
+function readEntry(){
+  const e = {};
+  const q = new URLSearchParams(location.search);
+  const shared = [q.get('title'), q.get('text')].filter(Boolean).join(' ').trim();
+  const url = q.get('url') || (shared.match(/https?:\/\/\S+/) || [])[0] || '';
+  if (shared || url) e.add = { title: shared.replace(url, '').trim() || url, link: url, lane: 'next' };
+  const h = new URLSearchParams(location.hash.slice(1));
+  const okLane = l => LANES.some(([k]) => k === l);
+  if (h.get('add')) e.add = { title: h.get('add'), lane: okLane(h.get('lane')) ? h.get('lane') : 'next', due: h.get('due') || '', note: h.get('note') || '' };
+  if (h.get('cmd')) e.cmd = h.get('cmd');
+  if (h.has('new')) e.form = true;
+  if (h.has('voice')) e.voice = true;
+  if (!e.add && okLane(h.get('lane'))) e.lane = h.get('lane');
+  if (location.search || [...h.keys()].some(k => k !== 'repo' && k !== 'branch')) history.replaceState(null, '', location.pathname + (h.has('repo') ? '#repo=' + encodeURIComponent(h.get('repo')) + '&branch=' + encodeURIComponent(h.get('branch') || 'main') : ''));
+  return Object.keys(e).length ? e : null;
+}
+function runEntry(){
+  if (!entry || !store) return;
+  const e = entry; entry = null;
+  if (e.lane) { curLane = e.lane; ls.set('lane', e.lane); render(); }
+  if (e.add && e.add.title) {
+    if (!writable()) { setStatus('いまは保存できないので、受け取ったカードを足せませんでした。','err'); return; }
+    remember(); const c = newCard(e.add, e.add.link ? '共有から足した' : 'URL から足した');
+    curLane = c.lane; persist(`「${c.title}」を足した`);
+  }
+  if (e.cmd) runCommand(e.cmd);
+  if (e.form) $('#addBtn').click();
+  if (e.voice) listenOnce();
 }
 
 function openEdit(c){
@@ -574,7 +729,24 @@ $('#qrClose').onclick = () => $('#qrDlg').close();
 let installEvt = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('[data-m=install]').hidden = false; });
 
-const actions = { github: openGithub, phone: showPhoneQr, folder: openFolder, file: () => $('#fileInput').click(), download,
+function openCmd(){ if (!store) return; $('#cmdIn').value = ''; $('#cmdDlg').showModal(); $('#cmdIn').focus(); }
+$('#cmdForm').onsubmit = e => {
+  e.preventDefault();
+  const t = $('#cmdIn').value; $('#cmdIn').value = '';
+  runCommand(t);
+  if (pending) $('#cmdIn').placeholder = '番号か、はい／いいえ'; else { $('#cmdIn').placeholder = '例：牛乳を買うを追加'; $('#cmdDlg').close(); }
+};
+$('#micBtn').onclick = listenOnce;
+// キーボード：Ctrl+K（Mac は ⌘K）で命令欄、N で足す欄、M で🎤
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); openCmd(); return; }
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.querySelector('dialog[open]');
+  if (typing || e.ctrlKey || e.metaKey || e.altKey || !store) return;
+  if (e.key === 'n' || e.key === 'N') { e.preventDefault(); $('#addBtn').click(); }
+  else if ((e.key === 'm' || e.key === 'M') && window.Voice?.supported) { e.preventDefault(); listenOnce(); }
+});
+
+const actions = { github: openGithub, phone: showPhoneQr, cmd: openCmd, folder: openFolder, file: () => $('#fileInput').click(), download,
   install: async () => { if (installEvt) { installEvt.prompt(); installEvt = null; $('[data-m=install]').hidden = true; } } };
 document.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { $('#menu').open = false; actions[b.dataset.m](); });
 
@@ -620,10 +792,11 @@ if (location.protocol !== 'file:' && 'serviceWorker' in navigator) {
 
 // 前回の置き場所に自動でつなぐ
 (async () => {
+  entry = readEntry();
   // 設定のリンク（#repo=持ち主/リポジトリ&branch=…）で開いたら、つなぎ先を入れて鍵の画面を出す
   if (location.hash.length > 1) {
     const h = new URLSearchParams(location.hash.slice(1));
-    history.replaceState(null, '', location.pathname + location.search);
+    history.replaceState(null, '', location.pathname);
     const [owner, repo] = (h.get('repo') || '').split('/');
     if (owner && repo) {
       const old = ls.get('gh') || {};
