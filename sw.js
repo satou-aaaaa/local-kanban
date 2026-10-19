@@ -1,8 +1,8 @@
 // アプリの画面だけを端末に保存して、オフラインでも開けるようにする。
 // カードのデータ（api.github.com など他のサイト）には触らない。
 // 先にネットを見て、つながらないときだけ保存したものを使う（更新はすぐ届く）。
-const CACHE = 'kanban-v1';
-const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+const CACHE = 'kanban-v2';
+const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './qrcode.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
