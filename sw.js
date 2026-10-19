@@ -1,7 +1,7 @@
 // アプリの画面だけを端末に保存して、オフラインでも開けるようにする。
 // カードのデータ（api.github.com など他のサイト）には触らない。
 // 先にネットを見て、つながらないときだけ保存したものを使う（更新はすぐ届く）。
-const CACHE = 'kanban-v3';
+const CACHE = 'kanban-v4';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './qrcode.js', './voice.js'];
 
 self.addEventListener('install', e => {
@@ -9,8 +9,9 @@ self.addEventListener('install', e => {
 });
 
 self.addEventListener('activate', e => {
+  // 同じ場所のメモアプリ（notes/）のキャッシュ（notes-…）は消さない
   e.waitUntil(caches.keys()
-    .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+    .then(keys => Promise.all(keys.filter(k => k.startsWith('kanban-') && k !== CACHE).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 

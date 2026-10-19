@@ -1,9 +1,10 @@
 // 声（と Ctrl+K の命令欄）で操作するための小さな部品。カンバン以外のアプリ（メモなど）からも使える。外部ライブラリなし。
 //   Voice.parse(文, 列の一覧)  … 文を命令に直す（ブラウザの機能は使わない。テストしやすいように純粋な関数）
 //   Voice.match(言葉, 一覧, 題の取り出し) … あいまい一致で候補を探す
-//   Voice.listen(コールバック) … 1回だけ聞き取る（端末の中で認識できればそちらを使う）
-//   Voice.speak(文)            … 読み上げる
-//   Voice.supported            … 音声認識が使えるか（Edge・Firefox は false）
+//   Voice.listen()             … 1回だけ聞き取る（端末の中だけ。サーバーで文字にする音声認識は使わない）
+//   Voice.localStatus()        … 端末の中で聞き取れるか（'available' など）
+//   Voice.speak(文)            … 端末の中の声で読み上げる（ネット経由の声は使わない）
+//   Voice.supported            … 端末の中で聞き取れる音声認識があるか（Chrome 139 以降。Edge・Firefox・Safari は false）
 // 文型（claude.ai のボードと同じ）:
 //   「〇〇を追加」「〇〇を今やるに追加」「今やるに〇〇を追加」 → {type:'add', title, lane}
 //   「〇〇を済み」「〇〇終わった」「〇〇完了」                → {type:'done', query}
@@ -80,47 +81,64 @@
   }
 
   const SR = g.SpeechRecognition || g.webkitSpeechRecognition;
-  let noticed = false;
+  // 声は端末の外に出さない。端末の中で聞き取れる音声認識（Chrome 139 以降の processLocally）だけを使い、
+  // サーバーで文字にする音声認識（ふつうの Chrome・Safari・Edge）には落とさない。
+  const canLocal = !!SR && typeof SR.available === 'function';
 
-  // 1回だけ聞き取る。返り値は Promise<{ text, local }>。onInfo には「端末の中で聞き取ります」などの知らせを渡す
-  async function listen({ lang = 'ja-JP', onInfo = () => {} } = {}) {
-    if (!SR) throw new Error('このブラウザは音声認識が使えません');
-    let local = false;
-    if (typeof SR.available === 'function') {
-      try {
-        const st = await SR.available({ langs: [lang], processLocally: true });
-        if (st === 'available') local = true;
-        else if (st === 'downloadable' && typeof SR.install === 'function') SR.install({ langs: [lang], processLocally: true }).catch(() => {});
-      } catch { /* 古い Chrome */ }
+  // 'available'（使える）・'downloadable'（日本語の部品を入れれば使える）・'downloading'・'unavailable'
+  async function localStatus(lang = 'ja-JP') {
+    if (!canLocal) return 'unavailable';
+    try { return await SR.available({ langs: [lang], processLocally: true }); } catch { return 'unavailable'; }
+  }
+  // 日本語の部品を端末に入れる（ボタンを押したときに呼ぶ）。true なら入った
+  async function install(lang = 'ja-JP') {
+    if (!canLocal || typeof SR.install !== 'function') return false;
+    try { return !!(await SR.install({ langs: [lang], processLocally: true })); } catch { return false; }
+  }
+
+  // 1回だけ聞き取る。返り値は Promise<{ text }>。端末の中で聞き取れないときは聞かずにエラーにする
+  async function listen({ lang = 'ja-JP' } = {}) {
+    const st = await localStatus(lang);
+    if (st === 'downloadable' || st === 'downloading') {
+      if (st === 'downloadable') install(lang);
+      throw new Error('日本語の聞き取りの部品を端末に入れています。少し待ってからもう一度押してください。');
     }
-    if (!local && !noticed) {
-      noticed = true;
-      try { if (!localStorage.getItem('voice.noticed')) { localStorage.setItem('voice.noticed', '1'); onInfo('音声は Google のサーバーで文字にします（端末の中だけで聞き取れる Chrome では、次からそちらを使います）。'); } } catch { /* 保存できなくてもよい */ }
-    }
+    if (st !== 'available') throw new Error('この端末では、声を端末の中だけで聞き取れません。');
     return new Promise((ok, ng) => {
       const r = new SR();
       r.lang = lang; r.interimResults = false; r.maxAlternatives = 1; r.continuous = false;
-      if (local) r.processLocally = true;
+      r.processLocally = true;
       let got = false;
-      r.onresult = (e) => { got = true; ok({ text: e.results[0][0].transcript, local }); };
+      r.onresult = (e) => { got = true; ok({ text: e.results[0][0].transcript }); };
       r.onerror = (e) => ng(new Error(e.error === 'not-allowed' ? 'マイクが許可されていません' : e.error === 'no-speech' ? '聞き取れませんでした' : '音声認識のエラー: ' + e.error));
       r.onend = () => { if (!got) ng(new Error('聞き取れませんでした')); };
       r.start();
     });
   }
 
+  // 読み上げは端末の中の声（voice.localService が true）だけ。「Google 日本語」などネット経由の声は使わない（文が外に出るため）
+  function localVoice(lang = 'ja-JP') {
+    if (!g.speechSynthesis) return null;
+    const vs = g.speechSynthesis.getVoices().filter((v) => v.localService && v.lang && v.lang.replace('_', '-').startsWith(lang.slice(0, 2)));
+    let want = '';
+    try { want = localStorage.getItem('voice.name') || ''; } catch { /* なくてよい */ }
+    return vs.find((v) => v.name === want) || vs.find((v) => v.lang === lang) || vs[0] || null;
+  }
   function speak(text, lang = 'ja-JP') {
-    if (!g.speechSynthesis) return Promise.resolve();
+    const v = localVoice(lang);
+    if (!v) return Promise.resolve(false); // 端末の中の声が無ければ読み上げず、画面の文字だけにする
     return new Promise((ok) => {
       try {
         g.speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(text); u.lang = lang; u.rate = 1.1;
-        u.onend = ok; u.onerror = ok;
+        const u = new SpeechSynthesisUtterance(text); u.lang = v.lang; u.rate = 1.1;
+        try { u.voice = v; } catch { /* 本物の声オブジェクトでないとき（検査）*/ }
+        u.onend = () => ok(true); u.onerror = () => ok(false);
         g.speechSynthesis.speak(u);
-        setTimeout(ok, 400 + text.length * 250); // 読み上げが終わらない環境の保険
-      } catch { ok(); }
+        setTimeout(() => ok(true), 400 + text.length * 250); // 読み上げが終わらない環境の保険
+      } catch { ok(false); }
     });
   }
+  if (g.speechSynthesis) try { g.speechSynthesis.getVoices(); } catch { /* 声の一覧を先に読み込ませる */ }
 
-  g.Voice = { parse, match, laneOf, listen, speak, supported: !!SR, norm };
+  g.Voice = { parse, match, laneOf, listen, localStatus, install, speak, localVoice, supported: canLocal, norm };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -15,6 +15,7 @@ node qa/run.mjs        # manifest・SHELL・見本データでの表示と保存
 ```
 
 - 画面の作り（`#board .lane[data-lane]`・`.card`・`[data-act]`・`[data-opt]`・`#addForm`・`#tabs`・`#micBtn`・`#cmdIn`）を変えたら `qa/run.mjs` も合わせて直す。
+- 切り替えボタン（選んだものに色が付くボタン）は、見た目のクラス `.on` と `aria-pressed` を必ず一緒に変える。QA が `aria-pressed` の付いたボタンを全部押して確かめる（2026-10-19 claude.ai のボードで印が変わらない不具合があった）。
 
 ## 公開
 
