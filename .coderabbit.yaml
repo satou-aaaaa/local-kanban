@@ -1,0 +1,39 @@
+# CodeRabbit（GitHub アプリ）の設定。PR に2人目のレビューを付ける
+# （2026-10-18 satou さん承認。公開リポジトリは Open source プランで無料）。
+# 書式: https://docs.coderabbit.ai/reference/configuration
+language: ja-JP
+tone_instructions: "短く書く。指摘には、どの入力・どの手順でどう壊れるかを書く。好みの書き方・整形は指摘しない。"
+early_access: false
+reviews:
+  # chill: 細かい好みの指摘でエージェントの手を止めない
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: false
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  suggested_reviewers: false
+  auto_review:
+    enabled: true
+    # エージェントは下書きで作業するので、下書きのうちに見てもらう
+    drafts: true
+  path_filters: []
+  path_instructions:
+    - path: "**"
+      instructions: |
+        - このリポジトリの PR は Claude のエージェントが作り、CI が緑なら人の確認なしにマージされる。
+          だから、動きの誤り・データが壊れる・セキュリティ・テストや検査の抜けを優先して指摘する。
+        - 好みの書き方・言い回し・細かい整形は指摘しない（整形とリンターは CI が見る）。
+        - 指摘には、どの入力・どの手順でどう壊れるかを1〜2文で書く。たどれない推測は書かない。
+        - コメントや画面の文言の言い回し・言語を変える提案はしない（言葉選びは持ち主が決めている）。
+        - このアプリは利用者の GitHub の鍵（トークン）を端末に置いて api.github.com を直接呼ぶ。鍵が api.github.com 以外へ出る・画面や URL に載る・
+          外のスクリプトを読み込む変更と、cards.json の行を消す・ほかの端末の変更を上書きする変更は、必ず指摘する。
+        - 公開リポジトリなので、本物のデータ・鍵・データのリポジトリの名前が入っていたら指摘する。
+chat:
+  # エージェントが理由を返すたびに返事をしない（呼ばれたときだけ答える）
+  auto_reply: false

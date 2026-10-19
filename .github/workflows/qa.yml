@@ -1,0 +1,48 @@
+# カンバンの PWA の自動検査（Claude を使わない）。本物の GitHub や鍵は使わず、見本のデータ（qa/cards.sample.json）で
+# 表示・保存・service worker・オフライン・スマホ幅を確かめ、結果を「まとめ」（Actions の Summary）に出す。
+# プルリクエストで ✅ になれば automerge.yml が自動でマージし、公開まで進める。
+name: QA
+
+on:
+  pull_request:
+    # 下書きを外したときも回す（回らないと自動マージが起きない）
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    name: PWA の検査
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Playwright を入れる
+        run: |
+          cd qa
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: 検査
+        run: node qa/run.mjs --out qa-report
+      - name: 結果をまとめに出す
+        if: always()
+        run: test -f qa-report/report.md && cat qa-report/report.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: qa-report
+          path: qa-report
+          retention-days: 30

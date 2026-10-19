@@ -1,0 +1,27 @@
+name: Lighthouse
+
+# 公開中のページの速さ・使いやすさ（Lighthouse の点数）を週1回測る。Claude は使わない。
+# 基準（baseline。最初はひな形の値。公開後に手で1回測って置き換える）から決めた幅より下がったら失敗にし、
+# ci-failure-issue.yml がラベル ci-failure の Issue を立てる（次に成功すれば閉じる）。
+# 中身は共通部品 satou-aaaaa/shared-workflows にある。点数が良くなって定着したら baseline を上げてよい。
+on:
+  schedule:
+    # 毎週月曜 06:27 JST（= 日曜 21:27 UTC）
+    - cron: "27 21 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: read
+
+concurrency:
+  group: lighthouse
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    uses: satou-aaaaa/shared-workflows/.github/workflows/lighthouse.yml@main
+    with:
+      baseline: '{"performance": 70, "accessibility": 90, "best-practices": 90, "seo": 90}'
+      # 基準から何点まで下がってよいか（速さは測るたびに揺れるので幅を広く）
+      margin: '{"performance": 20, "accessibility": 10, "best-practices": 10, "seo": 10}'

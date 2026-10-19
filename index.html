@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#2563eb">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<!-- 外に出さない保証：通信できる先は自分のサイトと GitHub の API（カードの保存）だけ。声・会話・AI は端末の中で動く -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' file:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://api.github.com https://huggingface.co https://*.huggingface.co https://*.hf.co https://raw.githubusercontent.com;media-src 'self' blob:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'">
 <title>カンバン</title>
 <!--
-  Claude が使えないときに使うカンバン（PWA）。外部ライブラリなし。
+  Claude が使えないときに使うカンバン（PWA）。外部ライブラリなし（声の命令は voice.js、会話モードは talk.js、QR は qrcode.js を同じ場所に置く）。
   データの置き場所は3通り（どれもこのページには載せない）:
     GitHub   … 非公開リポジトリの local-board/cards.json を、端末に貼った鍵（fine-grained トークン）で読み書きする。PC・スマホ両方
     フォルダ … PC のフォルダ（データのリポジトリを取ってきたもの）を File System Access API で読み書きする。Chrome・Edge の PC だけ
@@ -72,6 +74,28 @@ dialog textarea{min-height:80px}
 dialog .help{font-size:12px;color:var(--muted)}
 .row{display:flex;gap:8px}.row>div{flex:1}
 .toggle{font-size:12px}
+#micBtn.on{background:var(--danger);border-color:var(--danger);color:#fff}
+#voiceHint{font-size:12px;color:var(--muted);flex-basis:100%}
+#said{font-size:12px;color:var(--accent);margin-top:2px}
+#talkDlg{width:min(520px,96vw)}
+#talkDlg .who{display:flex;align-items:center;gap:12px}
+#talkDlg .ava{width:88px;height:88px;flex:none}
+#talkDlg.speaking .mouth{animation:talkm .25s infinite alternate}
+@keyframes talkm{to{d:path("M50 80 Q60 96 70 80")}}
+@media (prefers-reduced-motion:reduce){#talkDlg.speaking .mouth{animation:none}}
+#talkName{font-size:18px;font-weight:700;margin:0}
+#talkState{font-size:12px;color:var(--muted)}
+#talkLog{max-height:40vh;overflow:auto;margin:12px 0;display:flex;flex-direction:column;gap:6px}
+#talkLog .l{padding:6px 10px;border-radius:10px;max-width:90%;white-space:pre-wrap;word-break:break-word}
+#talkLog .ai{background:var(--chip);align-self:flex-start}
+#talkLog .you{background:var(--accent);color:#fff;align-self:flex-end}
+#talkLog .sys{color:var(--muted);font-size:12px;align-self:center}
+#talkForm{display:flex;gap:6px}#talkForm input{flex:1}
+#talkSetForm .icons{display:flex;gap:8px}#talkSetForm .icons label{display:flex;flex-direction:column;align-items:center;gap:2px;margin:0}
+#talkSetForm .icons .ava{width:48px;height:48px}
+#talkSetForm .icons input{width:auto;min-height:0}
+#talkSetForm .chk{display:flex;align-items:center;gap:6px;color:var(--text);font-size:14px}#talkSetForm .chk input{width:auto;min-height:0}
+#aiBox{border:1px solid var(--line);border-radius:8px;margin:12px 0 0;padding:8px 12px}#aiBox legend{font-size:14px;padding:0 4px}#aiBox progress{width:100%}#aiBox .actions{gap:8px;flex-wrap:wrap}
 a{color:var(--accent)}
 /* スマホ: 列はタブで1つずつ */
 @media (max-width:760px){
@@ -97,6 +121,8 @@ a{color:var(--accent)}
   <div class="bar">
     <h1>カンバン</h1>
     <span class="spacer"></span>
+    <button id="talkBtn" hidden title="キャラと話して片づける（T）" aria-label="会話モード">💬</button>
+    <button id="micBtn" hidden title="話して操作（例：〇〇を追加・〇〇を済み・今やるを読んで）" aria-label="話して操作">🎤</button>
     <button id="addBtn" class="primary" hidden>＋ 足す</button>
     <button id="reloadBtn" hidden title="最新を読み直す">↻</button>
     <details id="menu">
@@ -105,13 +131,15 @@ a{color:var(--accent)}
         <button data-m="github">GitHub でつなぐ（PC・スマホ）</button>
         <button data-m="folder">PC のフォルダを開く</button>
         <button data-m="file">cards.json を選ぶ</button>
+        <button data-m="cmd" disabled>命令を打つ（Ctrl+K）</button>
         <button data-m="phone" hidden>スマホでも開く（QR）</button>
         <button data-m="download" disabled>ダウンロードで保存</button>
         <button data-m="install" hidden>アプリとしてインストール</button>
       </div>
     </details>
   </div>
-  <div id="status">まだつないでいません。</div>
+  <div id="status" role="status" aria-live="polite">まだつないでいません。</div>
+  <div id="said" hidden></div>
   <nav id="tabs"></nav>
   <input type="file" id="fileInput" accept=".json,application/json" hidden>
 </header>
@@ -123,6 +151,7 @@ a{color:var(--accent)}
     <input name="due" type="date" title="期限">
     <button class="primary">足す</button>
     <button type="button" id="addCancel">やめる</button>
+    <span id="voiceHint" hidden>声で足すときは、この欄で Win+H（スマホはキーボードのマイク）。ただし音声が Microsoft・Google のサーバーに送られることがあるので、プライベートな内容は、端末の中だけで聞き取れる🎤が出る Chrome で。</span>
   </form>
   <section class="intro" id="intro">
     <p><b>Claude が使えないあいだのカンバンです。</b>データの置き場所を選んでください。</p>
@@ -184,6 +213,48 @@ a{color:var(--accent)}
   </form>
 </dialog>
 
+<dialog id="cmdDlg">
+  <form method="dialog" id="cmdForm">
+    <label for="cmdIn">命令（声と同じ言い方）</label>
+    <input id="cmdIn" name="cmd" autocomplete="off" placeholder="例：牛乳を買うを追加 ／ 請求書を済み ／ 請求書を保留へ ／ 今やるを読んで ／ 戻す">
+    <p class="help">「〇〇を追加」「今やるに〇〇を追加」「〇〇を済み」「〇〇を&lt;列&gt;へ」「〇〇を消して」「&lt;列&gt;を読んで」「戻す」。N でカードを足す欄、M で🎤、Esc で閉じる。</p>
+  </form>
+</dialog>
+
+<dialog id="talkDlg" aria-labelledby="talkName">
+  <div class="who"><span id="talkAva"></span><div><p id="talkName"></p><div id="talkState"></div><div id="talkMode" class="help"></div></div></div>
+  <div id="talkLog" aria-live="polite"></div>
+  <form id="talkForm"><input id="talkIn" autocomplete="off" placeholder="打って話す（例：済み・あとで・保留・次）"><button class="primary">送る</button></form>
+  <div class="actions" style="justify-content:space-between;margin-top:12px"><button type="button" id="talkSetBtn">⚙ キャラの設定</button><button type="button" id="talkEnd">終わる</button></div>
+</dialog>
+
+<dialog id="talkSet">
+  <form method="dialog" id="talkSetForm">
+    <h3 style="margin-top:0">キャラの設定</h3>
+    <label>名前</label><input name="name" maxlength="20" required>
+    <label>性格と話し方（AI への指示）</label><textarea name="persona" maxlength="600"></textarea>
+    <label>アイコン</label>
+    <div class="icons" id="talkIcons"></div>
+    <label>色</label><input name="color" type="color">
+    <label>声（この端末の中の声だけ。ネット経由の声は出しません）</label><select name="voice"></select>
+    <label class="chk"><input type="checkbox" name="bargeIn"> 話の途中で割り込める（話している間だけマイクの音の大きさを端末の中で見る）</label>
+    <label class="chk"><input type="checkbox" name="ai"> 端末の中の AI（Chrome の内蔵 AI か、下で入れた AI）があれば使う</label>
+    <p class="help">声も会話も端末の外に出しません。AI が無い端末では、カードを1枚ずつ読み上げて「済み・あとで・保留・次」で片づけます。</p>
+    <fieldset id="aiBox">
+      <legend>スマホでも AI と話す（端末の中の AI）</legend>
+      <p id="aiStat" class="help"></p>
+      <progress id="aiProg" max="1" value="0" hidden></progress>
+      <p id="aiMsg" class="help" aria-live="polite"></p>
+      <div class="actions"><button type="button" id="aiGet"></button><button type="button" id="aiDel" hidden>入れた AI を消す</button></div>
+      <p class="help">押したときだけ、モデルのファイルを Hugging Face（huggingface.co）と GitHub（raw.githubusercontent.com）から1回取ってきて、この端末に保存します。以後はオフラインで動きます。取りに行くのはモデルだけで、会話やカードは送りません。大きいので Wi-Fi のときに押してください。</p>
+    </fieldset>
+    <div class="actions" style="justify-content:space-between;margin-top:12px">
+      <button type="button" id="talkReset">元に戻す</button>
+      <span><button value="cancel" formnovalidate>やめる</button> <button value="ok" class="primary">保存</button></span>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="qrDlg">
   <h3 style="margin-top:0">スマホでも開く</h3>
   <p class="help">スマホのカメラでこの QR を読んで開くと、つなぎ先（持ち主・リポジトリ）が入った状態で始まります。鍵は入っていないので、スマホでも「鍵を作るページを開く」から1つ作って貼ってください。</p>
@@ -191,6 +262,9 @@ a{color:var(--accent)}
   <div class="actions" style="justify-content:flex-end;margin-top:12px"><button id="qrClose" class="primary">閉じる</button></div>
 </dialog>
 
+<script src="voice.js"></script>
+<script src="localai.js"></script>
+<script src="talk.js"></script>
 <script>
 'use strict';
 const LANES = [['now','今やる'],['next','次にやる'],['later','時間があるとき'],['hold','保留'],['agent','エージェントが進行中'],['done','済み']];
@@ -312,12 +386,16 @@ async function reload(){
   $('[data-m=phone]').hidden = store.kind !== 'github';
   showBoard();
   setStatus(`${store.label} から読みました: ${from}・${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
+  runEntry();
 }
 
 function showBoard(){
   $('#intro').hidden = true; $('#board').hidden = false;
   $('#addBtn').hidden = false; $('#reloadBtn').hidden = false;
-  $('[data-m=download]').disabled = false;
+  $('[data-m=download]').disabled = false; $('[data-m=cmd]').disabled = false; $('#talkBtn').hidden = !window.Talk;
+  // 🎤は、声を端末の中だけで聞き取れる音声認識（processLocally）があるときだけ出す。サーバーへ送る音声認識は使わない。
+  // 使えるかどうか（available）は押したときに確かめる（開いたときには音声の部品に触らない）
+  $('#micBtn').hidden = !window.Voice?.supported; $('#voiceHint').hidden = !!window.Voice?.supported;
   render();
 }
 
@@ -394,10 +472,13 @@ function render(){
     const b = document.createElement('button');
     const asks = cards.filter(c => !c.deleted && c.lane === lane && c.decision && !c.answer).length;
     b.textContent = `${label} ${laneCards(lane)[0].length}${asks ? ' ●' : ''}`;
-    if (lane === curLane) b.className = 'on';
+    // 選ばれている印は見た目（.on）と読み上げ（aria-pressed）を必ず一緒に変える（qa/run.mjs が全部押して確かめる）
+    b.className = lane === curLane ? 'on' : ''; b.setAttribute('aria-pressed', String(lane === curLane));
     b.onclick = () => { curLane = lane; ls.set('lane', lane); render(); window.scrollTo(0,0); };
     tabs.appendChild(b);
   }
+  // アイコンのバッジに「今やる」の枚数（Windows・Mac のインストールしたアプリ）
+  if (navigator.setAppBadge) { const n = laneCards('now')[0].length; (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); }
   const board = $('#board'); board.innerHTML = '';
   for (const [lane,label] of LANES){
     const [l, hidden] = laneCards(lane);
@@ -494,18 +575,245 @@ function answer(c, i){
   persist(`「${c.title}」に「${o.label}」と答えた`);
 }
 
-function addCard(f){
+function newCard({ title, owner = 'you', lane = 'next', due = '', link = '', note = '' }, how = 'ローカル版で足した'){
   const t = now();
   // 番号（no）は付けない。Claude が戻って取り込むときにボードの番号を振る
-  const c = { doc_id: 'local-' + Date.now().toString(36), title: f.title.value.trim(), owner: f.owner.value, lane: f.lane.value,
-    created: t, updated: t, by: 'you-local', order: nextOrder(f.lane.value) };
-  if (f.due.value) c.due = f.due.value;
-  if (c.lane === 'done') c.done_at = t;
-  c.moves = [{at: t, from: null, to: c.lane}];
-  touch(c, 'ローカル版で足した');
-  cards.push(c); f.reset(); f.lane.value = curLane; f.style.display = 'none';
+  const c = { doc_id: 'local-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4), title: String(title).trim().slice(0, 200), owner, lane,
+    created: t, updated: t, by: 'you-local', order: nextOrder(lane) };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(due)) c.due = due;
+  if (/^https?:\/\//.test(link)) c.link = link;
+  if (note) c.note = String(note).slice(0, 2000);
+  if (lane === 'done') c.done_at = t;
+  c.moves = [{at: t, from: null, to: lane}];
+  touch(c, how);
+  cards.push(c);
+  return c;
+}
+function addCard(f){
+  const c = newCard({ title: f.title.value, owner: f.owner.value, lane: f.lane.value, due: f.due.value });
+  f.reset(); f.lane.value = curLane; f.style.display = 'none';
   persist(`「${c.title}」を足した`);
 }
+
+// ================= 声・命令欄・URL で操作 =================
+// 文の読み取りは voice.js の Voice.parse（claude.ai のボードと同じ文型）。ここでは命令をカードに当てはめるだけ
+const LANE_WORDS = [['now','今やる','いまやる','今','いま'],['next','次にやる','つぎにやる','次','つぎ'],['later','時間があるとき','あとで','後で','いつか'],['hold','保留','ほりゅう'],['agent','エージェントが進行中','エージェント'],['done','済み','すみ','完了','終わった']];
+let pending = null;            // 聞き返し中（候補えらび・消す確認）
+const undoStack = [];          // 「戻す」用（命令の前の状態）
+const live = () => cards.filter(c => !c.deleted);
+const remember = () => { undoStack.push(JSON.stringify(cards)); if (undoStack.length > 20) undoStack.shift(); };
+const writable = () => !!(store?.canSave || store?.kind === 'file');
+
+function say(text, voice){
+  setStatus(text, 'ok');
+  if (voice && window.Voice) Voice.speak(text);
+  return text;
+}
+
+// 命令を1つ実行して、返事の文を返す。voice=true なら読み上げる
+function runCommand(text, voice = false){
+  if (!store) return say('まだつないでいません。', voice);
+  if (!window.Voice) return say('声の部品（voice.js）を読めませんでした。', voice);
+  const cmd = Voice.parse(text, LANE_WORDS);
+  if (!cmd) return '';
+  // 聞き返しへの答え
+  if (pending) {
+    const p = pending; pending = null;
+    if (cmd.type === 'pick' && p.choices && p.choices[cmd.n - 1]) return apply({ ...p.cmd, card: p.choices[cmd.n - 1] }, voice);
+    if (cmd.type === 'yes' && p.confirm) return apply({ ...p.cmd, card: p.card, sure: true }, voice);
+    if (cmd.type === 'no' || cmd.type === 'yes' || cmd.type === 'pick') return say('やめました。', voice);
+  }
+  return apply(cmd, voice);
+}
+
+function apply(cmd, voice){
+  switch (cmd.type) {
+    case 'add': {
+      if (!writable()) return say('いまは保存できないので足せません。', voice);
+      const lane = cmd.lane || (curLane === 'done' ? 'next' : curLane);
+      remember(); const c = newCard({ title: cmd.title, lane }, '声・命令で足した');
+      persist(`「${c.title}」を足した`);
+      return say(`「${c.title}」を${LANE_LABEL[lane]}に足しました。`, voice);
+    }
+    case 'read': {
+      const l = laneCards(cmd.lane)[0];
+      curLane = cmd.lane; ls.set('lane', cmd.lane); render();
+      if (!l.length) return say(`${LANE_LABEL[cmd.lane]}は空です。`, voice);
+      return say(`${LANE_LABEL[cmd.lane]}は${l.length}枚。` + l.slice(0, 5).map((c, i) => `${i + 1}、${c.title}`).join('。') + (l.length > 5 ? `。ほか${l.length - 5}枚。` : '。'), voice);
+    }
+    case 'undo': {
+      if (!undoStack.length) return say('戻せるものがありません。', voice);
+      cards = JSON.parse(undoStack.pop()); persist('ひとつ前に戻した');
+      return say('ひとつ前に戻しました。', voice);
+    }
+    case 'done': case 'move': case 'delete': {
+      if (!writable()) return say('いまは保存できないので動かせません。', voice);
+      let c = cmd.card;
+      if (!c) {
+        const pool = cmd.type === 'done' ? live().filter(x => x.lane !== 'done') : live();
+        const hits = Voice.match(cmd.query, pool);
+        if (!hits.length) return say(`「${cmd.query}」に合うカードが見つかりません。`, voice);
+        if (hits.length > 1) { pending = { cmd, choices: hits }; return say('候補が' + hits.length + 'つあります。' + hits.map((h, i) => `${i + 1}番、${h.title}`).join('。') + '。何番ですか？', voice); }
+        c = hits[0];
+      }
+      if (cmd.type === 'delete') {
+        if (!cmd.sure) { pending = { cmd, card: c, confirm: true }; return say(`「${c.title}」を消しますか？ はい か いいえ で答えてください。`, voice); }
+        remember(); c.deleted = true; c.deleted_at = now(); touch(c, '声・命令で消した'); persist(`「${c.title}」を消した`);
+        return say(`「${c.title}」を消しました。戻すときは「戻す」。`, voice);
+      }
+      const lane = cmd.type === 'done' ? 'done' : cmd.lane;
+      if (c.lane === lane) return say(`「${c.title}」はもう${LANE_LABEL[lane]}です。`, voice);
+      remember(); moveTo(c, lane);
+      return say(`「${c.title}」を${LANE_LABEL[lane]}にしました。`, voice);
+    }
+    case 'pick': case 'yes': case 'no': return say('いまは聞き返していません。', voice);
+    default: return say(`「${cmd.text}」は分かりませんでした。例：〇〇を追加、〇〇を済み、今やるを読んで。`, voice);
+  }
+}
+
+let listening = false;
+async function listenOnce(){
+  if (listening || !window.Voice?.supported || !store) return;
+  listening = true; $('#micBtn').classList.add('on'); setStatus('聞いています…（例：〇〇を追加・〇〇を済み・今やるを読んで）');
+  let heard = false;
+  try {
+    const { text } = await Voice.listen();
+    heard = true;
+    $('#said').hidden = false; $('#said').textContent = '「' + text + '」';
+    runCommand(text, true);
+  } catch (e) {
+    setStatus(e.message, 'warn');
+    if (/端末の中だけで聞き取れません/.test(e.message)) { $('#micBtn').hidden = true; $('#voiceHint').hidden = false; }
+  }
+  finally { listening = false; $('#micBtn').classList.remove('on'); }
+  // 聞き返したときは、読み上げが終わってから続けて聞く
+  if (heard && pending) setTimeout(listenOnce, 2500);
+}
+
+// URL・共有・ショートカットから来た操作（つながってから1回だけ）
+//   #add=題&lane=now&due=2026-10-25&note=…  カードを足す（iPhone のショートカット・Siri・ブックマークから）
+//   #cmd=〇〇を済み                         命令を1つ実行
+//   #new  足す欄を開く   #voice  🎤で聞く   #lane=now  その列を出す
+//   ?title=&text=&url=                      共有メニュー（Web Share Target）
+let entry = null;
+function readEntry(){
+  const e = {};
+  const q = new URLSearchParams(location.search);
+  const shared = [q.get('title'), q.get('text')].filter(Boolean).join(' ').trim();
+  const url = q.get('url') || (shared.match(/https?:\/\/\S+/) || [])[0] || '';
+  if (shared || url) e.add = { title: shared.replace(url, '').trim() || url, link: url, lane: 'next' };
+  const h = new URLSearchParams(location.hash.slice(1));
+  const okLane = l => LANES.some(([k]) => k === l);
+  if (h.get('add')) e.add = { title: h.get('add'), lane: okLane(h.get('lane')) ? h.get('lane') : 'next', due: h.get('due') || '', note: h.get('note') || '' };
+  if (h.get('cmd')) e.cmd = h.get('cmd');
+  if (h.has('new')) e.form = true;
+  if (h.has('voice')) e.voice = true;
+  if (h.has('talk')) e.talk = true;
+  if (!e.add && okLane(h.get('lane'))) e.lane = h.get('lane');
+  if (location.search || [...h.keys()].some(k => k !== 'repo' && k !== 'branch')) history.replaceState(null, '', location.pathname + (h.has('repo') ? '#repo=' + encodeURIComponent(h.get('repo')) + '&branch=' + encodeURIComponent(h.get('branch') || 'main') : ''));
+  return Object.keys(e).length ? e : null;
+}
+function runEntry(){
+  if (!entry || !store) return;
+  const e = entry; entry = null;
+  if (e.lane) { curLane = e.lane; ls.set('lane', e.lane); render(); }
+  if (e.add && e.add.title) {
+    if (!writable()) { setStatus('いまは保存できないので、受け取ったカードを足せませんでした。','err'); return; }
+    remember(); const c = newCard(e.add, e.add.link ? '共有から足した' : 'URL から足した');
+    curLane = c.lane; persist(`「${c.title}」を足した`);
+  }
+  if (e.cmd) runCommand(e.cmd);
+  if (e.form) $('#addBtn').click();
+  if (e.voice) listenOnce();
+  if (e.talk) openTalk();
+}
+
+// ================= 会話モード（talk.js。すべて端末の中） =================
+const talkSettings = () => ({ ...(window.Talk?.DEFAULTS || {}), ...(ls.get('talk') || {}) });
+let talk = null;
+function talkLine(who, text){
+  const d = document.createElement('div'); d.className = 'l ' + who; d.textContent = text;
+  const box = $('#talkLog'); box.appendChild(d); while (box.children.length > 30) box.firstChild.remove(); box.scrollTop = box.scrollHeight;
+}
+const TALK_STATE = { starting: '準備しています…', listening: '聞いてるよ（話してね）', thinking: '考え中…', speaking: '話しています（割り込めます）', typing: '下の欄に打って話してね', off: '' };
+function drawTalkHead(){
+  const t = talkSettings();
+  $('#talkAva').innerHTML = Talk.avatarSvg(t.icon, t.color); $('#talkName').textContent = t.name;
+}
+function openTalk(){
+  if (!window.Talk || !store) return;
+  if (talk?.on) { if (!$('#talkDlg').open) $('#talkDlg').showModal(); return; }
+  drawTalkHead(); $('#talkLog').innerHTML = ''; $('#talkMode').textContent = '';
+  talk = Talk.create({
+    settings: talkSettings(),
+    lanes: LANE_LABEL, laneWords: LANE_WORDS,
+    // AI に渡すのは題・列・期限だけ（補足・履歴・リンクは渡さない）
+    board: () => live().filter(c => c.lane !== 'done').sort((a, b) => LANES.findIndex(([k]) => k === a.lane) - LANES.findIndex(([k]) => k === b.lane) || (a.order || 0) - (b.order || 0)).map(c => ({ title: c.title, lane: c.lane, due: c.due || '' })),
+    queue: () => ['now', 'next'].flatMap(l => laneCards(l)[0]),
+    run: t => runCommand(t),
+    act: cmd => apply(cmd, false),
+    pending: () => !!pending,
+    onLine: talkLine,
+    onState: st => { $('#talkState').textContent = TALK_STATE[st] ?? ''; $('#talkDlg').classList.toggle('speaking', st === 'speaking'); if (st === 'off' && $('#talkDlg').open) $('#talkDlg').close(); },
+    onMode: (m, brain) => { $('#talkMode').textContent = m !== 'ai' ? '頭：AI なし（1枚ずつ読み上げ）' : brain === 'webllm' ? '頭：端末の中の AI（入れた WebLLM）' : '頭：端末の中の AI（Chrome の内蔵 AI）'; },
+  });
+  $('#talkDlg').showModal();
+  talk.start();
+}
+$('#talkBtn').onclick = openTalk;
+$('#talkEnd').onclick = () => { talk?.stop(); if ($('#talkDlg').open) $('#talkDlg').close(); };
+$('#talkDlg').addEventListener('cancel', () => talk?.stop());
+$('#talkForm').onsubmit = e => { e.preventDefault(); const t = $('#talkIn').value; $('#talkIn').value = ''; talk?.hear(t); };
+function openTalkSet(){
+  const f = $('#talkSetForm'), t = talkSettings();
+  f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.ai.checked = t.ai !== 'off';
+  $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{maru:'まる',kaku:'しかく',shizuku:'しずく'}[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
+  const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
+  f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
+  drawAi();
+  $('#talkSet').showModal();
+}
+$('#talkSetBtn').onclick = openTalkSet;
+
+// 端末の中の AI（localai.js）を入れる・消す。押したときだけモデルを取ってくる
+function drawAi(){
+  const A = window.LocalAI; if (!A) { $('#aiBox').hidden = true; return; }
+  const st = A.status(), p = A.plan();
+  $('#aiStat').textContent = st.llm
+    ? `入っています：頭 ${st.llm}${st.ear ? '・耳 ' + A.EAR.label : ''}（${st.at} に ${[...new Set(st.from.map(f => f.split('/')[0]))].join('・')} から取得）`
+    : `まだ入っていません。入れると、Chrome の内蔵 AI が無い端末（スマホなど）でも AI と話せます（頭 ${p.model}${p.ear ? '・耳 ' + A.EAR.label : ''}）。`;
+  $('#aiGet').textContent = st.llm ? '入れ直す' : `AI の部品を入れる（約 ${p.gb}GB）`;
+  $('#aiDel').hidden = !st.llm;
+}
+let aiBusy = false;
+$('#aiGet').onclick = async () => {
+  if (aiBusy || !window.LocalAI) return;
+  aiBusy = true; $('#aiGet').disabled = true; $('#aiProg').hidden = false; $('#aiProg').value = 0; $('#aiMsg').textContent = '取ってきています…（画面を閉じずに待ってね）';
+  try {
+    await LocalAI.install((v, what) => { $('#aiProg').value = v; if (what) $('#aiMsg').textContent = String(what).slice(0, 120); });
+    $('#aiMsg').textContent = '入りました。会話モードで使えます。';
+  } catch (e) { $('#aiMsg').textContent = '入れられませんでした：' + (e?.message || e); }
+  finally {
+    aiBusy = false; $('#aiGet').disabled = false; $('#aiProg').hidden = true; drawAi();
+    $('#micBtn').hidden = !window.Voice?.supported || !store; $('#voiceHint').hidden = !!window.Voice?.supported;
+  }
+};
+$('#aiDel').onclick = async () => {
+  if (aiBusy || !window.LocalAI) return;
+  await LocalAI.remove(); $('#aiMsg').textContent = 'この端末から消しました。'; drawAi();
+  $('#micBtn').hidden = !window.Voice?.supported || !store; $('#voiceHint').hidden = !!window.Voice?.supported;
+};
+$('#talkSetForm').onsubmit = e => {
+  if (e.submitter?.value !== 'ok') return;
+  const f = e.target;
+  const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, bargeIn: f.bargeIn.checked, ai: f.ai.checked ? 'auto' : 'off' };
+  ls.set('talk', t);
+  try { t.voice ? localStorage.setItem('voice.name', t.voice) : localStorage.removeItem('voice.name'); } catch {}
+  if (talk) talk.settings = t;
+  drawTalkHead();
+};
+$('#talkReset').onclick = () => { ls.set('talk', null); try { localStorage.removeItem('voice.name'); } catch {} $('#talkSet').close(); drawTalkHead(); openTalkSet(); };
+
 
 function openEdit(c){
   editing = c; const f = $('#editForm');
@@ -574,7 +882,25 @@ $('#qrClose').onclick = () => $('#qrDlg').close();
 let installEvt = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('[data-m=install]').hidden = false; });
 
-const actions = { github: openGithub, phone: showPhoneQr, folder: openFolder, file: () => $('#fileInput').click(), download,
+function openCmd(){ if (!store) return; $('#cmdIn').value = ''; $('#cmdDlg').showModal(); $('#cmdIn').focus(); }
+$('#cmdForm').onsubmit = e => {
+  e.preventDefault();
+  const t = $('#cmdIn').value; $('#cmdIn').value = '';
+  runCommand(t);
+  if (pending) $('#cmdIn').placeholder = '番号か、はい／いいえ'; else { $('#cmdIn').placeholder = '例：牛乳を買うを追加'; $('#cmdDlg').close(); }
+};
+$('#micBtn').onclick = listenOnce;
+// キーボード：Ctrl+K（Mac は ⌘K）で命令欄、N で足す欄、M で🎤
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); openCmd(); return; }
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.querySelector('dialog[open]');
+  if (typing || e.ctrlKey || e.metaKey || e.altKey || !store) return;
+  if (e.key === 'n' || e.key === 'N') { e.preventDefault(); $('#addBtn').click(); }
+  else if ((e.key === 'm' || e.key === 'M') && window.Voice?.supported) { e.preventDefault(); listenOnce(); }
+  else if (e.key === 't' || e.key === 'T') { e.preventDefault(); openTalk(); }
+});
+
+const actions = { github: openGithub, phone: showPhoneQr, cmd: openCmd, folder: openFolder, file: () => $('#fileInput').click(), download,
   install: async () => { if (installEvt) { installEvt.prompt(); installEvt = null; $('[data-m=install]').hidden = true; } } };
 document.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { $('#menu').open = false; actions[b.dataset.m](); });
 
@@ -620,10 +946,11 @@ if (location.protocol !== 'file:' && 'serviceWorker' in navigator) {
 
 // 前回の置き場所に自動でつなぐ
 (async () => {
+  entry = readEntry();
   // 設定のリンク（#repo=持ち主/リポジトリ&branch=…）で開いたら、つなぎ先を入れて鍵の画面を出す
   if (location.hash.length > 1) {
     const h = new URLSearchParams(location.hash.slice(1));
-    history.replaceState(null, '', location.pathname + location.search);
+    history.replaceState(null, '', location.pathname);
     const [owner, repo] = (h.get('repo') || '').split('/');
     if (owner && repo) {
       const old = ls.get('gh') || {};

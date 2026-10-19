@@ -1,0 +1,9 @@
+[
+  {"doc_id": "s1", "title": "見本のカード（今やる）", "owner": "you", "lane": "now", "order": 1, "priority": "high", "due": "2099-01-01", "category": "見本"},
+  {"doc_id": "s2", "title": "見本の確認（選んでもらう）", "owner": "you", "lane": "now", "order": 2,
+   "decision": {"question": "見本の問い", "options": [{"label": "はい", "consequence": "進める"}, {"label": "いいえ", "consequence": "やめる"}], "recommended": 0}},
+  {"doc_id": "s3", "title": "見本のカード（次にやる・毎週）", "owner": "you", "lane": "next", "order": 1, "repeat": "week", "due": "2099-01-05", "note": "見本の補足（AI に渡さない）"},
+  {"doc_id": "s4", "title": "見本のカード（エージェント）", "owner": "agent", "lane": "agent", "order": 1, "progress": "進めています", "link": "https://example.com/"},
+  {"doc_id": "s5", "title": "見本のカード（済み）", "owner": "you", "lane": "done", "order": 1, "done_at": "2099-01-01T00:00:00Z"},
+  {"doc_id": "s6", "title": "見本のカード（消したもの）", "owner": "you", "lane": "next", "order": 2, "deleted": true}
+]
