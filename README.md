@@ -40,6 +40,16 @@
 
 アプリの画面はオフラインでも開ける（service worker が端末に保存する）。GitHub につながらないときは前に読んだ写しを表示し、保存はつながってからにする。
 
+## メモ（notes/）
+
+Notion の代わりのメモ：https://satou-aaaaa.github.io/local-kanban/notes/ （PC・スマホにインストールできる）
+
+- カンバンと同じ置き場・同じ鍵。カンバンをつないだ端末なら、開くだけで同じリポジトリの `notes/` を読み書きする。
+- 1ページ＝1つの Markdown ファイル。左の一覧でページの下にページを作れる。題と本文はどの端末からでも直せ、画像は貼り付けで入る。
+- 「設定 → 公開する」の印を付けたページだけを、公開用リポジトリ satou-aaaaa/articles に書き出す（https://satou-aaaaa.github.io/articles/ に出る）。
+  そのためには、鍵の Repository access に articles も足す（https://github.com/settings/personal-access-tokens で鍵を開き、Edit → Repository access に articles を足して Update）。
+- データの形は、データ側のリポジトリの `notes/README.md`。
+
 ## 直すとき
 
 - `index.html` が本体（外部ライブラリなし）。データ側のリポジトリの `local-board/kanban.html` は同じもの（ダブルクリックで開く予備）。直したら両方そろえる。

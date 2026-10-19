@@ -1,0 +1,959 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https:; connect-src 'self' https://api.github.com; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>メモ</title>
+<!--
+  Notion の代わりのメモ（PWA）。外部ライブラリなし。カンバン（../）と同じ置き場・同じ鍵・同じつなぎ方。
+  データ（このページには載せない）:
+    GitHub   … 非公開リポジトリの notes/ を、カンバンと同じ鍵（localStorage の lk.gh）で読み書きする。PC・スマホ両方
+    フォルダ … カンバンで選んだ PC のフォルダ（IndexedDB local-board の root）を File System Access API で読み書きする
+  形: notes/pages/<ID>.md（1ページ＝1ファイル。先頭に --- で囲んだ title・parent・order・icon・public・trashed など）
+      notes/files/<ID>/<名前>（画像など）。説明はデータのリポジトリの notes/README.md
+  安全: 本文の HTML は全部エスケープして表示する。リンクは http・https・mailto とページへのリンクだけ。
+-->
+<style>
+:root{--bg:#f7f7f5;--panel:#fff;--side:#f1f1ef;--text:#1f2328;--muted:#6b7079;--line:#dedfe2;--accent:#0f766e;--warn:#b45309;--ok:#15803d;--danger:#b91c1c;--chip:#ececea;--hl:#e3efed;--code:#f3f3f1}
+@media (prefers-color-scheme:dark){:root{--bg:#191a1c;--panel:#1f2023;--side:#232427;--text:#e7e8ea;--muted:#9a9ea6;--line:#34363b;--accent:#2dd4bf;--warn:#f59e0b;--ok:#4ade80;--danger:#f87171;--chip:#2c2e32;--hl:#21403c;--code:#2a2c30}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.7 system-ui,"Segoe UI","Yu Gothic UI","Hiragino Sans",sans-serif;height:100vh;height:100dvh;display:flex;flex-direction:column}
+button,select,input,textarea{font:inherit;color:inherit}
+button{background:var(--chip);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer;min-height:34px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.plain{background:none;border-color:transparent}
+button:disabled{opacity:.5;cursor:default}
+input,select,textarea{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 8px;min-height:34px}
+a{color:var(--accent)}
+header{display:flex;gap:8px;align-items:center;padding:6px 12px;padding-top:max(6px,env(safe-area-inset-top));background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:15px;margin:0}
+#q{flex:1 1 auto;max-width:420px;min-width:0}
+.spacer{flex:1}
+#menuBtn{display:none}
+#menu{position:relative}
+#menu summary{list-style:none;cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:4px 12px;background:var(--chip);min-height:34px;display:flex;align-items:center}
+#menu summary::-webkit-details-marker{display:none}
+#menu .items{position:absolute;right:0;top:40px;z-index:20;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px;display:flex;flex-direction:column;gap:4px;min-width:230px;box-shadow:0 6px 20px rgba(0,0,0,.15)}
+#menu .items button{text-align:left}
+#status{font-size:12px;color:var(--muted);padding:2px 12px;background:var(--panel);border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#status.warn{color:var(--warn)}#status.err{color:var(--danger);white-space:normal}#status.ok{color:var(--ok)}
+#wrap{flex:1;display:flex;min-height:0}
+#side{width:270px;flex:none;background:var(--side);border-right:1px solid var(--line);overflow:auto;padding:8px 6px 80px}
+#side .sec{font-size:12px;color:var(--muted);margin:10px 8px 4px}
+.tree{list-style:none;margin:0;padding:0}
+.tree .tree{padding-left:14px}
+.node{display:flex;align-items:center;gap:2px;border-radius:6px;padding:1px 2px}
+.node:hover{background:var(--chip)}
+.node.cur{background:var(--hl)}
+.node .tw{width:22px;min-height:26px;padding:0;border:none;background:none;color:var(--muted);flex:none}
+.node .nm{flex:1;min-width:0;text-align:left;border:none;background:none;padding:2px 4px;min-height:28px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node .add{visibility:hidden;border:none;background:none;padding:0 6px;min-height:26px;color:var(--muted)}
+.node:hover .add,.node.cur .add{visibility:visible}
+.pub{font-size:11px;color:var(--accent);margin-left:4px}
+#side .bottom{display:flex;flex-direction:column;gap:4px;margin-top:12px}
+#side .bottom button{text-align:left;background:none;border-color:transparent;color:var(--muted)}
+main{flex:1;overflow:auto;min-width:0}
+.page{max-width:860px;margin:0 auto;padding:24px 32px 120px}
+.crumbs{font-size:12px;color:var(--muted);margin-bottom:8px;display:flex;flex-wrap:wrap;gap:4px}
+.crumbs a{color:var(--muted);text-decoration:none}
+.titleRow{display:flex;align-items:center;gap:8px}
+#icon{width:52px;text-align:center;font-size:24px;border-color:transparent;background:none;padding:0}
+#title{flex:1;font-size:28px;font-weight:700;line-height:1.3;border-color:transparent;background:none;padding:2px 4px;min-width:0;resize:none;overflow:hidden}
+#icon:focus,#title:focus{border-color:var(--line)}
+.tools{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:10px 0;position:sticky;top:0;background:var(--bg);padding:6px 0;z-index:3}
+.tools .grp{display:flex;gap:4px;flex-wrap:wrap}
+.chip{background:var(--chip);border-radius:10px;padding:0 8px;font-size:12px;color:var(--muted)}
+.chip.pub{color:var(--accent)}
+#editor{width:100%;min-height:60vh;font:14px/1.7 ui-monospace,SFMono-Regular,Consolas,"BIZ UDGothic",monospace;resize:vertical;padding:12px}
+.intro{max-width:720px;margin:32px auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:20px}
+.choices{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.children{margin-top:24px;border-top:1px solid var(--line);padding-top:8px}
+.children h3{font-size:13px;color:var(--muted);margin:4px 0}
+.results .r{display:block;padding:8px;border-bottom:1px solid var(--line);text-decoration:none;color:inherit}
+.results .r small{display:block;color:var(--muted)}
+mark{background:#fde68a;color:inherit}
+/* 本文 */
+.md{word-break:break-word}
+.md h1{font-size:1.6em;margin:1.2em 0 .4em}.md h2{font-size:1.35em;margin:1.1em 0 .4em}.md h3{font-size:1.15em;margin:1em 0 .3em}.md h4,.md h5,.md h6{font-size:1em;margin:1em 0 .3em}
+.md p{margin:.4em 0}
+.md ul,.md ol{margin:.3em 0;padding-left:1.6em}
+.md li{margin:.1em 0}
+.md li.task{list-style:none;margin-left:-1.3em}
+.md li.task input{margin-right:6px;min-height:0;vertical-align:-2px}
+.md li.task.done>span{color:var(--muted);text-decoration:line-through}
+.md blockquote{margin:.6em 0;padding:4px 12px;border-left:3px solid var(--line);color:var(--muted)}
+.md pre{background:var(--code);border-radius:6px;padding:10px 12px;overflow:auto;font-size:13px}
+.md code{background:var(--code);border-radius:4px;padding:0 4px;font:13px ui-monospace,SFMono-Regular,Consolas,monospace}
+.md pre code{background:none;padding:0}
+.md img{max-width:100%;height:auto;border-radius:4px}
+.md table{border-collapse:collapse;margin:.6em 0;display:block;overflow:auto}
+.md th,.md td{border:1px solid var(--line);padding:4px 8px;vertical-align:top}
+.md th{background:var(--chip)}
+.md hr{border:none;border-top:1px solid var(--line);margin:1.2em 0}
+.md a.page{text-decoration:none;border-bottom:1px solid var(--line)}
+.md a.page::before{content:"📄 ";font-size:.9em}
+.md a.missing{color:var(--muted)}
+.empty{color:var(--muted)}
+dialog{border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);width:min(560px,94vw);max-height:90vh}
+dialog label{display:block;margin:10px 0 2px;font-size:12px;color:var(--muted)}
+dialog input,dialog select,dialog textarea{width:100%}
+dialog .help{font-size:12px;color:var(--muted)}
+.row{display:flex;gap:8px}.row>div{flex:1}
+.actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:space-between;margin-top:14px}
+/* スマホ: 左の一覧は ☰ で出す */
+@media (max-width:760px){
+  #menuBtn{display:inline-block}
+  header h1{display:none}
+  #side{position:fixed;z-index:15;top:0;bottom:0;left:0;width:min(86vw,320px);transform:translateX(-102%);transition:transform .2s;padding-top:max(8px,env(safe-area-inset-top));box-shadow:4px 0 20px rgba(0,0,0,.2)}
+  body.sideOpen #side{transform:none}
+  body.sideOpen #shade{display:block}
+  #shade{display:none;position:fixed;inset:0;z-index:14;background:rgba(0,0,0,.3)}
+  .page{padding:12px 14px 120px}
+  #title{font-size:22px}
+  #newBtn .lbl{display:none}
+  #icon{width:40px}
+  .node .add{visibility:visible}
+  button,select,input,#menu summary{min-height:42px}
+  .node .nm{min-height:40px}
+  .row{flex-direction:column;gap:0}
+}
+</style>
+</head>
+<body>
+<header>
+  <button id="menuBtn" class="plain" aria-label="ページの一覧">☰</button>
+  <h1>メモ</h1>
+  <input id="q" type="search" placeholder="さがす（題・本文）" autocomplete="off" disabled>
+  <span class="spacer"></span>
+  <button id="newBtn" class="primary" hidden title="新しいページ">＋<span class="lbl"> ページ</span></button>
+  <details id="menu">
+    <summary>⋯</summary>
+    <div class="items">
+      <button data-m="github">GitHub でつなぐ（PC・スマホ）</button>
+      <button data-m="folder" id="folderMenu">PC のフォルダを開く</button>
+      <button data-m="reload" disabled>最新を読み直す</button>
+      <button data-m="trash" disabled>ゴミ箱</button>
+      <button data-m="install" hidden>アプリとしてインストール</button>
+      <button data-m="kanban">カンバンを開く</button>
+    </div>
+  </details>
+</header>
+<div id="status">まだつないでいません。</div>
+<div id="wrap">
+  <nav id="side" hidden>
+    <div class="sec">ページ</div>
+    <ul class="tree" id="tree"></ul>
+    <div class="bottom">
+      <button id="sideNew">＋ 新しいページ</button>
+      <button id="sideTrash">🗑 ゴミ箱</button>
+    </div>
+  </nav>
+  <div id="shade"></div>
+  <main id="main">
+    <section class="intro" id="intro">
+      <p><b>Notion の代わりのメモです。</b>カンバンと同じ置き場を使います。</p>
+      <div class="choices">
+        <button class="primary" data-m="github">GitHub でつなぐ（PC・スマホ）</button>
+        <button data-m="folder" id="folderChoice">PC のフォルダを開く</button>
+      </div>
+      <ol>
+        <li>この端末でカンバンをつないでいれば、自動で同じ鍵・同じリポジトリを使います（何もしなくてよい）。</li>
+        <li><b>GitHub</b>：非公開リポジトリの <code>notes/</code> を読み書きします。鍵はカンバンと同じものです。</li>
+        <li><b>PC のフォルダ</b>：カンバンと同じ、データのリポジトリのフォルダを選びます（Chrome・Edge の PC だけ）。</li>
+      </ol>
+      <p class="empty">ページは Markdown のファイルなので、このアプリが使えなくてもメモ帳や Obsidian で開けます。</p>
+    </section>
+    <div id="view" hidden></div>
+  </main>
+</div>
+
+<dialog id="ghDlg">
+  <form method="dialog" id="ghForm">
+    <h3 style="margin-top:0">GitHub でつなぐ</h3>
+    <p class="help">カンバンと同じものを入れます。カンバンでつないだ端末なら、ここは開かなくてよいです。</p>
+    <div class="row">
+      <div><label>持ち主</label><input name="owner" required placeholder="GitHub のユーザー名"></div>
+      <div><label>リポジトリ</label><input name="repo" required placeholder="データのある非公開リポジトリ"></div>
+      <div><label>ブランチ</label><input name="branch" required placeholder="main"></div>
+    </div>
+    <label>鍵（fine-grained トークン）</label>
+    <input name="token" type="password" autocomplete="off" placeholder="github_pat_…">
+    <p class="help"><button type="button" id="ghMake">鍵を作るページを開く</button><br>
+    開いたページで「Only select repositories」を押して上のリポジトリを選び、いちばん下の <b>Generate token</b> を押す。出てきた <code>github_pat_…</code> を上に貼る。<br>
+    鍵はこの端末のブラウザの中にだけ保存し（カンバンと共用）、GitHub 以外には送りません。空のまま「つなぐ」を押すと、前に貼った鍵を使います。</p>
+    <div class="actions">
+      <button type="button" id="ghForget">この端末の鍵を消す</button>
+      <span><button value="cancel" formnovalidate>やめる</button> <button value="ok" class="primary">つなぐ</button></span>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="setDlg">
+  <form method="dialog" id="setForm">
+    <h3 style="margin-top:0">ページの設定</h3>
+    <label>上のページ（どのページの下に置くか）</label>
+    <select name="parent"></select>
+    <label><input type="checkbox" name="public" style="width:auto;min-height:0"> 公開する（公開の印。印を付けたページだけが公開記事になります）</label>
+    <p class="help">並び順：<button type="button" id="upBtn">↑ 上へ</button> <button type="button" id="downBtn">↓ 下へ</button></p>
+    <p class="help" id="setInfo"></p>
+    <div class="actions">
+      <button type="button" id="trashBtn">ゴミ箱へ</button>
+      <span><button value="cancel" formnovalidate>やめる</button> <button value="ok" class="primary">保存</button></span>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="conflictDlg">
+  <h3 style="margin-top:0">ほかの端末で直されています</h3>
+  <p>このページは、読んだあとに別の端末か AI が書き換えました。</p>
+  <div class="actions">
+    <button id="cfMine">自分の内容で上書き</button>
+    <button id="cfTheirs" class="primary">相手の内容を読む（自分の内容は別のページに残す）</button>
+  </div>
+</dialog>
+
+<input type="file" id="imgInput" accept="image/*" hidden>
+
+<script>
+'use strict';
+const PAGES = 'notes/pages/', FILES = 'notes/files/';
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const now = () => new Date().toISOString();
+const newId = () => (crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('')).replace(/-/g, '');
+// カンバンと同じ保存領域（lk.gh・lk.mode を共用する）
+const ls = { get(k){ try { return JSON.parse(localStorage.getItem('lk.'+k)); } catch { return null; } },
+             set(k,v){ try { v == null ? localStorage.removeItem('lk.'+k) : localStorage.setItem('lk.'+k, JSON.stringify(v)); } catch {} } };
+const mine = { get(k){ try { return JSON.parse(localStorage.getItem('ln.'+k)); } catch { return null; } },
+               set(k,v){ try { v == null ? localStorage.removeItem('ln.'+k) : localStorage.setItem('ln.'+k, JSON.stringify(v)); } catch {} } };
+
+let store = null;            // github / folder
+let pages = new Map();       // id → { id, path, sha, meta, body }
+let curId = null, editing = false, dirty = false, saveTimer = null, saving = false;
+let readOnly = false;
+const blobUrls = new Map();
+
+function setStatus(msg, kind=''){ const s = $('#status'); s.textContent = msg; s.className = kind; }
+
+// ================= Markdown の先頭（--- で囲んだ設定）=================
+const META_KEYS = ['title','parent','order','icon','public','trashed','created','updated','notion'];
+function parsePage(text){
+  text = String(text).replace(/\r\n?/g, '\n');
+  const meta = {}; let body = text;
+  if (text.startsWith('---\n')) {
+    const end = text.indexOf('\n---', 4);
+    if (end > 0) {
+      for (const line of text.slice(4, end).split('\n')) {
+        const i = line.indexOf(':'); if (i < 1) continue;
+        meta[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+      }
+      body = text.slice(end + 4).replace(/^[^\n]*\n/, '').replace(/^\n/, '');
+    }
+  }
+  meta.order = Number(meta.order) || 0;
+  meta.public = meta.public === 'true';
+  meta.trashed = meta.trashed === 'true';
+  meta.title = meta.title || '無題';
+  return { meta, body };
+}
+function serialize(meta, body){
+  const m = { ...meta };
+  const lines = ['---'];
+  for (const k of META_KEYS) {
+    let v = m[k]; delete m[k];
+    if (k === 'trashed' && !v) continue;
+    if (typeof v === 'boolean') v = String(v);
+    lines.push(`${k}: ${String(v ?? '').replace(/\n/g, ' ')}`);
+  }
+  for (const [k, v] of Object.entries(m)) lines.push(`${k}: ${String(v ?? '').replace(/\n/g, ' ')}`);
+  lines.push('---', '');
+  return lines.join('\n') + body.replace(/\s+$/, '') + '\n';
+}
+
+// ==md-begin==（公開記事のビルド satou-aaaaa/articles の tools/build.mjs が同じ部分をそのまま使う。直したら写す）
+// ================= Markdown を HTML に（すべてエスケープしてから組み立てる）=================
+function safeHref(u){
+  u = u.trim();
+  const m = u.match(/^([0-9a-f]{32})\.md(#.*)?$/i);
+  if (m) return { page: m[1].toLowerCase() };
+  if (/^(https?:|mailto:)/i.test(u)) return { href: u };
+  return null;
+}
+function inline(s){
+  // コードを先に外す
+  const codes = [];
+  s = s.replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000'; });
+  let out = '', i = 0;
+  const re = /(!?)\[([^\]\n]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)|(https?:\/\/[^\s<>()　]+[^\s<>().,;:!?、。）　])/g;
+  let m;
+  while ((m = re.exec(s))) {
+    out += fmt(s.slice(i, m.index)); i = re.lastIndex;
+    if (m[4]) { out += `<a href="${esc(m[4])}" target="_blank" rel="noopener noreferrer">${esc(m[4])}</a>`; continue; }
+    const [, bang, label, url] = m;
+    if (bang) {
+      if (/^https?:/i.test(url)) out += `<img src="${esc(url)}" alt="${esc(label)}" loading="lazy" referrerpolicy="no-referrer">`;
+      else out += `<img data-file="${esc(url)}" alt="${esc(label)}">`;
+      continue;
+    }
+    const h = safeHref(url);
+    if (!h) { out += fmt(label); continue; }
+    if (h.page) { const p = pages.get(h.page); out += `<a class="page${p ? '' : ' missing'}" href="#${h.page}">${fmt(label || p?.meta.title || 'ページ')}</a>`; }
+    else out += `<a href="${esc(h.href)}" target="_blank" rel="noopener noreferrer">${fmt(label)}</a>`;
+  }
+  out += fmt(s.slice(i));
+  return out.replace(/\u0000(\d+)\u0000/g, (_, n) => `<code>${esc(codes[n])}</code>`);
+}
+function fmt(t){
+  return esc(t)
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/__([^_]+)__/g, '<b>$1</b>')
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>')
+    .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+    .replace(/\u0000/g, '\u0000');
+}
+function md(src){
+  const L = src.replace(/\r\n?/g, '\n').split('\n');
+  let i = 0;
+  const indentOf = s => { const m = s.match(/^[ \t]*/)[0]; return m.replace(/\t/g, '    ').length; };
+  const listRe = /^([ \t]*)([-*+]|\d+[.)])\s+(.*)$/;
+  function block(lines, base){
+    let html = '', k = 0, para = [];
+    const flush = () => { if (para.length) { html += '<p>' + para.map(inline).join('<br>') + '</p>'; para = []; } };
+    while (k < lines.length) {
+      const { t, n } = lines[k];
+      let m;
+      if (!t.trim()) { flush(); k++; continue; }
+      if ((m = t.match(/^\s*(```|~~~)/))) {
+        flush(); const fence = m[1]; const code = []; k++;
+        while (k < lines.length && !lines[k].t.trim().startsWith(fence)) { code.push(lines[k].t); k++; }
+        k++; html += `<pre><code>${esc(code.join('\n'))}</code></pre>`; continue;
+      }
+      if ((m = t.match(/^\s*(#{1,6})\s+(.*)$/))) { flush(); const lv = m[1].length; html += `<h${lv}>${inline(m[2])}</h${lv}>`; k++; continue; }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(t)) { flush(); html += '<hr>'; k++; continue; }
+      if (/^\s*>/.test(t)) {
+        flush(); const q = [];
+        while (k < lines.length && /^\s*>/.test(lines[k].t)) { q.push({ t: lines[k].t.replace(/^\s*>\s?/, ''), n: lines[k].n }); k++; }
+        html += '<blockquote>' + block(q) + '</blockquote>'; continue;
+      }
+      if (/^\s*\|.*\|\s*$/.test(t) && k + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[k + 1].t)) {
+        flush(); const cells = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+        const head = cells(t); k += 2; let rows = '';
+        while (k < lines.length && /^\s*\|.*\|\s*$/.test(lines[k].t)) { rows += '<tr>' + cells(lines[k].t).map(c => `<td>${inline(c)}</td>`).join('') + '</tr>'; k++; }
+        html += `<table><thead><tr>${head.map(c => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`; continue;
+      }
+      if ((m = t.match(listRe))) {
+        flush();
+        const ind = indentOf(t), ordered = /\d/.test(m[2]);
+        let items = '';
+        while (k < lines.length) {
+          const mm = lines[k].t.match(listRe);
+          if (!mm || indentOf(lines[k].t) !== ind) break;
+          const lineNo = lines[k].n; let text = mm[3]; k++;
+          const sub = [];
+          while (k < lines.length && (!lines[k].t.trim() ? (k + 1 < lines.length && indentOf(lines[k + 1].t) > ind) : indentOf(lines[k].t) > ind)) { sub.push(lines[k]); k++; }
+          const minInd = Math.min(...sub.filter(x => x.t.trim()).map(x => indentOf(x.t)));
+          const subLines = sub.map(x => ({ t: x.t.replace(/\t/g, '    ').slice(Math.min(minInd, indentOf(x.t))), n: x.n }));
+          const task = text.match(/^\[([ xX])\]\s*(.*)$/);
+          if (task) {
+            const done = task[1] !== ' ';
+            items += `<li class="task${done ? ' done' : ''}"><input type="checkbox" data-line="${lineNo}"${done ? ' checked' : ''}${readOnly ? ' disabled' : ''}><span>${inline(task[2])}</span>${sub.length ? block(subLines) : ''}</li>`;
+          } else items += `<li>${inline(text)}${sub.length ? block(subLines) : ''}</li>`;
+        }
+        html += ordered ? `<ol>${items}</ol>` : `<ul>${items}</ul>`; continue;
+      }
+      para.push(t.trim()); k++;
+    }
+    flush(); return html;
+  }
+  return block(L.map((t, n) => ({ t, n })));
+}
+
+// ==md-end==
+// ================= 置き場所 =================
+const b64dec = b64 => Uint8Array.from(atob(b64.replace(/\s/g, '')), c => c.charCodeAt(0));
+const b64enc = bytes => { let t = ''; for (let i = 0; i < bytes.length; i += 0x8000) t += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(t); };
+const encPath = p => p.split('/').map(encodeURIComponent).join('/');
+
+function ghStore(cfg){
+  const base = `https://api.github.com/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}`;
+  const hdr = (accept = 'application/vnd.github+json') => ({ 'Authorization': 'Bearer ' + cfg.token, 'Accept': accept, 'X-GitHub-Api-Version': '2022-11-28' });
+  async function check(r){
+    if (r.status === 401) throw new Error('鍵が違うか、期限が切れています（⋯ → GitHub でつなぐ から貼り直す）');
+    if (r.status === 403) throw new Error('鍵にこのリポジトリの権限がありません（Contents を Read and write にする）');
+    if (!r.ok) throw new Error('GitHub とやりとりできません（' + r.status + '）');
+    return r;
+  }
+  return {
+    kind: 'github', label: `GitHub ${cfg.owner}/${cfg.repo}`,
+    // notes/pages の全ファイルの名前と sha を1回で読む
+    async list(){
+      const r = await fetch(`${base}/git/trees/${encodeURIComponent(cfg.branch)}?recursive=1`, { headers: hdr(), cache: 'no-store' });
+      if (r.status === 404) throw new Error('リポジトリかブランチが見つかりません');
+      const j = await (await check(r)).json();
+      return j.tree.filter(x => x.type === 'blob' && x.path.startsWith(PAGES) && x.path.endsWith('.md')).map(x => ({ path: x.path, sha: x.sha }));
+    },
+    async read(path){
+      const r = await fetch(`${base}/contents/${encPath(path)}?ref=${encodeURIComponent(cfg.branch)}`, { headers: hdr(), cache: 'no-store' });
+      if (r.status === 404) return null;
+      const j = await (await check(r)).json();
+      return { sha: j.sha, text: new TextDecoder().decode(b64dec(j.content || '')) };
+    },
+    async blob(path){
+      const r = await fetch(`${base}/contents/${encPath(path)}?ref=${encodeURIComponent(cfg.branch)}`, { headers: hdr('application/vnd.github.raw'), cache: 'force-cache' });
+      await check(r); return await r.blob();
+    },
+    async write(path, data, sha, why){
+      const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+      const body = { message: 'メモ: ' + why, content: b64enc(bytes), branch: cfg.branch };
+      if (sha) body.sha = sha;
+      const r = await fetch(`${base}/contents/${encPath(path)}`, { method: 'PUT', headers: { ...hdr(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (r.status === 409 || r.status === 422) { const e = new Error('conflict'); e.conflict = true; throw e; }
+      await check(r); return (await r.json()).content.sha;
+    },
+    async info(path){
+      const r = await fetch(`${base}/contents/${encPath(path)}?ref=${encodeURIComponent(cfg.branch)}`, { headers: hdr(), cache: 'no-store' });
+      if (r.status === 404) return null;
+      return await (await check(r)).json();
+    },
+    async remove(path, sha, why){
+      const r = await fetch(`${base}/contents/${encPath(path)}`, { method: 'DELETE', headers: { ...hdr(), 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'メモ: ' + why, sha, branch: cfg.branch }) });
+      if (r.status === 404) return;
+      await check(r);
+    },
+  };
+}
+
+function folderStore(root){
+  async function dir(path, create){ let d = root; for (const p of path.split('/').filter(Boolean)) d = await d.getDirectoryHandle(p, { create }); return d; }
+  async function fileH(path, create){ const parts = path.split('/'); const d = await dir(parts.slice(0, -1).join('/'), create); return d.getFileHandle(parts.at(-1), { create }); }
+  return {
+    kind: 'folder', label: 'PC のフォルダ',
+    async list(){
+      let d; try { d = await dir(PAGES, false); } catch { return []; }
+      const out = [];
+      for await (const [name, h] of d.entries()) if (h.kind === 'file' && name.endsWith('.md')) { const f = await h.getFile(); out.push({ path: PAGES + name, sha: 'm' + f.lastModified + '-' + f.size }); }
+      return out;
+    },
+    async read(path){ try { const f = await (await fileH(path, false)).getFile(); return { sha: 'm' + f.lastModified + '-' + f.size, text: await f.text() }; } catch { return null; } },
+    async blob(path){ return (await fileH(path, false)).getFile(); },
+    async write(path, data, sha){
+      if (sha) { const cur = await this.read(path); if (cur && cur.sha !== sha) { const e = new Error('conflict'); e.conflict = true; throw e; } }
+      const h = await fileH(path, true); const w = await h.createWritable(); await w.write(data); await w.close();
+      const f = await h.getFile(); return 'm' + f.lastModified + '-' + f.size;
+    },
+  };
+}
+
+// ================= 端末の中の写し（IndexedDB）=================
+function db(){ return new Promise((ok, ng) => { const r = indexedDB.open('notes-app', 1); r.onupgradeneeded = () => r.result.createObjectStore('pages'); r.onsuccess = () => ok(r.result); r.onerror = () => ng(r.error); }); }
+async function cacheGetAll(){ try { const d = await db(); return await new Promise(ok => { const out = []; const c = d.transaction('pages').objectStore('pages').openCursor(); c.onsuccess = () => { const x = c.result; if (x) { out.push(x.value); x.continue(); } else ok(out); }; c.onerror = () => ok([]); }); } catch { return []; } }
+async function cachePut(v){ try { const d = await db(); d.transaction('pages', 'readwrite').objectStore('pages').put(v, v.path); } catch {} }
+async function cacheDel(path){ try { const d = await db(); d.transaction('pages', 'readwrite').objectStore('pages').delete(path); } catch {} }
+// カンバンと同じ「前回のフォルダ」
+function kdb(){ return new Promise((ok, ng) => { const r = indexedDB.open('local-board', 1); r.onupgradeneeded = () => r.result.createObjectStore('h'); r.onsuccess = () => ok(r.result); r.onerror = () => ng(r.error); }); }
+async function saveHandle(h){ try { const d = await kdb(); d.transaction('h', 'readwrite').objectStore('h').put(h, 'root'); } catch {} }
+async function loadHandle(){ try { const d = await kdb(); return await new Promise(ok => { const r = d.transaction('h').objectStore('h').get('root'); r.onsuccess = () => ok(r.result || null); r.onerror = () => ok(null); }); } catch { return null; } }
+
+// ================= 読む =================
+async function connect(s){
+  store = s; readOnly = false;
+  try { await loadAll(); }
+  catch (e) {
+    const cached = await cacheGetAll();
+    if (cached.length) { fill(cached); readOnly = true; showApp(); setStatus('読めませんでした（' + e.message + '）。前に読んだ写しを読むだけで表示しています。', 'err'); }
+    else setStatus('読めませんでした: ' + e.message, 'err');
+  }
+}
+function fill(list){
+  pages = new Map();
+  for (const x of list) { const id = x.path.slice(PAGES.length, -3); const { meta, body } = parsePage(x.text); pages.set(id, { id, path: x.path, sha: x.sha, meta, body }); }
+}
+async function loadAll(){
+  setStatus('読んでいます…');
+  const list = await store.list();
+  const cached = new Map((await cacheGetAll()).map(x => [x.path, x]));
+  const out = []; let n = 0;
+  const need = list.filter(x => !(cached.get(x.path)?.sha === x.sha));
+  for (const x of list) if (cached.get(x.path)?.sha === x.sha) out.push(cached.get(x.path));
+  // まだ持っていないものだけ読む（8本ずつ）
+  let idx = 0;
+  async function worker(){
+    while (idx < need.length) {
+      const x = need[idx++];
+      const r = await store.read(x.path);
+      if (r) { const v = { path: x.path, sha: r.sha, text: r.text }; out.push(v); cachePut(v); }
+      n++; if (n % 10 === 0) setStatus(`読んでいます… ${n}/${need.length}`);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(8, need.length) }, worker));
+  const live = new Set(list.map(x => x.path));
+  for (const p of cached.keys()) if (!live.has(p)) cacheDel(p);
+  fill(out);
+  showApp();
+  setStatus(`${store.label} から ${pages.size} ページ読みました・${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
+}
+
+// ================= 画面 =================
+function kids(pid, trashed = false){
+  return [...pages.values()].filter(p => (p.meta.parent || '') === (pid || '') && !!p.meta.trashed === trashed && (pid || !p.meta.parent || pages.has(p.meta.parent) || true))
+    .sort((a, b) => (a.meta.order - b.meta.order) || a.meta.title.localeCompare(b.meta.title, 'ja'));
+}
+function roots(){
+  // 上のページが無い・消えたページは一番上に出す
+  return [...pages.values()].filter(p => !p.meta.trashed && (!p.meta.parent || !pages.has(p.meta.parent)))
+    .sort((a, b) => (a.meta.order - b.meta.order) || a.meta.title.localeCompare(b.meta.title, 'ja'));
+}
+function isHidden(p){ let x = p, guard = 0; while (x && guard++ < 50) { if (x.meta.trashed) return true; x = pages.get(x.meta.parent); } return false; }
+function ancestors(id){ const out = []; let x = pages.get(pages.get(id)?.meta.parent), guard = 0; while (x && guard++ < 50) { out.unshift(x); x = pages.get(x.meta.parent); } return out; }
+const label = p => (p.meta.icon ? p.meta.icon + ' ' : '') + p.meta.title;
+
+function showApp(){
+  $('#intro').hidden = true; $('#side').hidden = false; $('#view').hidden = false;
+  $('#q').disabled = false; $('#newBtn').hidden = readOnly;
+  document.querySelectorAll('[data-m=reload],[data-m=trash]').forEach(b => b.disabled = false);
+  renderTree();
+  const h = location.hash.slice(1);
+  if (h && pages.has(h)) openPage(h);
+  else if (curId && pages.has(curId)) openPage(curId);
+  else { const last = mine.get('last'); if (last && pages.has(last)) openPage(last); else showHome(); }
+}
+
+function renderTree(){
+  const open = new Set(mine.get('open') || []);
+  // 開いているページまでの道は開く
+  if (curId) for (const a of ancestors(curId)) open.add(a.id);
+  const ul = (list) => list.map(p => {
+    const ch = kids(p.id);
+    const isOpen = open.has(p.id);
+    return `<li><div class="node${p.id === curId ? ' cur' : ''}" data-id="${p.id}">
+      <button class="tw" data-tw="${p.id}" aria-label="開く・閉じる">${ch.length ? (isOpen ? '▾' : '▸') : '·'}</button>
+      <button class="nm" data-go="${p.id}">${esc(label(p))}${p.meta.public ? '<span class="pub">🌐</span>' : ''}</button>
+      ${readOnly ? '' : `<button class="add" data-add="${p.id}" title="この下にページを足す">＋</button>`}
+    </div>${ch.length && isOpen ? `<ul class="tree">${ul(ch)}</ul>` : ''}</li>`;
+  }).join('');
+  $('#tree').innerHTML = ul(roots()) || '<li class="empty" style="padding:8px">ページがありません。「＋ 新しいページ」から作ります。</li>';
+  $('#sideNew').hidden = readOnly;
+}
+$('#tree').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.tw) { const open = new Set(mine.get('open') || []); open.has(b.dataset.tw) ? open.delete(b.dataset.tw) : open.add(b.dataset.tw); mine.set('open', [...open]); renderTree(); }
+  else if (b.dataset.go) { go(b.dataset.go); closeSide(); }
+  else if (b.dataset.add) { newPage(b.dataset.add); closeSide(); }
+};
+
+function go(id){ if (location.hash.slice(1) !== id) location.hash = id; else openPage(id); }
+window.addEventListener('hashchange', () => { const id = location.hash.slice(1); if (id && pages.has(id)) openPage(id); else if (!id) showHome(); });
+
+function showHome(){
+  curId = null; editing = false; renderTree();
+  const recent = [...pages.values()].filter(p => !isHidden(p)).sort((a, b) => String(b.meta.updated).localeCompare(String(a.meta.updated))).slice(0, 15);
+  $('#view').innerHTML = `<div class="page"><h2>最近のページ</h2><div class="results">${recent.map(p => `<a class="r" href="#${p.id}">${esc(label(p))}<small>${esc(String(p.meta.updated).slice(0, 10))}</small></a>`).join('') || '<p class="empty">まだありません。</p>'}</div></div>`;
+}
+
+async function openPage(id){
+  if (dirty) await flush();
+  const p = pages.get(id); if (!p) return showHome();
+  curId = id; mine.set('last', id); editing = mine.get('editing') && !readOnly ? true : false;
+  renderTree(); renderPage();
+  $('#main').scrollTop = 0;
+}
+
+function renderPage(){
+  const p = pages.get(curId); if (!p) return;
+  const draft = mine.get('draft.' + p.id);
+  const crumbs = ancestors(p.id).map(a => `<a href="#${a.id}">${esc(label(a))}</a> /`).join(' ');
+  const ch = kids(p.id);
+  $('#view').innerHTML = `<div class="page">
+    <div class="crumbs">${crumbs || '&nbsp;'}</div>
+    <div class="titleRow"><input id="icon" maxlength="4" placeholder="📄" value="${esc(p.meta.icon || '')}" ${readOnly ? 'readonly' : ''} aria-label="アイコン"><textarea id="title" rows="1" ${readOnly ? 'readonly' : ''} aria-label="題">${esc(p.meta.title)}</textarea></div>
+    <div class="tools">
+      <div class="grp">${readOnly ? '' : `<button id="modeBtn" class="${editing ? 'primary' : ''}">${editing ? '✓ 見る' : '✎ 書く'}</button>`}
+      ${editing ? `<button data-ins="h">見出し</button><button data-ins="b">太字</button><button data-ins="ul">・</button><button data-ins="todo">☐</button><button data-ins="link">リンク</button><button data-ins="page">ページへのリンク</button><button data-ins="img">画像</button>` : ''}</div>
+      <span class="spacer"></span>
+      ${p.meta.public ? `<span class="chip pub" title="「✓ 見る」を押したときに公開記事も直ります">🌐 公開の印</span>${readOnly ? '' : '<button id="pubBtn" title="公開記事をいまの内容にする">公開を更新</button>'}` : ''}
+      ${readOnly ? '' : '<button id="setBtn" title="上のページ・公開・並び順・ゴミ箱">設定</button>'}
+    </div>
+    ${draft && draft !== p.body ? `<p class="chip" style="display:inline-block">保存していない書きかけがあります。<button id="draftUse">書きかけを使う</button> <button id="draftDrop">捨てる</button></p>` : ''}
+    ${editing ? `<textarea id="editor" spellcheck="false"></textarea>` : `<div class="md" id="mdView">${p.body.trim() ? md(p.body) : '<p class="empty">空のページです。「✎ 書く」で書きます。</p>'}</div>`}
+    ${ch.length ? `<div class="children"><h3>この下のページ</h3>${ch.map(c => `<div><a class="page" href="#${c.id}">${esc(label(c))}</a></div>`).join('')}</div>` : ''}
+    ${p.meta.notion ? `<p class="empty" style="font-size:12px;margin-top:24px">Notion から移したページ（元: ${esc(p.meta.notion)}）</p>` : ''}
+  </div>`;
+  if (editing) { const ed = $('#editor'); ed.value = p.body; ed.oninput = () => { dirty = true; mine.set('draft.' + p.id, ed.value); schedule(); }; ed.onpaste = onPaste; ed.onkeydown = onKey; }
+  else loadImages();
+  const t = $('#title'), ic = $('#icon');
+  const fit = () => { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; }; fit(); t.oninput = fit;
+  t.onchange = () => { p.meta.title = t.value.replace(/\s*\n\s*/g, ' ').trim() || '無題'; dirty = true; schedule(0); renderTree(); };
+  ic.onchange = () => { p.meta.icon = ic.value.trim(); dirty = true; schedule(0); renderTree(); };
+  t.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); t.blur(); if (editing) $('#editor').focus(); } };
+  $('#modeBtn') && ($('#modeBtn').onclick = async () => { if (editing) { await syncEditor(); if (p.meta.public) publish(p); } editing = !editing; mine.set('editing', editing); renderPage(); if (editing) $('#editor').focus(); });
+  $('#setBtn') && ($('#setBtn').onclick = openSettings);
+  $('#pubBtn') && ($('#pubBtn').onclick = async () => { await syncEditor(); await publish(p); });
+  $('#draftUse') && ($('#draftUse').onclick = () => { p.body = draft; dirty = true; schedule(0); renderPage(); });
+  $('#draftDrop') && ($('#draftDrop').onclick = () => { mine.set('draft.' + p.id, null); renderPage(); });
+  document.querySelectorAll('[data-ins]').forEach(b => b.onclick = () => insert(b.dataset.ins));
+  const v = $('#mdView');
+  if (v) v.onchange = e => { const cb = e.target; if (cb.dataset.line == null || readOnly) return; toggleTask(Number(cb.dataset.line), cb.checked); };
+}
+
+async function loadImages(){
+  for (const img of document.querySelectorAll('img[data-file]')) {
+    const rel = img.dataset.file;
+    const path = resolvePath(rel);
+    if (!path) { img.alt = '（画像の場所が読めません）' + img.alt; continue; }
+    try {
+      let u = blobUrls.get(path);
+      if (!u) { u = URL.createObjectURL(await store.blob(path)); blobUrls.set(path, u); }
+      img.src = u;
+    } catch { img.alt = '（画像を読めませんでした）'; }
+  }
+}
+function resolvePath(rel){
+  // ページ（notes/pages/）から見た相対パスを、リポジトリの中のパスにする
+  const parts = PAGES.split('/').filter(Boolean);
+  for (const seg of decodeURI(rel).split('/')) { if (seg === '..') parts.pop(); else if (seg && seg !== '.') parts.push(seg); }
+  const p = parts.join('/');
+  return p.startsWith('notes/') ? p : null;
+}
+
+function toggleTask(lineNo, on){
+  const p = pages.get(curId); const lines = p.body.split('\n');
+  if (!lines[lineNo]) return;
+  lines[lineNo] = lines[lineNo].replace(/\[([ xX])\]/, on ? '[x]' : '[ ]');
+  p.body = lines.join('\n'); dirty = true; schedule(0);
+}
+
+// ================= 書く =================
+function onKey(e){
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); syncEditor().then(flush); return; }
+  if (e.key === 'Tab') {
+    e.preventDefault(); const ed = e.target, s = ed.selectionStart, en = ed.selectionEnd, v = ed.value;
+    const ls0 = v.lastIndexOf('\n', s - 1) + 1;
+    if (e.shiftKey) { if (v.slice(ls0, ls0 + 2) === '  ') { ed.value = v.slice(0, ls0) + v.slice(ls0 + 2); ed.selectionStart = ed.selectionEnd = Math.max(ls0, s - 2); } }
+    else { ed.value = v.slice(0, ls0) + '  ' + v.slice(ls0); ed.selectionStart = s + 2; ed.selectionEnd = en + 2; }
+    ed.dispatchEvent(new Event('input')); return;
+  }
+  if (e.key === 'Enter' && !e.isComposing) {
+    // リストの続きを自動で書く
+    const ed = e.target, s = ed.selectionStart, v = ed.value, ls0 = v.lastIndexOf('\n', s - 1) + 1, line = v.slice(ls0, s);
+    const m = line.match(/^(\s*)([-*+]|\d+[.)])\s+(\[[ xX]\]\s+)?(.*)$/);
+    if (!m) return;
+    e.preventDefault();
+    if (!m[4]) { ed.value = v.slice(0, ls0) + v.slice(s); ed.selectionStart = ed.selectionEnd = ls0; }
+    else {
+      const mark = /\d/.test(m[2]) ? (parseInt(m[2]) + 1) + m[2].slice(-1) : m[2];
+      const ins = '\n' + m[1] + mark + ' ' + (m[3] ? '[ ] ' : '');
+      ed.value = v.slice(0, s) + ins + v.slice(s); ed.selectionStart = ed.selectionEnd = s + ins.length;
+    }
+    ed.dispatchEvent(new Event('input'));
+  }
+}
+function wrapSel(before, after = '', ph = ''){
+  const ed = $('#editor'); const s = ed.selectionStart, en = ed.selectionEnd, v = ed.value;
+  const sel = v.slice(s, en) || ph;
+  ed.value = v.slice(0, s) + before + sel + after + v.slice(en);
+  ed.selectionStart = s + before.length; ed.selectionEnd = s + before.length + sel.length;
+  ed.focus(); ed.dispatchEvent(new Event('input'));
+}
+function linePrefix(pre){
+  const ed = $('#editor'); const s = ed.selectionStart, v = ed.value, ls0 = v.lastIndexOf('\n', s - 1) + 1;
+  ed.value = v.slice(0, ls0) + pre + v.slice(ls0); ed.selectionStart = ed.selectionEnd = s + pre.length; ed.focus(); ed.dispatchEvent(new Event('input'));
+}
+function insert(kind){
+  if (kind === 'h') linePrefix('## ');
+  else if (kind === 'b') wrapSel('**', '**', '太字');
+  else if (kind === 'ul') linePrefix('- ');
+  else if (kind === 'todo') linePrefix('- [ ] ');
+  else if (kind === 'link') { const u = prompt('リンク先（https://…）'); if (u && /^https?:\/\//.test(u)) wrapSel('[', `](${u})`, 'リンク'); }
+  else if (kind === 'page') pickPage().then(p => { if (p) wrapSel('[', `](${p.id}.md)`, p.meta.title); });
+  else if (kind === 'img') $('#imgInput').click();
+}
+function pickPage(){
+  return new Promise(ok => {
+    const q = prompt('つなぐページの題（一部でよい）'); if (!q) return ok(null);
+    const hit = [...pages.values()].filter(p => !isHidden(p) && p.meta.title.includes(q));
+    if (!hit.length) { setStatus('そのページは見つかりませんでした。', 'warn'); return ok(null); }
+    if (hit.length === 1) return ok(hit[0]);
+    const n = prompt(hit.slice(0, 9).map((p, i) => `${i + 1}: ${p.meta.title}`).join('\n') + '\n番号を入れてください'); ok(hit[Number(n) - 1] || null);
+  });
+}
+async function onPaste(e){
+  const f = [...(e.clipboardData?.files || [])].find(x => x.type.startsWith('image/'));
+  if (!f) return; e.preventDefault(); await uploadImage(f);
+}
+$('#imgInput').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (f) await uploadImage(f); };
+async function uploadImage(f){
+  const p = pages.get(curId); if (!p || readOnly) return;
+  const ext = (f.name.match(/\.[a-z0-9]+$/i)?.[0] || '.' + (f.type.split('/')[1] || 'png')).toLowerCase();
+  const name = (f.name && f.name !== 'image.png' ? f.name.replace(/\.[^.]+$/, '') : '画像-' + new Date().toISOString().replace(/\D/g, '').slice(0, 14)).replace(/[\\/:*?"<>|#%\s]+/g, '_') + ext;
+  if (f.size > 20 * 1024 * 1024) { setStatus('20MB より大きい画像は入れられません。', 'err'); return; }
+  setStatus('画像を保存しています…');
+  try {
+    await store.write(FILES + p.id + '/' + name, new Uint8Array(await f.arrayBuffer()), null, `画像を足した（${p.meta.title}）`);
+    wrapSel('![', `](../files/${p.id}/${encodeURIComponent(name)})`, '');
+    setStatus('画像を保存しました。', 'ok');
+  } catch (e) { setStatus('画像を保存できませんでした: ' + e.message, 'err'); }
+}
+
+async function syncEditor(){ const ed = $('#editor'); const p = pages.get(curId); if (ed && p && ed.value !== p.body) { p.body = ed.value; dirty = true; } if (dirty) await flush(); }
+function schedule(ms = 1500){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { const ed = $('#editor'); const p = pages.get(curId); if (ed && p) p.body = ed.value; flush(); }, ms);
+  setStatus('書きかけ（まもなく保存します）');
+}
+async function flush(){
+  clearTimeout(saveTimer);
+  if (!dirty || readOnly || !store) return;
+  if (saving) { setTimeout(flush, 500); return; }
+  const p = pages.get(curId); if (!p) { dirty = false; return; }
+  const ed = $('#editor'); if (ed) p.body = ed.value;
+  saving = true; dirty = false;
+  try {
+    await savePage(p, `「${p.meta.title}」を直した`);
+    mine.set('draft.' + p.id, null);
+    setStatus(`保存しました・${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
+  } catch (e) {
+    dirty = true;
+    if (e.conflict) $('#conflictDlg').showModal();
+    else setStatus('保存できませんでした（' + e.message + '）。書きかけはこの端末に残っています。', 'err');
+  } finally { saving = false; }
+}
+async function savePage(p, why){
+  p.meta.updated = now();
+  if (!p.meta.created) p.meta.created = p.meta.updated;
+  const text = serialize(p.meta, p.body);
+  p.sha = await store.write(p.path, text, p.sha, why);
+  cachePut({ path: p.path, sha: p.sha, text });
+}
+$('#cfMine').onclick = async () => {
+  $('#conflictDlg').close(); const p = pages.get(curId);
+  const cur = await store.read(p.path); p.sha = cur?.sha; dirty = true; await flush();
+};
+$('#cfTheirs').onclick = async () => {
+  $('#conflictDlg').close(); const p = pages.get(curId);
+  const copy = { id: newId(), meta: { ...p.meta, title: p.meta.title + '（自分の書きかけ）', parent: p.meta.parent, order: p.meta.order + 0.5, created: '' }, body: p.body };
+  copy.path = PAGES + copy.id + '.md'; delete copy.meta.notion;
+  try { await savePage(copy, `「${p.meta.title}」の書きかけを別ページに残した`); pages.set(copy.id, copy); } catch (e) { setStatus('書きかけを残せませんでした: ' + e.message, 'err'); return; }
+  const cur = await store.read(p.path);
+  if (cur) { const { meta, body } = parsePage(cur.text); Object.assign(p, { sha: cur.sha, meta, body }); cachePut({ path: p.path, sha: cur.sha, text: cur.text }); }
+  dirty = false; mine.set('draft.' + p.id, null); renderTree(); renderPage();
+  setStatus('相手の内容を読みました。自分の書きかけは「（自分の書きかけ）」のページにあります。', 'warn');
+};
+
+async function newPage(parent = ''){
+  if (readOnly || !store) return;
+  if (dirty) await flush();
+  const sib = kids(parent);
+  const p = { id: newId(), sha: null, body: '', meta: { title: '無題', parent, order: (sib.at(-1)?.meta.order || 0) + 1, icon: '', public: false, created: '', updated: '', notion: '' } };
+  p.path = PAGES + p.id + '.md';
+  try { await savePage(p, 'ページを足した'); } catch (e) { setStatus('ページを作れませんでした: ' + e.message, 'err'); return; }
+  pages.set(p.id, p);
+  if (parent) { const open = new Set(mine.get('open') || []); open.add(parent); mine.set('open', [...open]); }
+  editing = true; mine.set('editing', true);
+  go(p.id);
+  setTimeout(() => { const t = $('#title'); if (t) { t.select(); t.focus(); } }, 50);
+}
+
+// ================= 公開（公開の印を付けたページだけを、公開用リポジトリに書き出す）=================
+// 公開用リポジトリ（既定は同じ持ち主の articles）。鍵はカンバンと同じものに、そのリポジトリを足して使う。
+function pubStore(){
+  const gh = ls.get('gh'); if (!gh?.token) return null;
+  const cfg = mine.get('pub') || {};
+  return ghStore({ owner: cfg.owner || gh.owner, repo: cfg.repo || 'articles', branch: cfg.branch || 'main', token: gh.token });
+}
+function pubBody(p){
+  // 公開しないページへのリンクは文字だけにする（題も出さない）
+  return p.body.replace(/(!?)\[([^\]\n]*)\]\(([0-9a-f]{32})\.md(#[^)]*)?\)/gi, (m, bang, lbl, id) => {
+    const t = pages.get(id.toLowerCase());
+    return t && t.meta.public && !isHidden(t) ? m : lbl;
+  });
+}
+async function publish(p){
+  const ps = pubStore();
+  if (!ps) { setStatus('公開するには GitHub でつなぐ必要があります（⋯ → GitHub でつなぐ）。', 'warn'); return; }
+  const want = p.meta.public && !isHidden(p);
+  const path = `posts/${p.id}.md`;
+  try {
+    const cur = await ps.info(path);
+    if (!want) {
+      if (cur) await ps.remove(path, cur.sha, `「${p.meta.title}」の公開をやめた`);
+      const dir = await ps.info(`files/${p.id}`);
+      if (Array.isArray(dir)) for (const f of dir) await ps.remove(f.path, f.sha, '公開をやめたページの画像を消した');
+      if (cur) setStatus(`「${p.meta.title}」の公開をやめました。`, 'ok');
+      return;
+    }
+    const body = pubBody(p);
+    // 本文が使っている画像だけを写す
+    for (const m of body.matchAll(/!\[[^\]]*\]\((\.\.\/files\/[^)\s]+)\)/g)) {
+      const src = resolvePath(m[1]); if (!src) continue;
+      const dst = src.replace(/^notes\//, '');
+      if (await ps.info(dst)) continue;
+      await ps.write(dst, new Uint8Array(await (await store.blob(src)).arrayBuffer()), null, `「${p.meta.title}」の画像`);
+    }
+    const meta = { title: p.meta.title, icon: p.meta.icon || '', created: p.meta.created || '', updated: p.meta.updated || now() };
+    const text = '---\n' + Object.entries(meta).map(([k, v]) => `${k}: ${String(v).replace(/\n/g, ' ')}`).join('\n') + '\n---\n\n' + body.replace(/\s+$/, '') + '\n';
+    if (cur && new TextDecoder().decode(b64dec(cur.content || '')).replace(/^---[\s\S]*?\n---\n/, '') === text.replace(/^---[\s\S]*?\n---\n/, '')) return;
+    await ps.write(path, text, cur?.sha, `「${p.meta.title}」を公開した`);
+    setStatus(`「${p.meta.title}」を公開記事に書き出しました（サイトに出るまで1〜2分）。`, 'ok');
+  } catch (e) {
+    setStatus('公開用リポジトリに書けませんでした（' + e.message + '）。鍵に公開用リポジトリを足してください（README の「公開」）。', 'err');
+  }
+}
+
+// ================= 設定（上のページ・公開・並び・ゴミ箱）=================
+function openSettings(){
+  const p = pages.get(curId), f = $('#setForm');
+  const bad = new Set([p.id]); let grew = true;
+  while (grew) { grew = false; for (const x of pages.values()) if (!bad.has(x.id) && bad.has(x.meta.parent)) { bad.add(x.id); grew = true; } }
+  const opts = [...pages.values()].filter(x => !bad.has(x.id) && !isHidden(x)).sort((a, b) => a.meta.title.localeCompare(b.meta.title, 'ja'));
+  f.parent.innerHTML = '<option value="">（いちばん上）</option>' + opts.map(x => `<option value="${x.id}">${esc(label(x))}</option>`).join('');
+  f.parent.value = pages.has(p.meta.parent) ? p.meta.parent : '';
+  f.public.checked = !!p.meta.public;
+  $('#setInfo').textContent = `作った日: ${String(p.meta.created || '').slice(0, 10) || '—'}・最後に直した日: ${String(p.meta.updated || '').slice(0, 10) || '—'}`;
+  $('#setDlg').showModal();
+}
+$('#setForm').onsubmit = async e => {
+  if (e.submitter?.value !== 'ok') return;
+  const p = pages.get(curId), f = e.target;
+  const np = f.parent.value, pub = f.public.checked;
+  if (np === (p.meta.parent || '') && pub === !!p.meta.public) return;
+  if (np !== (p.meta.parent || '')) { p.meta.parent = np; p.meta.order = (kids(np).filter(x => x.id !== p.id).at(-1)?.meta.order || 0) + 1; }
+  const pubChanged = pub !== !!p.meta.public;
+  p.meta.public = pub;
+  try { await savePage(p, `「${p.meta.title}」の設定を変えた`); setStatus('保存しました。', 'ok'); if (pubChanged || pub) await publish(p); } catch (err) { setStatus('保存できませんでした: ' + err.message, 'err'); }
+  renderTree(); renderPage();
+};
+async function move(dir){
+  const p = pages.get(curId); const sib = kids(p.meta.parent || '');
+  const i = sib.findIndex(x => x.id === p.id), j = i + dir;
+  if (j < 0 || j >= sib.length) return;
+  // 並びを1から振り直して、入れかえた2つだけ保存する
+  sib.forEach((x, k) => x.meta.order = k + 1);
+  [sib[i].meta.order, sib[j].meta.order] = [sib[j].meta.order, sib[i].meta.order];
+  try { await savePage(sib[i], '並びを変えた'); await savePage(sib[j], '並びを変えた'); } catch (e) { setStatus('並びを保存できませんでした: ' + e.message, 'err'); }
+  renderTree();
+}
+$('#upBtn').onclick = () => move(-1);
+$('#downBtn').onclick = () => move(1);
+$('#trashBtn').onclick = async () => {
+  const b = $('#trashBtn');
+  if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'もう一度押すとゴミ箱へ（下のページも一緒に隠れます）'; return; }
+  const p = pages.get(curId); p.meta.trashed = true;
+  try { await savePage(p, `「${p.meta.title}」をゴミ箱へ`); } catch (e) { p.meta.trashed = false; setStatus('ゴミ箱へ移せませんでした: ' + e.message, 'err'); return; }
+  $('#setDlg').close(); location.hash = ''; showHome(); setStatus('ゴミ箱へ移しました（⋯ → ゴミ箱 から戻せます）。', 'ok');
+  for (const x of pages.values()) if (x.meta.public && isHidden(x)) await publish(x);
+};
+$('#setDlg').addEventListener('close', () => { const b = $('#trashBtn'); b.dataset.sure = ''; b.textContent = 'ゴミ箱へ'; });
+
+function showTrash(){
+  curId = null; renderTree(); closeSide();
+  const list = [...pages.values()].filter(p => p.meta.trashed);
+  $('#view').innerHTML = `<div class="page"><h2>ゴミ箱</h2><p class="empty">ゴミ箱のページはファイルとして残っています（消えません）。戻すと元の場所に出ます。</p>
+    <div class="results">${list.map(p => `<div class="r">${esc(label(p))} ${readOnly ? '' : `<button data-restore="${p.id}">戻す</button>`}</div>`).join('') || '<p class="empty">空です。</p>'}</div></div>`;
+  document.querySelectorAll('[data-restore]').forEach(b => b.onclick = async () => {
+    const p = pages.get(b.dataset.restore); p.meta.trashed = false;
+    try { await savePage(p, `「${p.meta.title}」をゴミ箱から戻した`); } catch (e) { p.meta.trashed = true; setStatus('戻せませんでした: ' + e.message, 'err'); return; }
+    showTrash();
+  });
+}
+
+// ================= さがす =================
+let qTimer = null;
+$('#q').oninput = () => { clearTimeout(qTimer); qTimer = setTimeout(search, 200); };
+function search(){
+  const q = $('#q').value.trim();
+  if (!q) { curId ? renderPage() : showHome(); return; }
+  if (dirty) flush();
+  const words = q.toLowerCase().split(/\s+/);
+  const hits = [];
+  for (const p of pages.values()) {
+    if (isHidden(p)) continue;
+    const hay = (p.meta.title + '\n' + p.body).toLowerCase();
+    if (!words.every(w => hay.includes(w))) continue;
+    const at = p.body.toLowerCase().indexOf(words[0]);
+    const snip = at >= 0 ? p.body.slice(Math.max(0, at - 30), at + 60).replace(/\s+/g, ' ') : '';
+    hits.push({ p, snip, score: p.meta.title.toLowerCase().includes(words[0]) ? 0 : 1 });
+  }
+  hits.sort((a, b) => a.score - b.score || String(b.p.meta.updated).localeCompare(String(a.p.meta.updated)));
+  const mark = s => { let h = esc(s); for (const w of words) if (w) h = h.split(esc(w)).join(`<mark>${esc(w)}</mark>`); return h; };
+  $('#view').innerHTML = `<div class="page"><h2>「${esc(q)}」の結果 ${hits.length} 件</h2><div class="results">${hits.slice(0, 100).map(h => `<a class="r" href="#${h.p.id}">${esc(label(h.p))}<small>${mark(h.snip)}</small></a>`).join('')}</div></div>`;
+}
+$('#view').addEventListener('click', e => { const a = e.target.closest('a[href^="#"]'); if (a && $('#q').value) { $('#q').value = ''; } });
+
+// ================= つなぐ =================
+function tokenUrl(owner){
+  const name = 'カンバン-' + (matchMedia('(max-width: 760px)').matches ? 'スマホ' : 'PC') + '-' + new Date().toISOString().slice(0, 16).replace(/\D/g, '');
+  const q = new URLSearchParams({ name, description: 'カンバンとメモ（local-kanban）がデータを読み書きするための鍵', expires_in: '366', contents: 'write' });
+  if (owner) q.set('target_name', owner);
+  return 'https://github.com/settings/personal-access-tokens/new?' + q;
+}
+$('#ghMake').onclick = () => window.open(tokenUrl($('#ghForm').owner.value.trim()), '_blank', 'noopener');
+function openGithub(){
+  const f = $('#ghForm'), cfg = ls.get('gh') || {};
+  f.owner.value = cfg.owner || ''; f.repo.value = cfg.repo || ''; f.branch.value = cfg.branch || 'main'; f.token.value = '';
+  f.token.placeholder = cfg.token ? '（前に貼った鍵を使う）' : 'github_pat_…';
+  $('#ghDlg').showModal();
+}
+$('#ghForm').onsubmit = e => {
+  if (e.submitter?.value !== 'ok') return;
+  const f = e.target, old = ls.get('gh') || {};
+  const cfg = { owner: f.owner.value.trim(), repo: f.repo.value.trim(), branch: f.branch.value.trim() || 'main', token: f.token.value.trim() || old.token };
+  if (!cfg.token) { e.preventDefault(); f.token.focus(); return; }
+  ls.set('gh', cfg); ls.set('mode', 'github');
+  connect(ghStore(cfg));
+};
+$('#ghForget').onclick = () => { ls.set('gh', null); if (ls.get('mode') === 'github') ls.set('mode', null); $('#ghDlg').close(); setStatus('この端末の鍵を消しました（カンバンも同じ鍵なので、つなぎ直しが要ります）。', 'warn'); };
+
+async function useFolder(h, ask = true){
+  let p = await h.queryPermission({ mode: 'readwrite' });
+  if (p !== 'granted' && ask) p = await h.requestPermission({ mode: 'readwrite' });
+  if (p !== 'granted') { if (ask) setStatus('フォルダへの書き込みが許可されませんでした。', 'err'); return false; }
+  try { await h.getDirectoryHandle('notes'); }
+  catch { try { await h.getDirectoryHandle('board'); } catch { setStatus('このフォルダにはデータがありません。データのリポジトリのフォルダそのものを選んでください。', 'err'); return false; } }
+  await saveHandle(h); ls.set('mode', 'folder');
+  await connect(folderStore(h)); return true;
+}
+async function openFolder(){
+  if (!window.showDirectoryPicker) { setStatus('このブラウザは PC のフォルダを開けません。「GitHub でつなぐ」を使ってください。', 'err'); return; }
+  try { await useFolder(await window.showDirectoryPicker({ id: 'kanban-data', mode: 'readwrite' })); }
+  catch (e) { if (e.name !== 'AbortError') setStatus('開けませんでした: ' + e.message, 'err'); }
+}
+
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('[data-m=install]').hidden = false; });
+const actions = {
+  github: openGithub, folder: openFolder, trash: showTrash, kanban: () => { location.href = '../'; },
+  reload: async () => { if (!store) return; if (dirty) await flush(); readOnly = false; try { await loadAll(); } catch (e) { setStatus('読めませんでした: ' + e.message, 'err'); } },
+  install: async () => { if (installEvt) { installEvt.prompt(); installEvt = null; $('[data-m=install]').hidden = true; } },
+};
+document.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { $('#menu').open = false; actions[b.dataset.m](); });
+$('#newBtn').onclick = () => newPage(curId && !readOnly ? '' : '');
+$('#sideNew').onclick = () => { newPage(''); closeSide(); };
+$('#sideTrash').onclick = showTrash;
+$('#menuBtn').onclick = () => document.body.classList.toggle('sideOpen');
+$('#shade').onclick = closeSide;
+function closeSide(){ document.body.classList.remove('sideOpen'); }
+document.addEventListener('click', e => { if (!$('#menu').contains(e.target)) $('#menu').open = false; });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && dirty) { const ed = $('#editor'); const p = pages.get(curId); if (ed && p) p.body = ed.value; flush(); } });
+window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+if (!window.showDirectoryPicker) { $('#folderChoice').hidden = true; $('#folderMenu').hidden = true; }
+
+if (location.protocol !== 'file:' && 'serviceWorker' in navigator) {
+  const m = document.createElement('link'); m.rel = 'manifest'; m.href = 'manifest.webmanifest'; document.head.appendChild(m);
+  const i = document.createElement('link'); i.rel = 'apple-touch-icon'; i.href = 'icon-192.png'; document.head.appendChild(i);
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+// カンバンと同じつなぎ先に自動でつなぐ
+(async () => {
+  const mode = ls.get('mode'), gh = ls.get('gh');
+  if (gh?.token && mode !== 'folder') return connect(ghStore(gh));
+  const h = window.showDirectoryPicker ? await loadHandle() : null;
+  if (h && mode === 'folder') { try { if (await useFolder(h, false)) return; } catch {} setStatus('前回のフォルダを開くには「PC のフォルダを開く」を押してください。', 'warn'); return; }
+  if (gh?.token) return connect(ghStore(gh));
+})();
+</script>
+</body>
+</html>
