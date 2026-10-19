@@ -86,6 +86,10 @@ a{color:var(--accent)}
   #addForm input,#addForm select{flex:1 1 45%}
   .row{flex-direction:column;gap:0}
 }
+@media (max-width:520px){
+  button,select,input,#menu summary,#tabs button,.actions button,.actions select{min-height:44px}
+  #addBtn{position:fixed;right:16px;bottom:max(16px,env(safe-area-inset-bottom));z-index:6;border-radius:28px;padding:10px 18px;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+}
 </style>
 </head>
 <body>
@@ -101,6 +105,7 @@ a{color:var(--accent)}
         <button data-m="github">GitHub でつなぐ（PC・スマホ）</button>
         <button data-m="folder">PC のフォルダを開く</button>
         <button data-m="file">cards.json を選ぶ</button>
+        <button data-m="phone" hidden>スマホでも開く（QR）</button>
         <button data-m="download" disabled>ダウンロードで保存</button>
         <button data-m="install" hidden>アプリとしてインストール</button>
       </div>
@@ -169,12 +174,21 @@ a{color:var(--accent)}
     </div>
     <label>鍵（fine-grained トークン）</label>
     <input name="token" type="password" autocomplete="off" placeholder="github_pat_…">
-    <p class="help">鍵の作り方：<a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub の鍵を作るページ</a>で、Repository access を「Only select repositories」→ 上のリポジトリだけ、Permissions の Contents を「Read and write」にして作る。出てきた文字列をここに貼る。鍵はこの端末のブラウザの中にだけ保存し、GitHub 以外には送りません。空のまま保存すると、前に貼った鍵を使います。</p>
+    <p class="help"><button type="button" id="ghMake">鍵を作るページを開く</button><br>
+    開いたページで「Only select repositories」を押して上のリポジトリを選び、いちばん下の <b>Generate token</b> を押す。出てきた <code>github_pat_…</code> をコピーして上に貼る（名前・期限・権限は入力済み）。<br>
+    鍵はこの端末のブラウザの中にだけ保存し、GitHub 以外には送りません。空のまま「つなぐ」を押すと、前に貼った鍵を使います。</p>
     <div class="actions" style="justify-content:space-between;margin-top:12px">
       <button type="button" id="ghForget">この端末の鍵を消す</button>
       <span><button value="cancel" formnovalidate>やめる</button> <button value="ok" class="primary">つなぐ</button></span>
     </div>
   </form>
+</dialog>
+
+<dialog id="qrDlg">
+  <h3 style="margin-top:0">スマホでも開く</h3>
+  <p class="help">スマホのカメラでこの QR を読んで開くと、つなぎ先（持ち主・リポジトリ）が入った状態で始まります。鍵は入っていないので、スマホでも「鍵を作るページを開く」から1つ作って貼ってください。</p>
+  <div id="qrBox" style="background:#fff;padding:12px;display:inline-block"></div>
+  <div class="actions" style="justify-content:flex-end;margin-top:12px"><button id="qrClose" class="primary">閉じる</button></div>
 </dialog>
 
 <script>
@@ -295,6 +309,7 @@ async function reload(){
   if (!Array.isArray(d)) throw new Error('cards.json が配列ではありません');
   cards = d; dirty = false;
   if (store.kind === 'github') ls.set('cache', cards);
+  $('[data-m=phone]').hidden = store.kind !== 'github';
   showBoard();
   setStatus(`${store.label} から読みました: ${from}・${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
 }
@@ -415,6 +430,9 @@ function cardEl(c){
     `<span class="chip ${c.owner==='you'?'you':''}">${c.owner==='you'?'自分':'エージェント'}</span>`,
     c.due ? `<span class="chip ${late?'late':''}">期限 ${esc(c.due)}</span>` : '',
     c.priority ? `<span class="chip ${c.priority==='high'?'high':''}">優先 ${PRIO[c.priority]||esc(c.priority)}</span>` : '',
+    c.category ? `<span class="chip">プロジェクト ${esc(c.category)}</span>` : '',
+    c.type === 'mail' ? '<span class="chip">メール</span>' : '',
+    c.repeat ? `<span class="chip">繰り返し ${c.repeat==='week'?'毎週':c.repeat==='month'?'毎月':esc(c.repeat)}</span>` : '',
     /^https?:\/\//.test(c.link||'') ? `<a class="chip" href="${esc(c.link)}" target="_blank" rel="noopener">リンク</a>` : '',
   ].join('');
   let html = `<div class="t">${esc(c.title)}</div><div class="meta">${chips}</div>`;
@@ -439,11 +457,32 @@ function cardEl(c){
 // ================= 操作 =================
 function nextOrder(lane, except){ return Math.max(0, ...cards.filter(x => x.lane === lane && x !== except).map(x => x.order || 0)) + 1; }
 
-function moveTo(c, lane){
-  if (c.lane === lane) return;
-  const from = LANE_LABEL[c.lane] || c.lane;
+// 列を移す。moves に記録し（claude.ai のボードの記録画面と同じ形）、繰り返しのカードは済みにしたとき次の回を足す
+function setLane(c, lane){
+  const from = c.lane;
+  if (from === lane) return false;
   c.lane = lane; c.order = nextOrder(lane, c);
-  if (lane === 'done') c.done_at = now(); else delete c.done_at;
+  c.moves = (c.moves || []).concat({at: now(), from, to: lane}).slice(-50);
+  if (lane === 'done') { c.done_at = now(); repeatNext(c); } else delete c.done_at;
+  return true;
+}
+function addDue(due, repeat){
+  const d = due ? new Date(due + 'T00:00:00') : new Date();
+  if (repeat === 'week') d.setDate(d.getDate() + 7); else if (repeat === 'month') d.setMonth(d.getMonth() + 1); else return due;
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function repeatNext(c){
+  if (!['week','month'].includes(c.repeat) || c.repeated_to) return;
+  const t = now(), n = { ...c };
+  for (const k of ['doc_id','no','done_at','history','moves','answer','answered_at','answer_status','progress','started_at','repeated_to','local_edit']) delete n[k];
+  Object.assign(n, { doc_id: 'local-' + Date.now().toString(36) + 'r', lane: 'next', created: t, updated: t, repeated_from: c.doc_id, order: nextOrder('next') });
+  if (c.due) n.due = addDue(c.due, c.repeat);
+  touch(n, '繰り返しの次の回'); c.repeated_to = n.doc_id; cards.push(n);
+}
+
+function moveTo(c, lane){
+  const from = LANE_LABEL[c.lane] || c.lane;
+  if (!setLane(c, lane)) return;
   touch(c, `${from} → ${LANE_LABEL[lane]}`);
   persist(`「${c.title}」を${LANE_LABEL[lane]}へ`);
 }
@@ -462,6 +501,7 @@ function addCard(f){
     created: t, updated: t, by: 'you-local', order: nextOrder(f.lane.value) };
   if (f.due.value) c.due = f.due.value;
   if (c.lane === 'done') c.done_at = t;
+  c.moves = [{at: t, from: null, to: c.lane}];
   touch(c, 'ローカル版で足した');
   cards.push(c); f.reset(); f.lane.value = curLane; f.style.display = 'none';
   persist(`「${c.title}」を足した`);
@@ -477,6 +517,15 @@ function openEdit(c){
 function laneOptions(sel){ sel.innerHTML = LANES.map(([k,v]) => `<option value="${k}">${v}</option>`).join(''); }
 
 // ================= つなぐ =================
+function tokenUrl(owner){
+  // 鍵の名前はアカウントの中で重ならないようにする（端末ごとに1つ作る）
+  const name = 'カンバン-' + (matchMedia('(max-width: 760px)').matches ? 'スマホ' : 'PC') + '-' + new Date().toISOString().slice(0, 16).replace(/\D/g, '');
+  const q = new URLSearchParams({ name, description: 'カンバン（local-kanban）がカードを読み書きするための鍵', expires_in: '366', contents: 'write' });
+  if (owner) q.set('target_name', owner);
+  return 'https://github.com/settings/personal-access-tokens/new?' + q;
+}
+$('#ghMake').onclick = () => window.open(tokenUrl($('#ghForm').owner.value.trim()), '_blank', 'noopener');
+
 function openGithub(){
   const f = $('#ghForm'), cfg = ls.get('gh') || {};
   f.owner.value = cfg.owner || ''; f.repo.value = cfg.repo || ''; f.branch.value = cfg.branch || 'main'; f.token.value = '';
@@ -506,10 +555,26 @@ function download(){
   setStatus('cards.json をダウンロードしました。データのリポジトリの local-board フォルダに置いてください。','warn');
 }
 
+// 設定のリンク（つなぎ先だけ。鍵は入れない）
+function setupLink(){
+  const cfg = ls.get('gh'); if (!cfg) return null;
+  return location.origin + location.pathname + '#' + new URLSearchParams({ repo: cfg.owner + '/' + cfg.repo, branch: cfg.branch });
+}
+async function showPhoneQr(){
+  const link = setupLink(); if (!link) return;
+  try {
+    if (!window.qrcode) await new Promise((ok, ng) => { const s = document.createElement('script'); s.src = 'qrcode.js'; s.onload = ok; s.onerror = ng; document.head.appendChild(s); });
+    const qr = qrcode(0, 'M'); qr.addData(link); qr.make();
+    $('#qrBox').innerHTML = qr.createSvgTag({ cellSize: 5, margin: 2 });
+    $('#qrDlg').showModal();
+  } catch { setStatus('QR を出せませんでした。公開ページから開いてください。','err'); }
+}
+$('#qrClose').onclick = () => $('#qrDlg').close();
+
 let installEvt = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('[data-m=install]').hidden = false; });
 
-const actions = { github: openGithub, folder: openFolder, file: () => $('#fileInput').click(), download,
+const actions = { github: openGithub, phone: showPhoneQr, folder: openFolder, file: () => $('#fileInput').click(), download,
   install: async () => { if (installEvt) { installEvt.prompt(); installEvt = null; $('[data-m=install]').hidden = true; } } };
 document.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { $('#menu').open = false; actions[b.dataset.m](); });
 
@@ -529,7 +594,7 @@ $('#editForm').onsubmit = e => {
   if (e.submitter?.value !== 'ok' || !editing) return;
   const c = editing, oldLane = c.lane;
   for (const k of ['title','owner','due','priority','link','note']) { const v = f[k].value.trim(); if (v) c[k] = v; else delete c[k]; }
-  if (f.lane.value !== oldLane) { c.lane = f.lane.value; c.order = nextOrder(c.lane, c); if (c.lane === 'done') c.done_at = now(); else delete c.done_at; }
+  if (f.lane.value !== oldLane) setLane(c, f.lane.value);
   touch(c, f.comment.value.trim() || '内容を直した');
   persist(`「${c.title}」を直した`);
 };
@@ -555,6 +620,18 @@ if (location.protocol !== 'file:' && 'serviceWorker' in navigator) {
 
 // 前回の置き場所に自動でつなぐ
 (async () => {
+  // 設定のリンク（#repo=持ち主/リポジトリ&branch=…）で開いたら、つなぎ先を入れて鍵の画面を出す
+  if (location.hash.length > 1) {
+    const h = new URLSearchParams(location.hash.slice(1));
+    history.replaceState(null, '', location.pathname + location.search);
+    const [owner, repo] = (h.get('repo') || '').split('/');
+    if (owner && repo) {
+      const old = ls.get('gh') || {};
+      const same = old.owner === owner && old.repo === repo && old.token;
+      if (same) { ls.set('mode', 'github'); return connect(ghStore(old)); }
+      ls.set('gh', { owner, repo, branch: h.get('branch') || 'main' }); openGithub(); return;
+    }
+  }
   const mode = ls.get('mode'), gh = ls.get('gh');
   if (mode === 'github' && gh?.token) return connect(ghStore(gh));
   const h = window.showDirectoryPicker ? await loadHandle() : null;

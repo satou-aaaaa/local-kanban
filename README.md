@@ -17,15 +17,13 @@
 読むのは `local-board/cards.json`（無ければ `board/cards.json`）、書くのは `local-board/cards.json` と `local-board/BOARD.md` だけ。
 データの形・取り込み方・AI への説明は、データ側のリポジトリの `local-board/README.md`・`AGENTS.md`・`cards.schema.json`。
 
-## 鍵（fine-grained トークン）の作り方
+## つなぎ方（端末ごとに1回）
 
-1. https://github.com/settings/personal-access-tokens/new を開く。
-2. Token name は「カンバン（端末名）」など。Expiration は 1 年など、期限を決める。
-3. Repository access は **Only select repositories** → データのリポジトリだけを選ぶ。
-4. Permissions → Repository permissions → **Contents** を **Read and write**。ほかは触らない（Metadata の Read-only は自動で付く）。
-5. Generate token → 出てきた `github_pat_…` を、アプリの「⋯ → GitHub でつなぐ」の鍵の欄に貼る。
+1. アプリの「⋯ → GitHub でつなぐ」で、持ち主・リポジトリを入れる。`#repo=持ち主/リポジトリ&branch=main` を付けたリンクで開くと、入った状態で始まる。
+2. **鍵を作るページを開く** を押す。GitHub の fine-grained トークンの画面が、名前・期限（1年）・権限（Contents の Read and write だけ）を入れた状態で開く。**Only select repositories** でデータのリポジトリだけを選び、**Generate token**。
+3. 出てきた `github_pat_…` を鍵の欄に貼って **つなぐ**。
 
-端末ごとに別の鍵を作ると、なくした端末の鍵だけを消せる（https://github.com/settings/personal-access-tokens で Delete）。
+2台目は、つないだ端末の「⋯ → スマホでも開く（QR）」を読むと手順 1 が済んだ状態で開く。QR には鍵を入れない（画面に映るもの・URL に鍵を載せない）ので、鍵は端末ごとに作る。なくした端末の鍵だけを https://github.com/settings/personal-access-tokens で消せる。
 
 ## 安全のために
 
