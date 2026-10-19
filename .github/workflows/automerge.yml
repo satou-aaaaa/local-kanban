@@ -1,0 +1,20 @@
+name: Auto merge
+
+# 検査（QA）がプルリクエストで ✅ になったら自動で squash マージする。中身と条件は共通部品 satou-aaaaa/shared-workflows。
+on:
+  workflow_run:
+    workflows: [QA]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  pages: write
+
+jobs:
+  merge:
+    uses: satou-aaaaa/shared-workflows/.github/workflows/automerge.yml@main
+    with:
+      # Pages を「ブランチから公開」にしているときは true。Actions で公開しているときは dispatch: "pages.yml"
+      pages_build: true
+      delete_branch: true

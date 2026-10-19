@@ -1,0 +1,23 @@
+name: CodeQL
+
+# 脆弱性の検査。中身は satou-aaaaa/shared-workflows の共通部品。
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '41 20 * * 0'   # 毎週月曜 05:41 JST（新しく見つかるようになった種類も拾う）
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    uses: satou-aaaaa/shared-workflows/.github/workflows/codeql.yml@main
+    with:
+      # 調べる言語（カンマ区切り）: javascript-typescript / python / actions など
+      languages: javascript-typescript,actions

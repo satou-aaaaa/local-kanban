@@ -1,0 +1,18 @@
+name: Labels
+
+# 自動化が使う共通ラベルを揃える（Claude は使わない）。中身は共通部品 satou-aaaaa/shared-workflows。
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/labels.yml]
+  schedule:
+    # 毎月2日 05:47 JST（= 1日 20:47 UTC）
+    - cron: "47 20 1 * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  labels:
+    uses: satou-aaaaa/shared-workflows/.github/workflows/labels.yml@main

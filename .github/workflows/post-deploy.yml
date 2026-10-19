@@ -1,0 +1,24 @@
+name: Post-deploy check
+
+# 公開（GitHub Pages）が終わるたびに、公開されたページをブラウザで開いて壊れていないかを見る（Claude は使わない）。
+# 404 や開いたときの JavaScript のエラーがあれば、最後に正常だった版（タグ last-good）の中身に戻す PR を作ってマージし、公開し直す。
+# 失敗すると ci-failure-issue.yml が Issue を立て、担当エージェントが原因を直して出し直す。中身は共通部品 satou-aaaaa/shared-workflows。
+on:
+  workflow_run:
+    workflows: ["pages-build-deployment"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  pages: write
+
+jobs:
+  check:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
+    uses: satou-aaaaa/shared-workflows/.github/workflows/post-deploy.yml@main
+    with:
+      # トップページのほかに開いてみるページ（.html だけ見る。空白区切り）
+      paths: ''
+      pages_build: true
