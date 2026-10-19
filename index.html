@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#2563eb">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<!-- 外に出さない保証：通信できる先は自分のサイトと GitHub の API（カードの保存）だけ。声・会話・AI は端末の中で動く -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' file:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://api.github.com; media-src 'self' blob:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'">
 <title>カンバン</title>
 <!--
-  Claude が使えないときに使うカンバン（PWA）。外部ライブラリなし（声の命令は voice.js、QR は qrcode.js を同じ場所に置く）。
+  Claude が使えないときに使うカンバン（PWA）。外部ライブラリなし（声の命令は voice.js、会話モードは talk.js、QR は qrcode.js を同じ場所に置く）。
   データの置き場所は3通り（どれもこのページには載せない）:
     GitHub   … 非公開リポジトリの local-board/cards.json を、端末に貼った鍵（fine-grained トークン）で読み書きする。PC・スマホ両方
     フォルダ … PC のフォルダ（データのリポジトリを取ってきたもの）を File System Access API で読み書きする。Chrome・Edge の PC だけ
@@ -75,6 +77,24 @@ dialog .help{font-size:12px;color:var(--muted)}
 #micBtn.on{background:var(--danger);border-color:var(--danger);color:#fff}
 #voiceHint{font-size:12px;color:var(--muted);flex-basis:100%}
 #said{font-size:12px;color:var(--accent);margin-top:2px}
+#talkDlg{width:min(520px,96vw)}
+#talkDlg .who{display:flex;align-items:center;gap:12px}
+#talkDlg .ava{width:88px;height:88px;flex:none}
+#talkDlg.speaking .mouth{animation:talkm .25s infinite alternate}
+@keyframes talkm{to{d:path("M50 80 Q60 96 70 80")}}
+@media (prefers-reduced-motion:reduce){#talkDlg.speaking .mouth{animation:none}}
+#talkName{font-size:18px;font-weight:700;margin:0}
+#talkState{font-size:12px;color:var(--muted)}
+#talkLog{max-height:40vh;overflow:auto;margin:12px 0;display:flex;flex-direction:column;gap:6px}
+#talkLog .l{padding:6px 10px;border-radius:10px;max-width:90%;white-space:pre-wrap;word-break:break-word}
+#talkLog .ai{background:var(--chip);align-self:flex-start}
+#talkLog .you{background:var(--accent);color:#fff;align-self:flex-end}
+#talkLog .sys{color:var(--muted);font-size:12px;align-self:center}
+#talkForm{display:flex;gap:6px}#talkForm input{flex:1}
+#talkSetForm .icons{display:flex;gap:8px}#talkSetForm .icons label{display:flex;flex-direction:column;align-items:center;gap:2px;margin:0}
+#talkSetForm .icons .ava{width:48px;height:48px}
+#talkSetForm .icons input{width:auto;min-height:0}
+#talkSetForm .chk{display:flex;align-items:center;gap:6px;color:var(--text);font-size:14px}#talkSetForm .chk input{width:auto;min-height:0}
 a{color:var(--accent)}
 /* スマホ: 列はタブで1つずつ */
 @media (max-width:760px){
@@ -100,6 +120,7 @@ a{color:var(--accent)}
   <div class="bar">
     <h1>カンバン</h1>
     <span class="spacer"></span>
+    <button id="talkBtn" hidden title="キャラと話して片づける（T）" aria-label="会話モード">💬</button>
     <button id="micBtn" hidden title="話して操作（例：〇〇を追加・〇〇を済み・今やるを読んで）" aria-label="話して操作">🎤</button>
     <button id="addBtn" class="primary" hidden>＋ 足す</button>
     <button id="reloadBtn" hidden title="最新を読み直す">↻</button>
@@ -199,6 +220,32 @@ a{color:var(--accent)}
   </form>
 </dialog>
 
+<dialog id="talkDlg" aria-labelledby="talkName">
+  <div class="who"><span id="talkAva"></span><div><p id="talkName"></p><div id="talkState"></div><div id="talkMode" class="help"></div></div></div>
+  <div id="talkLog" aria-live="polite"></div>
+  <form id="talkForm"><input id="talkIn" autocomplete="off" placeholder="打って話す（例：済み・あとで・保留・次）"><button class="primary">送る</button></form>
+  <div class="actions" style="justify-content:space-between;margin-top:12px"><button type="button" id="talkSetBtn">⚙ キャラの設定</button><button type="button" id="talkEnd">終わる</button></div>
+</dialog>
+
+<dialog id="talkSet">
+  <form method="dialog" id="talkSetForm">
+    <h3 style="margin-top:0">キャラの設定</h3>
+    <label>名前</label><input name="name" maxlength="20" required>
+    <label>性格と話し方（AI への指示）</label><textarea name="persona" maxlength="600"></textarea>
+    <label>アイコン</label>
+    <div class="icons" id="talkIcons"></div>
+    <label>色</label><input name="color" type="color">
+    <label>声（この端末の中の声だけ。ネット経由の声は出しません）</label><select name="voice"></select>
+    <label class="chk"><input type="checkbox" name="bargeIn"> 話の途中で割り込める（話している間だけマイクの音の大きさを端末の中で見る）</label>
+    <label class="chk"><input type="checkbox" name="ai"> 端末の中の AI（Chrome の内蔵 AI）があれば使う</label>
+    <p class="help">声も会話も端末の外に出しません。AI が無い端末では、カードを1枚ずつ読み上げて「済み・あとで・保留・次」で片づけます。</p>
+    <div class="actions" style="justify-content:space-between;margin-top:12px">
+      <button type="button" id="talkReset">元に戻す</button>
+      <span><button value="cancel" formnovalidate>やめる</button> <button value="ok" class="primary">保存</button></span>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="qrDlg">
   <h3 style="margin-top:0">スマホでも開く</h3>
   <p class="help">スマホのカメラでこの QR を読んで開くと、つなぎ先（持ち主・リポジトリ）が入った状態で始まります。鍵は入っていないので、スマホでも「鍵を作るページを開く」から1つ作って貼ってください。</p>
@@ -207,6 +254,7 @@ a{color:var(--accent)}
 </dialog>
 
 <script src="voice.js"></script>
+<script src="talk.js"></script>
 <script>
 'use strict';
 const LANES = [['now','今やる'],['next','次にやる'],['later','時間があるとき'],['hold','保留'],['agent','エージェントが進行中'],['done','済み']];
@@ -334,7 +382,7 @@ async function reload(){
 function showBoard(){
   $('#intro').hidden = true; $('#board').hidden = false;
   $('#addBtn').hidden = false; $('#reloadBtn').hidden = false;
-  $('[data-m=download]').disabled = false; $('[data-m=cmd]').disabled = false;
+  $('[data-m=download]').disabled = false; $('[data-m=cmd]').disabled = false; $('#talkBtn').hidden = !window.Talk;
   // 🎤は、声を端末の中だけで聞き取れる音声認識（processLocally）があるときだけ出す。サーバーへ送る音声認識は使わない。
   // 使えるかどうか（available）は押したときに確かめる（開いたときには音声の部品に触らない）
   $('#micBtn').hidden = !window.Voice?.supported; $('#voiceHint').hidden = !!window.Voice?.supported;
@@ -650,6 +698,7 @@ function readEntry(){
   if (h.get('cmd')) e.cmd = h.get('cmd');
   if (h.has('new')) e.form = true;
   if (h.has('voice')) e.voice = true;
+  if (h.has('talk')) e.talk = true;
   if (!e.add && okLane(h.get('lane'))) e.lane = h.get('lane');
   if (location.search || [...h.keys()].some(k => k !== 'repo' && k !== 'branch')) history.replaceState(null, '', location.pathname + (h.has('repo') ? '#repo=' + encodeURIComponent(h.get('repo')) + '&branch=' + encodeURIComponent(h.get('branch') || 'main') : ''));
   return Object.keys(e).length ? e : null;
@@ -666,7 +715,65 @@ function runEntry(){
   if (e.cmd) runCommand(e.cmd);
   if (e.form) $('#addBtn').click();
   if (e.voice) listenOnce();
+  if (e.talk) openTalk();
 }
+
+// ================= 会話モード（talk.js。すべて端末の中） =================
+const talkSettings = () => ({ ...(window.Talk?.DEFAULTS || {}), ...(ls.get('talk') || {}) });
+let talk = null;
+function talkLine(who, text){
+  const d = document.createElement('div'); d.className = 'l ' + who; d.textContent = text;
+  const box = $('#talkLog'); box.appendChild(d); while (box.children.length > 30) box.firstChild.remove(); box.scrollTop = box.scrollHeight;
+}
+const TALK_STATE = { starting: '準備しています…', listening: '聞いてるよ（話してね）', thinking: '考え中…', speaking: '話しています（割り込めます）', typing: '下の欄に打って話してね', off: '' };
+function drawTalkHead(){
+  const t = talkSettings();
+  $('#talkAva').innerHTML = Talk.avatarSvg(t.icon, t.color); $('#talkName').textContent = t.name;
+}
+function openTalk(){
+  if (!window.Talk || !store) return;
+  if (talk?.on) { if (!$('#talkDlg').open) $('#talkDlg').showModal(); return; }
+  drawTalkHead(); $('#talkLog').innerHTML = ''; $('#talkMode').textContent = '';
+  talk = Talk.create({
+    settings: talkSettings(),
+    lanes: LANE_LABEL, laneWords: LANE_WORDS,
+    // AI に渡すのは題・列・期限だけ（補足・履歴・リンクは渡さない）
+    board: () => live().filter(c => c.lane !== 'done').sort((a, b) => LANES.findIndex(([k]) => k === a.lane) - LANES.findIndex(([k]) => k === b.lane) || (a.order || 0) - (b.order || 0)).map(c => ({ title: c.title, lane: c.lane, due: c.due || '' })),
+    queue: () => ['now', 'next'].flatMap(l => laneCards(l)[0]),
+    run: t => runCommand(t),
+    act: cmd => apply(cmd, false),
+    pending: () => !!pending,
+    onLine: talkLine,
+    onState: st => { $('#talkState').textContent = TALK_STATE[st] ?? ''; $('#talkDlg').classList.toggle('speaking', st === 'speaking'); if (st === 'off' && $('#talkDlg').open) $('#talkDlg').close(); },
+    onMode: m => { $('#talkMode').textContent = m === 'ai' ? '頭：端末の中の AI（Chrome の内蔵 AI）' : '頭：AI なし（1枚ずつ読み上げ）'; },
+  });
+  $('#talkDlg').showModal();
+  talk.start();
+}
+$('#talkBtn').onclick = openTalk;
+$('#talkEnd').onclick = () => { talk?.stop(); if ($('#talkDlg').open) $('#talkDlg').close(); };
+$('#talkDlg').addEventListener('cancel', () => talk?.stop());
+$('#talkForm').onsubmit = e => { e.preventDefault(); const t = $('#talkIn').value; $('#talkIn').value = ''; talk?.hear(t); };
+function openTalkSet(){
+  const f = $('#talkSetForm'), t = talkSettings();
+  f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.ai.checked = t.ai !== 'off';
+  $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{maru:'まる',kaku:'しかく',shizuku:'しずく'}[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
+  const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
+  f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
+  $('#talkSet').showModal();
+}
+$('#talkSetBtn').onclick = openTalkSet;
+$('#talkSetForm').onsubmit = e => {
+  if (e.submitter?.value !== 'ok') return;
+  const f = e.target;
+  const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, bargeIn: f.bargeIn.checked, ai: f.ai.checked ? 'auto' : 'off' };
+  ls.set('talk', t);
+  try { t.voice ? localStorage.setItem('voice.name', t.voice) : localStorage.removeItem('voice.name'); } catch {}
+  if (talk) talk.settings = t;
+  drawTalkHead();
+};
+$('#talkReset').onclick = () => { ls.set('talk', null); try { localStorage.removeItem('voice.name'); } catch {} $('#talkSet').close(); drawTalkHead(); openTalkSet(); };
+
 
 function openEdit(c){
   editing = c; const f = $('#editForm');
@@ -750,6 +857,7 @@ document.addEventListener('keydown', e => {
   if (typing || e.ctrlKey || e.metaKey || e.altKey || !store) return;
   if (e.key === 'n' || e.key === 'N') { e.preventDefault(); $('#addBtn').click(); }
   else if ((e.key === 'm' || e.key === 'M') && window.Voice?.supported) { e.preventDefault(); listenOnce(); }
+  else if (e.key === 't' || e.key === 'T') { e.preventDefault(); openTalk(); }
 });
 
 const actions = { github: openGithub, phone: showPhoneQr, cmd: openCmd, folder: openFolder, file: () => $('#fileInput').click(), download,
