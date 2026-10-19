@@ -2,9 +2,9 @@
 
 データを外に置かないカンバンの PWA（GitHub Pages で公開）。使い方・鍵の作り方・安全のための決まりは README.md。
 
-- アプリの本体は `index.html` 1枚。声と命令欄の文の読み取りは `voice.js`（ほかのアプリからも使う。文型を変えたら qa/run.mjs の「声の文型」も直す）。会話モードは `talk.js`。声・会話・AI は端末の中だけで動かし、外へ通信する部品を足さない（`index.html` の CSP の connect-src を広げない。QA が見る）。QR 表示だけ qrcode.js＝qrcode-generator 1.4.4、MIT を同梱。`sw.js`・`manifest.webmanifest`・アイコンは手書き。
+- アプリの本体は `index.html` 1枚。声と命令欄の文の読み取りは `voice.js`（ほかのアプリからも使う。文型を変えたら qa/run.mjs の「声の文型」も直す）。会話モードは `talk.js`。スマホ向けの端末の中の AI は `localai.js`（同梱の部品は `vendor/`、版を上げる手順は `vendor/README.md`）。声・会話・AI は端末の中だけで動かし、外へ通信する部品を足さない（`index.html` の CSP の connect-src は、自分・GitHub の API・モデルの置き場だけ。広げない。QA が見る）。モデルはボタンを押したときだけ取る。QR 表示だけ qrcode.js＝qrcode-generator 1.4.4、MIT を同梱。`sw.js`・`manifest.webmanifest`・アイコンは手書き。
 - **データ・鍵（トークン）・データのリポジトリの名前を、このリポジトリに入れない**（公開リポジトリ）。検査の見本データ（`qa/cards.sample.json`）も作り話だけにする。
-- `index.html`・`voice.js`・`talk.js` を直したら、データ側のリポジトリの `local-board/` の同じ名前のファイル（`index.html` は `kanban.html`）も同じ中身にする。
+- `index.html`・`voice.js`・`talk.js`・`localai.js`・`vendor/` を直したら、データ側のリポジトリの `local-board/` の同じ名前のファイル（`index.html` は `kanban.html`）も同じ中身にする。
 - カードの形を変えるときは、データ側の `local-board/cards.schema.json` と `tools/local_board.py` も合わせる。
 
 ## push する前の確認

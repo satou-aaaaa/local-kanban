@@ -1,8 +1,8 @@
 // 会話モード：キャラと声でやりとりしながらカードを片づける。すべて端末の中で動く（声も会話も外に出さない）。外部ライブラリなし。
-//   耳  … voice.js の Voice.listen()（端末の中だけで聞き取る音声認識）。使えない端末は文字を打って話す
-//   頭  … Chrome の内蔵 AI（Prompt API の LanguageModel、Gemini Nano を端末の中で動かす）。無ければ AI なしの「1枚ずつ読み上げ」
+//   耳  … voice.js の Voice.listen()（端末の中だけで聞き取る音声認識。無い端末は localai.js で入れた Whisper）。どちらも無ければ文字を打って話す
+//   頭  … Chrome の内蔵 AI（Prompt API の LanguageModel、Gemini Nano）。無ければ localai.js で入れた WebLLM。どちらも無ければ AI なしの「1枚ずつ読み上げ」
 //   口  … voice.js の Voice.speak()（端末の中の声だけ）。文ごとに区切ってすぐ話し始める
-//   割り込み … 話している間だけマイクの音の大きさを見て（自作の簡単な VAD）、声が続いたら読み上げを止めて聞き始める
+//   割り込み … 話している間だけマイクを見て、声が続いたら読み上げを止めて聞き始める（localai.js の Silero VAD。無ければ音の大きさを見る自作の簡単な VAD）
 // アプリ側（index.html）から渡すもの:
 //   board()        … [{title, lane, due}] いまのカード（AI に渡すのは題・列・期限だけ。補足・履歴・リンクは渡さない）
 //   queue()        … AI なしのときに順に聞くカード（今やる → 次にやる）
@@ -20,7 +20,7 @@
     color: '#f59e0b',
     voice: '',
     bargeIn: true,
-    ai: 'auto', // auto = 内蔵 AI があれば使う / off = 使わない
+    ai: 'auto', // auto = 端末の中の AI（内蔵 AI か、入れた WebLLM）があれば使う / off = 使わない
   };
   const END = /^(終わり|おわり|おしまい|終わる|またね|バイバイ|ばいばい|ストップ|やめる|もういい)$/;
 
@@ -106,7 +106,7 @@
 
   function create(host) {
     let s = { ...DEFAULTS, ...(host.settings || {}) };
-    let on = false, speaking = false, stopVad = () => {}, stream = null, session = null, mode = 'script', idx = 0, cur = null;
+    let on = false, speaking = false, stopVad = () => {}, stream = null, session = null, mode = 'script', brain = '', idx = 0, cur = null;
     const log = (who, text) => host.onLine?.(who, text);
     const state = (st) => host.onState?.(st);
 
@@ -115,7 +115,8 @@
       log('ai', text);
       speaking = true; state('speaking');
       let interrupted = false;
-      if (s.bargeIn && stream) stopVad = vad(stream, () => { interrupted = true; g.speechSynthesis?.cancel(); });
+      const cut = () => { interrupted = true; g.speechSynthesis?.cancel(); };
+      if (s.bargeIn && stream) stopVad = g.LocalAI?.bargeIn(stream, cut) || vad(stream, cut); // Silero VAD が入っていればそれ、無ければ音の大きさ
       for (const part of sentences(text)) {
         if (!on || interrupted) break;
         const ok = await g.Voice.speak(part);
@@ -194,18 +195,28 @@
       if (s.bargeIn && g.navigator?.mediaDevices?.getUserMedia) {
         try { stream = await g.navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); } catch { stream = null; }
       }
-      mode = 'script';
+      mode = 'script'; brain = '';
       if (s.ai !== 'off') {
         const st = await aiStatus();
         if (st === 'available' || st === 'downloadable' || st === 'downloading') {
           try {
             if (st !== 'available') log('sys', '端末の中の AI を準備しています（初回だけ、ブラウザが部品を入れます）…');
             session = await LM().create({ ...LANG, initialPrompts: [{ role: 'system', content: systemPrompt(s, host.lanes) }] });
-            mode = 'ai';
+            mode = 'ai'; brain = 'builtin';
           } catch { session = null; }
         }
+        // 内蔵 AI が無い端末（スマホなど）は、「AI の部品を入れる」で入れた WebLLM を使う
+        if (mode !== 'ai' && g.LocalAI?.llmReady()) {
+          try {
+            log('sys', '端末の中の AI を読み込んでいます（数秒〜数十秒）…');
+            session = await g.LocalAI.session(systemPrompt(s, host.lanes));
+            if (session) { mode = 'ai'; brain = 'webllm'; }
+          } catch { session = null; log('sys', '端末の中の AI を読み込めなかったので、AI なしで進めます。'); }
+        }
       }
-      host.onMode?.(mode);
+      if (!on) return;
+      g.LocalAI?.prepareEar(); // Whisper・Silero を入れてあれば先に読み込んでおく
+      host.onMode?.(mode, brain);
       const q = host.queue();
       const hi = `やあ、${s.name}だよ。今日どれからやる？`;
       const first = mode === 'ai'
@@ -223,7 +234,7 @@
         try { text = (await g.Voice.listen()).text; }
         catch (e) {
           if (!on) return;
-          if (/端末の中だけで聞き取れません|部品/.test(e.message)) { log('sys', e.message + ' 文字を打って話してね。'); state('typing'); return; }
+          if (/端末の中だけで聞き取れません|部品|マイク/.test(e.message)) { log('sys', e.message + ' 文字を打って話してね。'); state('typing'); return; }
           continue; // 聞き取れなかった → もう一度
         }
         if (!on) return;
