@@ -335,9 +335,9 @@ function showBoard(){
   $('#intro').hidden = true; $('#board').hidden = false;
   $('#addBtn').hidden = false; $('#reloadBtn').hidden = false;
   $('[data-m=download]').disabled = false; $('[data-m=cmd]').disabled = false;
-  // 🎤は、声を端末の中だけで聞き取れるときだけ出す（サーバーへ送る音声認識は使わない）
-  $('#micBtn').hidden = true; $('#voiceHint').hidden = false;
-  if (window.Voice?.supported) Voice.localStatus().then(st => { const ok = st !== 'unavailable'; $('#micBtn').hidden = !ok; $('#voiceHint').hidden = ok; });
+  // 🎤は、声を端末の中だけで聞き取れる音声認識（processLocally）があるときだけ出す。サーバーへ送る音声認識は使わない。
+  // 使えるかどうか（available）は押したときに確かめる（開いたときには音声の部品に触らない）
+  $('#micBtn').hidden = !window.Voice?.supported; $('#voiceHint').hidden = !!window.Voice?.supported;
   render();
 }
 
@@ -623,7 +623,10 @@ async function listenOnce(){
     heard = true;
     $('#said').hidden = false; $('#said').textContent = '「' + text + '」';
     runCommand(text, true);
-  } catch (e) { setStatus(e.message, 'warn'); }
+  } catch (e) {
+    setStatus(e.message, 'warn');
+    if (/端末の中だけで聞き取れません/.test(e.message)) { $('#micBtn').hidden = true; $('#voiceHint').hidden = false; }
+  }
   finally { listening = false; $('#micBtn').classList.remove('on'); }
   // 聞き返したときは、読み上げが終わってから続けて聞く
   if (heard && pending) setTimeout(listenOnce, 2500);

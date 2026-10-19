@@ -138,7 +138,6 @@
       } catch { ok(false); }
     });
   }
-  if (g.speechSynthesis) try { g.speechSynthesis.getVoices(); } catch { /* 声の一覧を先に読み込ませる */ }
 
   g.Voice = { parse, match, laneOf, listen, localStatus, install, speak, localVoice, supported: canLocal, norm };
 })(typeof window !== 'undefined' ? window : globalThis);
