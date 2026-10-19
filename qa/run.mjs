@@ -11,6 +11,8 @@
 //     - URL（#add=）・共有メニュー（?title=&url=）からカードを足せない
 //     - 端末の中で聞き取れないブラウザ（Edge・Firefox・サーバー版だけの音声認識）で🎤が出る・聞き取りを始める・エラーになる
 //     - manifest の shortcuts・share_target が無いか、scope の外を指す
+//     - 会話モード（AI なし・端末の中の AI・文字で話す）が動かない、消す前に聞き返さない、AI に補足を渡す、会話中に GitHub 以外へ通信する
+//     - CSP の connect-src が自分のサイトと GitHub の API 以外を許している
 // 使い方: node qa/run.mjs [--out qa-report]
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
@@ -41,6 +43,12 @@ const shell = JSON.parse((sw.match(/const SHELL = (\[[^\]]*\])/) || [])[1]?.repl
 check(shell.length > 0, 'sw.js の SHELL を読めた');
 for (const p of shell) check(p === './' || existsSync(resolve(root, p)), `SHELL のファイル ${p} がある`);
 check(shell.includes('./voice.js'), 'SHELL に voice.js がある（オフラインでも声の命令が動く）');
+check(shell.includes('./talk.js'), 'SHELL に talk.js がある（オフラインでも会話モードが動く）');
+const html = readFileSync(resolve(root, 'index.html'), 'utf8');
+const csp = (html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/) || [])[1] || '';
+const connect = (csp.match(/connect-src ([^;]+)/) || [])[1]?.trim().split(/\s+/) || [];
+check(connect.length > 0 && connect.every((x) => x === "'self'" || x === 'https://api.github.com'), `CSP の connect-src は自分のサイトと GitHub の API だけ（${connect.join(' ') || 'なし'}）`);
+check(/default-src 'self'/.test(csp), 'CSP の default-src は自分のサイトだけ');
 const sc = manifest.shortcuts || [];
 check(sc.length >= 3, `manifest に shortcuts が 3 つ以上ある（${sc.length}）`);
 for (const x of sc) check(!!x.name && /^\.\/(#|$)/.test(x.url || '') && (x.icons || []).every((i) => existsSync(resolve(root, i.src))), `shortcut「${x.name}」の url が scope の中で、アイコンがある`);
@@ -247,6 +255,96 @@ try {
   check(await mic.evaluate(() => { const g = speechSynthesis.getVoices; speechSynthesis.getVoices = () => [{ name: 'ネットの声', lang: 'ja-JP', localService: false }]; const n = Voice.localVoice(); speechSynthesis.getVoices = g; return n === null; }), '🎤 端末の中の声が無ければ読み上げない');
   check(await mic.evaluate(() => window.__local), '🎤 端末の中だけで聞き取る設定（processLocally = true）で聞いた');
   await mic.close();
+
+  // ---------- 会話モード（talk.js）：耳・頭・口をにせものに差し替えて、流れと「外に出さない」を確かめる ----------
+  const talkPage = async ({ heard = [], replies = null, sr = true }, label) => {
+    const pg = await context.newPage();
+    pg.on('pageerror', (e) => errors.push(`pageerror(${label}): ${e.message}`));
+    const outside = [];
+    pg.on('request', (r) => { const h = new URL(r.url()).host; if (!/^127\.0\.0\.1(:\d+)?$/.test(h) && h !== 'api.github.com' && !r.url().startsWith('data:')) outside.push(r.url()); });
+    await pg.addInitScript(({ heard, replies, sr }) => {
+      window.__heard = heard; window.__spoken = []; window.__prompts = []; window.__system = '';
+      if (sr) {
+        class FakeSR {
+          static available() { return Promise.resolve('available'); }
+          start() { const t = window.__heard.shift(); setTimeout(() => { if (t) this.onresult({ results: [[{ transcript: t }]] }); this.onend(); }, t ? 80 : 400); }
+        }
+        window.webkitSpeechRecognition = FakeSR;
+      } else delete window.webkitSpeechRecognition;
+      delete window.SpeechRecognition;
+      window.speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }];
+      window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => u.onend && u.onend(), 5); };
+      window.speechSynthesis.cancel = () => {};
+      navigator.mediaDevices.getUserMedia = () => Promise.reject(new Error('検査ではマイクを使わない'));
+      if (replies) {
+        window.LanguageModel = {
+          availability: () => Promise.resolve('available'),
+          create: (o) => { window.__system = JSON.stringify(o.initialPrompts); return Promise.resolve({ prompt: (t) => { window.__prompts.push(t); return Promise.resolve(JSON.stringify(replies.shift() || { say: 'うん', action: null })); }, destroy() {} }); },
+        };
+      } else delete window.LanguageModel;
+    }, { heard, replies, sr });
+    await pg.goto(base);
+    await pg.waitForSelector('#board .card', { timeout: 10000 });
+    return { pg, outside };
+  };
+  const waitTalkEnd = async (pg) => { const t0 = Date.now(); while (Date.now() - t0 < 15000 && (await pg.evaluate(() => document.querySelector('#talkDlg').open))) await pg.waitForTimeout(100); };
+
+  // A. AI なし：1枚ずつ読み上げ、「済み」「あとで」で動かし、「終わり」で閉じる
+  {
+    const { pg, outside } = await talkPage({ heard: ['済み', 'あとで', '終わり'] }, '会話 AI なし');
+    await pg.click('#talkBtn');
+    await waitTalkEnd(pg);
+    const spoken = await pg.evaluate(() => window.__spoken.join(''));
+    check(/見本のカード（今やる）/.test(spoken), '会話（AI なし）：最初に「今やる」の1枚目を読み上げた');
+    check(/AI なし/.test(await pg.textContent('#talkMode')), '会話（AI なし）：内蔵 AI が無い端末では AI なしで動く');
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's1')?.lane === 'done' && cs.find((c) => c.doc_id === 's2')?.lane === 'later', '会話（AI なし）の「済み」「あとで」');
+    check(!(await pg.evaluate(() => document.querySelector('#talkDlg').open)), '会話（AI なし）：「終わり」で閉じた');
+    check(outside.length === 0, `会話（AI なし）：自分のサイトと GitHub 以外へ通信していない${outside.length ? '（' + outside.join(', ') + '）' : ''}`);
+    await pg.close();
+  }
+
+  // B. 端末の中の AI（Prompt API）：JSON の命令でカードを動かす。消す前は聞き返す。AI に補足を渡さない
+  {
+    const { pg, outside } = await talkPage({
+      heard: ['毎週のやつ保留にしといて', 'エージェントのやつ消して', 'はい', '終わり'],
+      replies: [
+        { say: 'オッケー、保留にしたよ', action: { type: 'move', query: '見本のカード（次にやる・毎週）', lane: 'hold' } },
+        { say: '消すね', action: { type: 'delete', query: '見本のカード（エージェント）' } },
+      ],
+    }, '会話 AI');
+    await pg.click('#talkBtn');
+    await waitTalkEnd(pg);
+    check(/端末の中の AI/.test(await pg.textContent('#talkMode')), '会話（AI）：内蔵 AI があれば使う');
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold' && cs.find((c) => c.doc_id === 's4')?.deleted === true, '会話（AI）の「保留」と「消す（はい）」');
+    const spoken = await pg.evaluate(() => window.__spoken.join(''));
+    check(/消しますか/.test(spoken), '会話（AI）：AI が消すと言っても、すぐ消さずに聞き返した');
+    const prompts = await pg.evaluate(() => window.__prompts.join('\n'));
+    check(prompts.includes('見本のカード（次にやる・毎週）') && !prompts.includes('見本の補足'), '会話（AI）：AI に渡すのは題・列・期限だけ（補足は渡さない）');
+    check(!prompts.includes('はい'), '会話（AI）：消す確認への「はい」は AI ではなくアプリが受け取る');
+    const sys = await pg.evaluate(() => window.__system);
+    check(/ポチ/.test(sys) && /タメ口/.test(sys), '会話（AI）：キャラの名前と性格を AI への指示に入れた');
+    check(outside.length === 0, `会話（AI）：自分のサイトと GitHub 以外へ通信していない${outside.length ? '（' + outside.join(', ') + '）' : ''}`);
+    await pg.close();
+  }
+
+  // C. 耳が無い端末：文字を打って話す。キャラの設定を変えられる
+  {
+    const { pg, outside } = await talkPage({ sr: false }, '会話 文字');
+    await pg.click('#talkBtn');
+    await pg.waitForFunction(() => /打って/.test(document.querySelector('#talkState').textContent), null, { timeout: 10000 });
+    check(true, '会話（耳なし）：打って話す案内が出た');
+    await pg.fill('#talkIn', '済み'); await pg.press('#talkIn', 'Enter');
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's1')?.lane === 'done', '会話（耳なし）で打った「済み」');
+    await pg.click('#talkSetBtn');
+    await pg.fill('#talkSetForm [name=name]', 'テスト名');
+    await pg.click('#talkSetForm [name=icon][value=kaku]');
+    await pg.click('#talkSetForm button[value=ok]');
+    check((await pg.textContent('#talkName')) === 'テスト名', 'キャラの設定：名前を変えると会話の画面に出る');
+    check(await pg.evaluate(() => JSON.parse(localStorage.getItem('lk.talk')).icon === 'kaku'), 'キャラの設定：アイコンの選択を端末に保存した');
+    await pg.click('#talkEnd');
+    check(outside.length === 0, '会話（耳なし）：自分のサイトと GitHub 以外へ通信していない');
+    await pg.close();
+  }
 
   // service worker とオフライン
   const swOk = await page.evaluate(() => navigator.serviceWorker.ready.then((r) => !!r.active)).catch(() => false);

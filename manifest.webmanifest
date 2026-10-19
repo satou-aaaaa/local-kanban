@@ -65,6 +65,19 @@
           "type": "image/png"
         }
       ]
+    },
+    {
+      "name": "💬 話して片づける",
+      "short_name": "💬 会話",
+      "description": "キャラと話しながらカードを片づける（端末の中だけ）",
+      "url": "./#talk",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     }
   ],
   "share_target": {
