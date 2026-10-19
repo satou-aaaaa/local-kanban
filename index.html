@@ -86,6 +86,10 @@ a{color:var(--accent)}
   #addForm input,#addForm select{flex:1 1 45%}
   .row{flex-direction:column;gap:0}
 }
+@media (max-width:520px){
+  button,select,input,#menu summary,#tabs button,.actions button,.actions select{min-height:44px}
+  #addBtn{position:fixed;right:16px;bottom:max(16px,env(safe-area-inset-bottom));z-index:6;border-radius:28px;padding:10px 18px;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+}
 </style>
 </head>
 <body>
@@ -415,6 +419,9 @@ function cardEl(c){
     `<span class="chip ${c.owner==='you'?'you':''}">${c.owner==='you'?'自分':'エージェント'}</span>`,
     c.due ? `<span class="chip ${late?'late':''}">期限 ${esc(c.due)}</span>` : '',
     c.priority ? `<span class="chip ${c.priority==='high'?'high':''}">優先 ${PRIO[c.priority]||esc(c.priority)}</span>` : '',
+    c.category ? `<span class="chip">プロジェクト ${esc(c.category)}</span>` : '',
+    c.type === 'mail' ? '<span class="chip">メール</span>' : '',
+    c.repeat ? `<span class="chip">繰り返し ${c.repeat==='week'?'毎週':c.repeat==='month'?'毎月':esc(c.repeat)}</span>` : '',
     /^https?:\/\//.test(c.link||'') ? `<a class="chip" href="${esc(c.link)}" target="_blank" rel="noopener">リンク</a>` : '',
   ].join('');
   let html = `<div class="t">${esc(c.title)}</div><div class="meta">${chips}</div>`;
@@ -439,11 +446,32 @@ function cardEl(c){
 // ================= 操作 =================
 function nextOrder(lane, except){ return Math.max(0, ...cards.filter(x => x.lane === lane && x !== except).map(x => x.order || 0)) + 1; }
 
-function moveTo(c, lane){
-  if (c.lane === lane) return;
-  const from = LANE_LABEL[c.lane] || c.lane;
+// 列を移す。moves に記録し（claude.ai のボードの記録画面と同じ形）、繰り返しのカードは済みにしたとき次の回を足す
+function setLane(c, lane){
+  const from = c.lane;
+  if (from === lane) return false;
   c.lane = lane; c.order = nextOrder(lane, c);
-  if (lane === 'done') c.done_at = now(); else delete c.done_at;
+  c.moves = (c.moves || []).concat({at: now(), from, to: lane}).slice(-50);
+  if (lane === 'done') { c.done_at = now(); repeatNext(c); } else delete c.done_at;
+  return true;
+}
+function addDue(due, repeat){
+  const d = due ? new Date(due + 'T00:00:00') : new Date();
+  if (repeat === 'week') d.setDate(d.getDate() + 7); else if (repeat === 'month') d.setMonth(d.getMonth() + 1); else return due;
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function repeatNext(c){
+  if (!['week','month'].includes(c.repeat) || c.repeated_to) return;
+  const t = now(), n = { ...c };
+  for (const k of ['doc_id','no','done_at','history','moves','answer','answered_at','answer_status','progress','started_at','repeated_to','local_edit']) delete n[k];
+  Object.assign(n, { doc_id: 'local-' + Date.now().toString(36) + 'r', lane: 'next', created: t, updated: t, repeated_from: c.doc_id, order: nextOrder('next') });
+  if (c.due) n.due = addDue(c.due, c.repeat);
+  touch(n, '繰り返しの次の回'); c.repeated_to = n.doc_id; cards.push(n);
+}
+
+function moveTo(c, lane){
+  const from = LANE_LABEL[c.lane] || c.lane;
+  if (!setLane(c, lane)) return;
   touch(c, `${from} → ${LANE_LABEL[lane]}`);
   persist(`「${c.title}」を${LANE_LABEL[lane]}へ`);
 }
@@ -462,6 +490,7 @@ function addCard(f){
     created: t, updated: t, by: 'you-local', order: nextOrder(f.lane.value) };
   if (f.due.value) c.due = f.due.value;
   if (c.lane === 'done') c.done_at = t;
+  c.moves = [{at: t, from: null, to: c.lane}];
   touch(c, 'ローカル版で足した');
   cards.push(c); f.reset(); f.lane.value = curLane; f.style.display = 'none';
   persist(`「${c.title}」を足した`);
@@ -529,7 +558,7 @@ $('#editForm').onsubmit = e => {
   if (e.submitter?.value !== 'ok' || !editing) return;
   const c = editing, oldLane = c.lane;
   for (const k of ['title','owner','due','priority','link','note']) { const v = f[k].value.trim(); if (v) c[k] = v; else delete c[k]; }
-  if (f.lane.value !== oldLane) { c.lane = f.lane.value; c.order = nextOrder(c.lane, c); if (c.lane === 'done') c.done_at = now(); else delete c.done_at; }
+  if (f.lane.value !== oldLane) setLane(c, f.lane.value);
   touch(c, f.comment.value.trim() || '内容を直した');
   persist(`「${c.title}」を直した`);
 };
