@@ -12,7 +12,9 @@
 //     - 端末の中で聞き取れないブラウザ（Edge・Firefox・サーバー版だけの音声認識）で🎤が出る・聞き取りを始める・エラーになる
 //     - manifest の shortcuts・share_target が無いか、scope の外を指す
 //     - 会話モード（AI なし・端末の中の AI・文字で話す）が動かない、消す前に聞き返さない、AI に補足を渡す、会話中に GitHub 以外へ通信する
-//     - CSP の connect-src が自分のサイトと GitHub の API 以外を許している
+//     - CSP の connect-src が自分のサイト・GitHub の API・モデルの置き場（Hugging Face・GitHub raw）以外を許している
+//     - 端末の中の AI（localai.js）：ボタンを押す前にモデルを取りに行く、モデルの置き場以外・GET 以外の通信をする、
+//       入れた WebLLM・Whisper・Silero で会話できない、会話中に外へ通信する、消せない、同梱の部品が読めない・LICENSE が無い
 // 使い方: node qa/run.mjs [--out qa-report]
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
@@ -44,10 +46,23 @@ check(shell.length > 0, 'sw.js の SHELL を読めた');
 for (const p of shell) check(p === './' || existsSync(resolve(root, p)), `SHELL のファイル ${p} がある`);
 check(shell.includes('./voice.js'), 'SHELL に voice.js がある（オフラインでも声の命令が動く）');
 check(shell.includes('./talk.js'), 'SHELL に talk.js がある（オフラインでも会話モードが動く）');
+check(shell.includes('./localai.js'), 'SHELL に localai.js がある（入れた AI がオフラインでも動く）');
+check(!shell.some((p) => p.includes('vendor/')), 'SHELL に vendor/（数十MB の AI 部品）を入れていない（使う人だけが取る）');
+// 同梱の AI 部品：localai.js が指すファイルがあり、ライセンスが添えてある
+const localai = readFileSync(resolve(root, 'localai.js'), 'utf8');
+const vendorFiles = [...localai.matchAll(/'(vendor\/[^']+)'/g)].map((m) => m[1]).flatMap((p) => (/\.(m?js)$/.test(p) ? [p] : [p + '.mjs', p + '.wasm']));
+check(vendorFiles.length === 4, `localai.js が指す同梱の部品を読めた（${vendorFiles.length}）`);
+for (const p of vendorFiles) {
+  check(existsSync(resolve(root, p)), `同梱の部品 ${p} がある`);
+  check(existsSync(resolve(root, dirname(p), 'LICENSE')), `同梱の部品 ${dirname(p)} に LICENSE がある`);
+}
 const html = readFileSync(resolve(root, 'index.html'), 'utf8');
 const csp = (html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/) || [])[1] || '';
 const connect = (csp.match(/connect-src ([^;]+)/) || [])[1]?.trim().split(/\s+/) || [];
-check(connect.length > 0 && connect.every((x) => x === "'self'" || x === 'https://api.github.com'), `CSP の connect-src は自分のサイトと GitHub の API だけ（${connect.join(' ') || 'なし'}）`);
+// 許すのは、自分のサイト・GitHub の API（カードの保存）・モデルの置き場（Hugging Face と WebLLM のモデル用 wasm の GitHub raw）だけ
+const MODEL_HOSTS = ['https://huggingface.co', 'https://*.huggingface.co', 'https://*.hf.co', 'https://raw.githubusercontent.com'];
+check(connect.length > 0 && connect.every((x) => x === "'self'" || x === 'https://api.github.com' || MODEL_HOSTS.includes(x)), `CSP の connect-src は自分のサイト・GitHub の API・モデルの置き場だけ（${connect.join(' ') || 'なし'}）`);
+const isModelHost = (h) => h === 'huggingface.co' || h.endsWith('.huggingface.co') || h.endsWith('.hf.co') || h === 'raw.githubusercontent.com';
 check(/default-src 'self'/.test(csp), 'CSP の default-src は自分のサイトだけ');
 const sc = manifest.shortcuts || [];
 check(sc.length >= 3, `manifest に shortcuts が 3 つ以上ある（${sc.length}）`);
@@ -56,10 +71,41 @@ const st = manifest.share_target || {};
 check(st.action === './' && st.method === 'GET' && st.params?.title === 'title' && st.params?.text === 'text' && st.params?.url === 'url', 'manifest の share_target が ./ に GET で title・text・url を渡す');
 
 // ---------- 2. 手元のサーバー（127.0.0.1 だけ） ----------
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
+// 同梱の AI 部品のにせもの（検査では本物のモデルを取らない。WebGPU も無い）。fakeVendor が true の間だけ出す
+let fakeVendor = false;
+const vendorHits = [];
+const FAKE = {
+  llm: `export async function CreateMLCEngine(id, cfg) {
+  window.__llmId = id;
+  cfg?.initProgressCallback?.({ progress: 0.5, text: 'params_shard_0.bin' });
+  await fetch('https://huggingface.co/mlc-ai/' + id + '/resolve/main/mlc-chat-config.json');
+  cfg?.initProgressCallback?.({ progress: 1, text: 'done' });
+  return { chat: { completions: { create: async (req) => { window.__llmReq.push(req); return { choices: [{ message: { content: JSON.stringify(window.__llmReplies.shift() || { say: 'うん', action: null }) } }] }; } } }, unload() {} };
+}
+export async function deleteModelAllInfoInCache(id) { window.__deleted = id; }`,
+  tf: `export const env = { backends: { onnx: { wasm: {} } } };
+export class Tensor { constructor(type, data, dims) { Object.assign(this, { type, data, dims }); } }
+export async function pipeline(task, model, opts) {
+  window.__asr = { task, model, device: opts.device };
+  opts.progress_callback?.({ status: 'progress', progress: 50, file: 'encoder_model.onnx' });
+  await fetch('https://huggingface.co/' + model + '/resolve/main/config.json');
+  return async (audio, o) => { window.__asrCalls.push({ n: audio.length, lang: o.language }); return { text: window.__heard.shift() || '' }; };
+}
+let n = 0;
+export const AutoModel = { from_pretrained: async (id) => {
+  await fetch('https://huggingface.co/' + id + '/resolve/main/onnx/model.onnx');
+  return async ({ state }) => { n++; window.__vadCalls = n; return { output: { data: [n % 40 < 10 ? 0.9 : 0.05] }, stateN: state }; };
+} };`,
+};
 const server = createServer((req, res) => {
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (p === '/favicon.ico') { res.writeHead(204); return res.end(); } // ブラウザが勝手に取りに行くだけ（アプリは使わない）
+  if (p.startsWith('/vendor/')) {
+    vendorHits.push(p);
+    if (fakeVendor && /web-llm/.test(p)) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(FAKE.llm); }
+    if (fakeVendor && /transformers/.test(p)) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(FAKE.tf); }
+  }
   if (p.endsWith('/')) p += 'index.html';
   const f = normalize(resolve(root, '.' + p));
   if (!f.startsWith(root + sep) || !existsSync(f)) { res.writeHead(404); return res.end('not found'); }
@@ -343,6 +389,99 @@ try {
     check(await pg.evaluate(() => JSON.parse(localStorage.getItem('lk.talk')).icon === 'kaku'), 'キャラの設定：アイコンの選択を端末に保存した');
     await pg.click('#talkEnd');
     check(outside.length === 0, '会話（耳なし）：自分のサイトと GitHub 以外へ通信していない');
+    await pg.close();
+  }
+
+  check(vendorHits.length === 0, `ふだんの画面・会話では同梱の AI 部品（vendor/）を読み込まない${vendorHits.length ? '（' + vendorHits.join(', ') + '）' : ''}`);
+
+  // E. 本物の同梱部品が CSP の下で読み込めて、localai.js が使う関数がある（モデルは取らない）
+  {
+    const pg = await context.newPage();
+    pg.on('pageerror', (e) => errors.push(`pageerror(部品の読み込み): ${e.message}`));
+    const outside = [];
+    pg.on('request', (r) => { const h = new URL(r.url()).host; if (!/^127\.0\.0\.1(:\d+)?$/.test(h) && h !== 'api.github.com') outside.push(r.url()); });
+    await pg.goto(base);
+    await pg.waitForSelector('#board .card', { timeout: 10000 });
+    const got = await pg.evaluate(async (v) => {
+      const out = {};
+      try { const m = await import('./' + v.llm); out.llm = ['CreateMLCEngine', 'deleteModelAllInfoInCache'].filter((k) => typeof m[k] === 'function'); } catch (e) { out.llmErr = String(e); }
+      try { const m = await import('./' + v.tf); out.tf = ['pipeline', 'Tensor'].filter((k) => typeof m[k] === 'function').concat(typeof m.AutoModel?.from_pretrained === 'function' ? ['AutoModel'] : [], m.env?.backends?.onnx?.wasm ? ['wasm'] : []); } catch (e) { out.tfErr = String(e); }
+      const w = await fetch('./' + v.ort + '.wasm').then((r) => r.arrayBuffer()).catch(() => null);
+      out.wasm = !!w && WebAssembly.validate(new Uint8Array(w));
+      out.compiled = !!w && await WebAssembly.compile(w).then(() => true, (e) => String(e)); // CSP の 'wasm-unsafe-eval' で wasm を動かせる
+      return out;
+    }, await pg.evaluate(() => window.LocalAI.VENDOR));
+    check((got.llm || []).length === 2, `同梱の WebLLM を読み込めて、使う関数がある${got.llmErr ? '（' + got.llmErr + '）' : ''}`);
+    check((got.tf || []).length === 4, `同梱の transformers.js を読み込めて、使う関数がある（${(got.tf || []).join(',')}${got.tfErr ? ' ' + got.tfErr : ''}）`);
+    check(got.wasm === true, '同梱の ONNX Runtime の wasm が壊れていない');
+    check(got.compiled === true, `CSP の下で wasm を動かせる（${got.compiled}）`);
+    check(outside.length === 0, `部品を読み込むだけでは外へ通信しない${outside.length ? '（' + outside.join(', ') + '）' : ''}`);
+    await pg.evaluate(() => caches.delete('kanban-vendor')); // 次の検査でにせものの部品を使うため
+    await pg.close();
+  }
+
+  // D. スマホ（内蔵 AI も端末内の音声認識も無い）：「AI の部品を入れる」でモデルを取り、WebLLM と Whisper と Silero で会話する
+  {
+    fakeVendor = true;
+    const pg = await context.newPage();
+    pg.on('pageerror', (e) => errors.push(`pageerror(端末の中の AI): ${e.message}`));
+    const net = [];
+    pg.on('request', (r) => { const u = new URL(r.url()); if (!/^127\.0\.0\.1(:\d+)?$/.test(u.host) && u.host !== 'api.github.com') net.push({ host: u.host, url: r.url(), method: r.method() }); });
+    await pg.route(/^https:\/\/([a-z0-9-]+\.)*(huggingface\.co|hf\.co)\//, (route) => route.fulfill({ json: {} }));
+    await pg.addInitScript(() => {
+      window.__heard = []; window.__spoken = []; window.__llmReq = []; window.__llmReplies = []; window.__asrCalls = [];
+      delete window.webkitSpeechRecognition; delete window.SpeechRecognition; delete window.LanguageModel;
+      Object.defineProperty(navigator, 'gpu', { configurable: true, value: { requestAdapter: async () => ({ features: new Set(['shader-f16']) }) } });
+      Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: 4 });
+      window.speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }];
+      window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => u.onend && u.onend(), 5); };
+      window.speechSynthesis.cancel = () => {};
+      // マイクのかわりに小さな音を流す（音の中身は見ない。声かどうかはにせものの Silero が決める）
+      navigator.mediaDevices.getUserMedia = async () => { const ac = new AudioContext(); const o = ac.createOscillator(); const d = ac.createMediaStreamDestination(); o.connect(d); o.start(); return d.stream; };
+    });
+    await pg.goto(base);
+    await pg.waitForSelector('#board .card', { timeout: 10000 });
+    check(await pg.isHidden('#micBtn'), '端末の中の AI（入れる前）：耳が無いので🎤は出ない');
+    await pg.evaluate(() => openTalkSet());
+    check(/約 0\.5GB/.test(await pg.textContent('#aiGet')), `端末の中の AI：入れる前に大きさの目安を出す（${await pg.textContent('#aiGet')}）`);
+    check(net.length === 0, '端末の中の AI：ボタンを押す前はモデルを取りに行かない');
+    await pg.click('#aiGet');
+    await pg.waitForFunction(() => /入りました|入れられません/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 15000 }).catch(() => {});
+    const msg = await pg.textContent('#aiMsg');
+    check(/入りました/.test(msg), `端末の中の AI：「AI の部品を入れる」で入った（${msg}）`);
+    check(await pg.evaluate(() => window.__llmId) === 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', '端末の中の AI：メモリ 4GB の端末には小さいモデル（0.5B）を選んだ');
+    check(net.length > 0 && net.every((x) => isModelHost(x.host) && x.method === 'GET'), `端末の中の AI：取りに行ったのはモデルの置き場だけで、GET だけ（${[...new Set(net.map((x) => x.method + ' ' + x.host))].join(', ')}）`);
+    check(!net.some((x) => /%E8%A6%8B%E6%9C%AC|見本/.test(x.url)), '端末の中の AI：モデルを取るときにカードの中身を送っていない');
+    check(/入っています/.test(await pg.textContent('#aiStat')) && /huggingface\.co/.test(await pg.textContent('#aiStat')), '端末の中の AI：どこから取ったかを設定画面に出す');
+    check(await pg.isVisible('#micBtn'), '端末の中の AI：Whisper を入れたら🎤が出る');
+    await pg.click('#talkSetForm button[value=cancel]');
+    net.length = 0;
+    await pg.evaluate(() => {
+      window.__heard.push('毎週のやつ今やるにして', '終わり');
+      window.__llmReplies.push({ say: 'オッケー、今やるに入れたよ', action: { type: 'move', query: '見本のカード（次にやる・毎週）', lane: 'now' } });
+    });
+    await pg.click('#talkBtn');
+    const t0 = Date.now();
+    while (Date.now() - t0 < 30000 && (await pg.evaluate(() => document.querySelector('#talkDlg').open))) await pg.waitForTimeout(200);
+    check(/WebLLM/.test(await pg.textContent('#talkMode')), '会話（入れた AI）：内蔵 AI が無い端末では入れた WebLLM を使う');
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'now', '会話（入れた AI・Whisper で聞いた声）の「今やるに」');
+    const asr = await pg.evaluate(() => ({ calls: window.__asrCalls, vad: window.__vadCalls || 0 }));
+    check(asr.calls.length >= 1 && asr.calls.every((c) => c.lang === 'japanese' && c.n > 0), `会話（入れた AI）：Whisper で日本語として聞き取った（${asr.calls.length} 回）`);
+    check(asr.vad > 0, '会話（入れた AI）：話し終わりを Silero VAD で見た');
+    const req = await pg.evaluate(() => window.__llmReq);
+    const charName = await pg.evaluate(() => JSON.parse(localStorage.getItem('lk.talk') || '{}').name || 'ポチ');
+    const sent = JSON.stringify(req);
+    check(req.length >= 1 && req[0].response_format?.type === 'json_object' && req[0].messages[0].content.includes(charName), '会話（入れた AI）：キャラの指示と JSON の形を WebLLM に渡した');
+    check(sent.includes('見本のカード（次にやる・毎週）') && !sent.includes('見本の補足'), '会話（入れた AI）：AI に渡すのは題・列・期限だけ（補足は渡さない）');
+    check(net.length === 0, `会話（入れた AI）：会話中は外へ通信していない${net.length ? '（' + net.map((x) => x.url).join(', ') + '）' : ''}`);
+    await pg.evaluate(() => openTalkSet());
+    await pg.click('#aiDel');
+    await pg.waitForFunction(() => /消しました/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 10000 }).catch(() => {});
+    check(await pg.evaluate(() => !localStorage.getItem('lk.ai') && window.__deleted === 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC'), '端末の中の AI：「入れた AI を消す」でモデルと印を消した');
+    check(await pg.isHidden('#micBtn'), '端末の中の AI：消したら🎤も消える');
+    await pg.click('#talkSetForm button[value=cancel]');
+    await pg.evaluate(() => caches.delete('kanban-vendor'));
+    fakeVendor = false;
     await pg.close();
   }
 

@@ -4,7 +4,8 @@
 //   Voice.listen()             … 1回だけ聞き取る（端末の中だけ。サーバーで文字にする音声認識は使わない）
 //   Voice.localStatus()        … 端末の中で聞き取れるか（'available' など）
 //   Voice.speak(文)            … 端末の中の声で読み上げる（ネット経由の声は使わない）
-//   Voice.supported            … 端末の中で聞き取れる音声認識があるか（Chrome 139 以降。Edge・Firefox・Safari は false）
+//   Voice.supported            … 端末の中で聞き取れるか（Chrome 139 以降の音声認識、または localai.js で入れた Whisper）
+//   Voice.useEar(耳)           … 端末内の音声認識が無いときに使う別の耳（{ ready(), listen() }。localai.js の Whisper）
 // 文型（claude.ai のボードと同じ）:
 //   「〇〇を追加」「〇〇を今やるに追加」「今やるに〇〇を追加」 → {type:'add', title, lane}
 //   「〇〇を済み」「〇〇終わった」「〇〇完了」                → {type:'done', query}
@@ -96,9 +97,15 @@
     try { return !!(await SR.install({ langs: [lang], processLocally: true })); } catch { return false; }
   }
 
+  // 端末内の音声認識が無いときの別の耳（これも端末の中だけで動くもの）
+  let ear = null;
+  function useEar(e) { ear = e; }
+  const earReady = () => { try { return !!ear?.ready(); } catch { return false; } };
+
   // 1回だけ聞き取る。返り値は Promise<{ text }>。端末の中で聞き取れないときは聞かずにエラーにする
   async function listen({ lang = 'ja-JP' } = {}) {
     const st = await localStatus(lang);
+    if (st !== 'available' && earReady()) return ear.listen({ lang });
     if (st === 'downloadable' || st === 'downloading') {
       if (st === 'downloadable') install(lang);
       throw new Error('日本語の聞き取りの部品を端末に入れています。少し待ってからもう一度押してください。');
@@ -139,5 +146,5 @@
     });
   }
 
-  g.Voice = { parse, match, laneOf, listen, localStatus, install, speak, localVoice, supported: canLocal, norm };
+  g.Voice = { parse, match, laneOf, listen, localStatus, install, speak, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm };
 })(typeof window !== 'undefined' ? window : globalThis);

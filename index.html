@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#2563eb">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <!-- 外に出さない保証：通信できる先は自分のサイトと GitHub の API（カードの保存）だけ。声・会話・AI は端末の中で動く -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' file:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://api.github.com; media-src 'self' blob:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' file:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://api.github.com https://huggingface.co https://*.huggingface.co https://*.hf.co https://raw.githubusercontent.com;media-src 'self' blob:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'">
 <title>カンバン</title>
 <!--
   Claude が使えないときに使うカンバン（PWA）。外部ライブラリなし（声の命令は voice.js、会話モードは talk.js、QR は qrcode.js を同じ場所に置く）。
@@ -95,6 +95,7 @@ dialog .help{font-size:12px;color:var(--muted)}
 #talkSetForm .icons .ava{width:48px;height:48px}
 #talkSetForm .icons input{width:auto;min-height:0}
 #talkSetForm .chk{display:flex;align-items:center;gap:6px;color:var(--text);font-size:14px}#talkSetForm .chk input{width:auto;min-height:0}
+#aiBox{border:1px solid var(--line);border-radius:8px;margin:12px 0 0;padding:8px 12px}#aiBox legend{font-size:14px;padding:0 4px}#aiBox progress{width:100%}#aiBox .actions{gap:8px;flex-wrap:wrap}
 a{color:var(--accent)}
 /* スマホ: 列はタブで1つずつ */
 @media (max-width:760px){
@@ -237,8 +238,16 @@ a{color:var(--accent)}
     <label>色</label><input name="color" type="color">
     <label>声（この端末の中の声だけ。ネット経由の声は出しません）</label><select name="voice"></select>
     <label class="chk"><input type="checkbox" name="bargeIn"> 話の途中で割り込める（話している間だけマイクの音の大きさを端末の中で見る）</label>
-    <label class="chk"><input type="checkbox" name="ai"> 端末の中の AI（Chrome の内蔵 AI）があれば使う</label>
+    <label class="chk"><input type="checkbox" name="ai"> 端末の中の AI（Chrome の内蔵 AI か、下で入れた AI）があれば使う</label>
     <p class="help">声も会話も端末の外に出しません。AI が無い端末では、カードを1枚ずつ読み上げて「済み・あとで・保留・次」で片づけます。</p>
+    <fieldset id="aiBox">
+      <legend>スマホでも AI と話す（端末の中の AI）</legend>
+      <p id="aiStat" class="help"></p>
+      <progress id="aiProg" max="1" value="0" hidden></progress>
+      <p id="aiMsg" class="help" aria-live="polite"></p>
+      <div class="actions"><button type="button" id="aiGet"></button><button type="button" id="aiDel" hidden>入れた AI を消す</button></div>
+      <p class="help">押したときだけ、モデルのファイルを Hugging Face（huggingface.co）と GitHub（raw.githubusercontent.com）から1回取ってきて、この端末に保存します。以後はオフラインで動きます。取りに行くのはモデルだけで、会話やカードは送りません。大きいので Wi-Fi のときに押してください。</p>
+    </fieldset>
     <div class="actions" style="justify-content:space-between;margin-top:12px">
       <button type="button" id="talkReset">元に戻す</button>
       <span><button value="cancel" formnovalidate>やめる</button> <button value="ok" class="primary">保存</button></span>
@@ -254,6 +263,7 @@ a{color:var(--accent)}
 </dialog>
 
 <script src="voice.js"></script>
+<script src="localai.js"></script>
 <script src="talk.js"></script>
 <script>
 'use strict';
@@ -745,7 +755,7 @@ function openTalk(){
     pending: () => !!pending,
     onLine: talkLine,
     onState: st => { $('#talkState').textContent = TALK_STATE[st] ?? ''; $('#talkDlg').classList.toggle('speaking', st === 'speaking'); if (st === 'off' && $('#talkDlg').open) $('#talkDlg').close(); },
-    onMode: m => { $('#talkMode').textContent = m === 'ai' ? '頭：端末の中の AI（Chrome の内蔵 AI）' : '頭：AI なし（1枚ずつ読み上げ）'; },
+    onMode: (m, brain) => { $('#talkMode').textContent = m !== 'ai' ? '頭：AI なし（1枚ずつ読み上げ）' : brain === 'webllm' ? '頭：端末の中の AI（入れた WebLLM）' : '頭：端末の中の AI（Chrome の内蔵 AI）'; },
   });
   $('#talkDlg').showModal();
   talk.start();
@@ -760,9 +770,39 @@ function openTalkSet(){
   $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{maru:'まる',kaku:'しかく',shizuku:'しずく'}[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
   const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
   f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
+  drawAi();
   $('#talkSet').showModal();
 }
 $('#talkSetBtn').onclick = openTalkSet;
+
+// 端末の中の AI（localai.js）を入れる・消す。押したときだけモデルを取ってくる
+function drawAi(){
+  const A = window.LocalAI; if (!A) { $('#aiBox').hidden = true; return; }
+  const st = A.status(), p = A.plan();
+  $('#aiStat').textContent = st.llm
+    ? `入っています：頭 ${st.llm}${st.ear ? '・耳 ' + A.EAR.label : ''}（${st.at} に ${[...new Set(st.from.map(f => f.split('/')[0]))].join('・')} から取得）`
+    : `まだ入っていません。入れると、Chrome の内蔵 AI が無い端末（スマホなど）でも AI と話せます（頭 ${p.model}${p.ear ? '・耳 ' + A.EAR.label : ''}）。`;
+  $('#aiGet').textContent = st.llm ? '入れ直す' : `AI の部品を入れる（約 ${p.gb}GB）`;
+  $('#aiDel').hidden = !st.llm;
+}
+let aiBusy = false;
+$('#aiGet').onclick = async () => {
+  if (aiBusy || !window.LocalAI) return;
+  aiBusy = true; $('#aiGet').disabled = true; $('#aiProg').hidden = false; $('#aiProg').value = 0; $('#aiMsg').textContent = '取ってきています…（画面を閉じずに待ってね）';
+  try {
+    await LocalAI.install((v, what) => { $('#aiProg').value = v; if (what) $('#aiMsg').textContent = String(what).slice(0, 120); });
+    $('#aiMsg').textContent = '入りました。会話モードで使えます。';
+  } catch (e) { $('#aiMsg').textContent = '入れられませんでした：' + (e?.message || e); }
+  finally {
+    aiBusy = false; $('#aiGet').disabled = false; $('#aiProg').hidden = true; drawAi();
+    $('#micBtn').hidden = !window.Voice?.supported || !store; $('#voiceHint').hidden = !!window.Voice?.supported;
+  }
+};
+$('#aiDel').onclick = async () => {
+  if (aiBusy || !window.LocalAI) return;
+  await LocalAI.remove(); $('#aiMsg').textContent = 'この端末から消しました。'; drawAi();
+  $('#micBtn').hidden = !window.Voice?.supported || !store; $('#voiceHint').hidden = !!window.Voice?.supported;
+};
 $('#talkSetForm').onsubmit = e => {
   if (e.submitter?.value !== 'ok') return;
   const f = e.target;
