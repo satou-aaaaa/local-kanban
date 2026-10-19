@@ -1,0 +1,25 @@
+name: Site watch
+
+# 公開中のページ（GitHub Pages）が開けるかを毎日見る。アプリ本体（index.html）が
+# 200 で返らなければ失敗にし、ci-failure-issue.yml がラベル ci-failure の Issue を立てる（次に成功すれば閉じる）。
+# Claude は使わない。中身は共通部品 satou-aaaaa/shared-workflows にある。
+on:
+  schedule:
+    # 毎日 06:17 JST（= 21:17 UTC）。朝のタスク整理の前に結果が出るように
+    - cron: "17 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: read
+
+concurrency:
+  group: site-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    uses: satou-aaaaa/shared-workflows/.github/workflows/site-watch.yml@main
+    with:
+      # 公開URLからの相対パス（空白区切り）。トップページは常に見る
+      paths: index.html

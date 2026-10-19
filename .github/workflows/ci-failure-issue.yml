@@ -1,0 +1,17 @@
+name: CI failure issue
+
+# main で下のワークフローが失敗したらラベル ci-failure の Issue を立て、次に成功したら閉じる（Claude は使わない）。
+# 監督エージェントが毎回 API で失敗を探す代わりに、この Issue を見るだけで済むようにするためのもの。
+# 中身は共通部品 satou-aaaaa/shared-workflows にある。ここには見張るワークフローの名前（name:）だけを書く。
+on:
+  workflow_run:
+    workflows: ["QA", "Site watch", "Lighthouse", "Link check", "Secret scan", "Post-deploy check"]
+    types: [completed]
+
+permissions:
+  issues: write
+  actions: read
+
+jobs:
+  report:
+    uses: satou-aaaaa/shared-workflows/.github/workflows/ci-failure-issue.yml@main

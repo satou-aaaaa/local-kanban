@@ -1,0 +1,25 @@
+name: Branch cleanup
+
+# 使い終わったブランチを週1回片付ける（Claude は使わない）。中身と消す条件は共通部品 satou-aaaaa/shared-workflows。
+# 手で動かすときは dry_run を選ぶと、消す候補を一覧にするだけで何も消さない。
+on:
+  schedule:
+    # 毎週日曜 05:23 JST（= 土曜 20:23 UTC）
+    - cron: "23 20 * * 6"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '候補を一覧にするだけで消さない'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  cleanup:
+    uses: satou-aaaaa/shared-workflows/.github/workflows/branch-cleanup.yml@main
+    with:
+      keep: '^(gh-pages)$'
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
