@@ -1,0 +1,17 @@
+{
+  "name": "メモ",
+  "short_name": "メモ",
+  "description": "Notion の代わりのメモ。ページは自分の非公開リポジトリか PC のフォルダに Markdown で置く",
+  "lang": "ja",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f7f5",
+  "theme_color": "#0f766e",
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}
