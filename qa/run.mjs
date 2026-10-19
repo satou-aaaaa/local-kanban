@@ -41,6 +41,7 @@ for (const p of shell) check(p === './' || existsSync(resolve(root, p)), `SHELL 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
 const server = createServer((req, res) => {
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  if (p === '/favicon.ico') { res.writeHead(204); return res.end(); } // ブラウザが勝手に取りに行くだけ（アプリは使わない）
   if (p.endsWith('/')) p += 'index.html';
   const f = normalize(resolve(root, '.' + p));
   if (!f.startsWith(root + sep) || !existsSync(f)) { res.writeHead(404); return res.end('not found'); }
@@ -95,10 +96,11 @@ page.on('console', (m) => {
   errors.push(`console.error: ${m.text()}`);
 });
 
-const waitPut = async (n, label) => {
+// 保存は cards.json → BOARD.md の順に PUT される。前の保存の BOARD.md を取り違えないよう、cards.json の中身で待つ
+const waitCards = async (pred, label) => {
   const t0 = Date.now();
-  while (puts.length < n && Date.now() - t0 < 10000) await page.waitForTimeout(100);
-  check(puts.length >= n, `${label}が GitHub への保存（PUT）に届いた`);
+  while (!pred(lastCards()) && Date.now() - t0 < 10000) await page.waitForTimeout(100);
+  check(pred(lastCards()), `${label}が GitHub への保存（PUT）に届いた`);
 };
 const lastCards = () => JSON.parse([...puts].reverse().find((p) => p.path === 'local-board/cards.json')?.text || '[]');
 
@@ -116,29 +118,28 @@ try {
 
   // 「済み」を押す → 保存の中身を確かめる
   await page.locator('#board .lane[data-lane="now"] .card', { hasText: '見本のカード（今やる）' }).locator('[data-act=done]').click();
-  await waitPut(1, '「済み」');
+  await waitCards((cs) => cs.some((c) => c.doc_id === 's1' && c.lane === 'done'), '「済み」');
   let c1 = lastCards().find((c) => c.doc_id === 's1');
   check(c1?.lane === 'done' && !!c1.done_at, '「済み」にしたカードが lane done・done_at 付きで保存された');
   check(c1?.moves?.at(-1)?.from === 'now' && c1?.moves?.at(-1)?.to === 'done', '列の移動（moves）が記録された');
   check(c1?.local_edit === true, 'ローカルで直した印（local_edit）が付いた');
   check(puts[0]?.body?.sha === 'sha-cards', '読んだときの sha を付けて保存した（上書きの事故を防ぐ）');
-  check(puts.some((p) => p.path === 'local-board/BOARD.md'), 'BOARD.md も保存した');
   check(lastCards().some((c) => c.doc_id === 's6' && c.deleted), '消したカードの行は保存でも残る');
 
   // 確認のカードに答える
-  const before = puts.length;
   await page.locator('#board .card.ask [data-opt="0"]').click();
-  await waitPut(before + 1, '確認への答え');
+  await waitCards((cs) => cs.some((c) => c.doc_id === 's2' && c.answer), '確認への答え');
   const c2 = lastCards().find((c) => c.doc_id === 's2');
   check(c2?.answer === 'はい' && c2?.answer_status === 'local', '答え（answer・answer_status）が保存された');
 
   // カードを足す
-  const before2 = puts.length;
   await page.click('#addBtn');
   await page.fill('#addForm [name=title]', 'QA で足したカード');
   await page.click('#addForm button.primary');
-  await waitPut(before2 + 1, 'カードの追加');
+  await waitCards((cs) => cs.some((c) => c.title === 'QA で足したカード'), 'カードの追加');
   check(lastCards().some((c) => c.title === 'QA で足したカード' && /^local-/.test(c.doc_id)), '足したカードが local- の ID で保存された');
+
+  check(puts.some((p) => p.path === 'local-board/BOARD.md'), 'BOARD.md も保存した');
 
   // service worker とオフライン
   const swOk = await page.evaluate(() => navigator.serviceWorker.ready.then((r) => !!r.active)).catch(() => false);
@@ -172,6 +173,23 @@ try {
   await phone.locator('#tabs button', { hasText: '次にやる' }).click();
   const cur = await phone.$eval('#board .lane.cur', (s) => s.dataset.lane);
   check(cur === 'next', 'タブを押すとその列に切り替わる');
+
+  // 切り替えボタンは押すと「選ばれている」印（aria-pressed と見た目のクラス）が変わること
+  // （2026-10-19 claude.ai のボードで、表示だけ変わって印が変わらない不具合があった。shared-workflows incidents/2026-10-19-board-toggle-state.md）
+  // 新しい切り替えボタンを足すときも、同じ並びのボタンに aria-pressed を付ければ、ここで全部押して確かめる。
+  const unmarked = await phone.$$eval('button.on', (bs) => bs.filter((b) => !b.hasAttribute('aria-pressed')).length);
+  check(unmarked === 0, `選ばれている見た目のボタンにはすべて aria-pressed がある（無いもの ${unmarked}）`);
+  const groups = await phone.$$eval('[aria-pressed]', (bs) => [...new Set(bs.map((b) => b.parentElement))].map((p) => (p.id ? '#' + p.id : null)).filter(Boolean));
+  check(groups.includes('#tabs'), '列のタブが切り替えボタン（aria-pressed）になっている');
+  for (const g of groups) {
+    const n = await phone.$$eval(`${g} > [aria-pressed]`, (bs) => bs.length);
+    for (let i = 0; i < n; i++) {
+      await phone.locator(`${g} > [aria-pressed]`).nth(i).click();
+      const st = await phone.$$eval(`${g} > [aria-pressed]`, (bs) => bs.map((b) => [b.getAttribute('aria-pressed'), b.classList.contains('on')]));
+      const ok = st.every(([a, on], j) => (j === i ? a === 'true' && on : a === 'false' && !on));
+      check(ok, `${g} の ${i + 1} 番目を押すと、そのボタンだけが選ばれた印になる`);
+    }
+  }
   await phone.screenshot({ path: resolve(OUT, 'phone.png'), fullPage: true });
 } catch (e) {
   failures.push(`途中で止まった: ${e.message.split('\n')[0]}`);
