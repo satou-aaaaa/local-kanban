@@ -394,7 +394,8 @@ function render(){
     const b = document.createElement('button');
     const asks = cards.filter(c => !c.deleted && c.lane === lane && c.decision && !c.answer).length;
     b.textContent = `${label} ${laneCards(lane)[0].length}${asks ? ' ●' : ''}`;
-    if (lane === curLane) b.className = 'on';
+    // 選ばれている印は見た目（.on）と読み上げ（aria-pressed）を必ず一緒に変える（qa/run.mjs が全部押して確かめる）
+    b.className = lane === curLane ? 'on' : ''; b.setAttribute('aria-pressed', String(lane === curLane));
     b.onclick = () => { curLane = lane; ls.set('lane', lane); render(); window.scrollTo(0,0); };
     tabs.appendChild(b);
   }
