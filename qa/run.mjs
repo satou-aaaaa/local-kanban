@@ -7,6 +7,10 @@
 //     - 鍵（Authorization）を api.github.com 以外に送った
 //     - service worker が動かない、オフラインで開き直すと画面が出ない
 //     - スマホ幅（390px）で列がタブにならない
+//     - 声の命令の読み取り（voice.js）が文型どおりにならない、Ctrl+K の命令が保存に届かない、消す前に聞き返さない
+//     - URL（#add=）・共有メニュー（?title=&url=）からカードを足せない
+//     - 端末の中で聞き取れないブラウザ（Edge・Firefox・サーバー版だけの音声認識）で🎤が出る・聞き取りを始める・エラーになる
+//     - manifest の shortcuts・share_target が無いか、scope の外を指す
 // 使い方: node qa/run.mjs [--out qa-report]
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
@@ -36,6 +40,12 @@ const sw = readFileSync(resolve(root, 'sw.js'), 'utf8');
 const shell = JSON.parse((sw.match(/const SHELL = (\[[^\]]*\])/) || [])[1]?.replace(/'/g, '"') || '[]');
 check(shell.length > 0, 'sw.js の SHELL を読めた');
 for (const p of shell) check(p === './' || existsSync(resolve(root, p)), `SHELL のファイル ${p} がある`);
+check(shell.includes('./voice.js'), 'SHELL に voice.js がある（オフラインでも声の命令が動く）');
+const sc = manifest.shortcuts || [];
+check(sc.length >= 3, `manifest に shortcuts が 3 つ以上ある（${sc.length}）`);
+for (const x of sc) check(!!x.name && /^\.\/(#|$)/.test(x.url || '') && (x.icons || []).every((i) => existsSync(resolve(root, i.src))), `shortcut「${x.name}」の url が scope の中で、アイコンがある`);
+const st = manifest.share_target || {};
+check(st.action === './' && st.method === 'GET' && st.params?.title === 'title' && st.params?.text === 'text' && st.params?.url === 'url', 'manifest の share_target が ./ に GET で title・text・url を渡す');
 
 // ---------- 2. 手元のサーバー（127.0.0.1 だけ） ----------
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
@@ -140,6 +150,103 @@ try {
   check(lastCards().some((c) => c.title === 'QA で足したカード' && /^local-/.test(c.doc_id)), '足したカードが local- の ID で保存された');
 
   check(puts.some((p) => p.path === 'local-board/BOARD.md'), 'BOARD.md も保存した');
+
+  // 声の命令の読み取り（voice.js）
+  const parsed = await page.evaluate(() => {
+    const L = [['now', '今やる', '今'], ['next', '次にやる', '次'], ['later', '時間があるとき', 'あとで'], ['hold', '保留'], ['agent', 'エージェント'], ['done', '済み']];
+    return ['牛乳を買うを追加', '牛乳を買うを今やるに追加', '今やるに牛乳を買うを追加', '請求書を済み', '請求書を保留へ', '今やるを読んで', '戻す', '請求書を消して', '2番', 'はい', 'ほにゃらら']
+      .map((t) => JSON.stringify(Voice.parse(t, L)));
+  });
+  const want = ['{"type":"add","title":"牛乳を買う","lane":null}', '{"type":"add","title":"牛乳を買う","lane":"now"}', '{"type":"add","title":"牛乳を買う","lane":"now"}',
+    '{"type":"done","query":"請求書"}', '{"type":"move","query":"請求書","lane":"hold"}', '{"type":"read","lane":"now"}', '{"type":"undo"}',
+    '{"type":"delete","query":"請求書"}', '{"type":"pick","n":2}', '{"type":"yes"}', '{"type":"unknown","text":"ほにゃらら"}'];
+  parsed.forEach((p, i) => check(p === want[i], `声の文型 ${i + 1}: ${want[i]}（${p}）`));
+
+  // Ctrl+K の命令欄で列を移す
+  const cmd = async (t) => { await page.keyboard.press('Control+k'); await page.fill('#cmdIn', t); await page.press('#cmdIn', 'Enter'); };
+  await cmd('見本のカード（次にやる・毎週）を保留へ');
+  await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold', 'Ctrl+K の「〇〇を保留へ」');
+  check(lastCards().find((c) => c.doc_id === 's3')?.lane === 'hold', 'Ctrl+K の命令でカードが保留に移った');
+  // 消す前に聞き返す → はい で消す → 戻す で戻る
+  await page.waitForTimeout(1500);
+  const b4 = puts.length;
+  await cmd('見本のカード（エージェント）を消して');
+  await page.waitForTimeout(1600);
+  check(puts.length === b4 && /消しますか/.test(await page.textContent('#status')), '「消して」はすぐ消さずに聞き返す');
+  await page.fill('#cmdIn', 'はい'); await page.press('#cmdIn', 'Enter');
+  await waitCards((cs) => cs.find((c) => c.doc_id === 's4')?.deleted === true, '聞き返しへの「はい」');
+  check(lastCards().find((c) => c.doc_id === 's4')?.deleted === true, '「はい」でカードが消えた（行は残る）');
+  await page.waitForTimeout(1500);
+  await cmd('戻す');
+  await waitCards((cs) => !cs.find((c) => c.doc_id === 's4')?.deleted, '「戻す」');
+  check(!lastCards().find((c) => c.doc_id === 's4')?.deleted, '「戻す」で消す前に戻った');
+
+  // URL（#add=）と共有メニュー（?title=&url=）から足す
+  const viaUrl = async (u, label, test) => {
+    const pg = await context.newPage();
+    pg.on('pageerror', (e) => errors.push(`pageerror(${label}): ${e.message}`));
+    const n = puts.length;
+    await pg.goto(base + u);
+    const t0 = Date.now();
+    while (!puts.slice(n).some((p) => p.path === 'local-board/cards.json') && Date.now() - t0 < 10000) await pg.waitForTimeout(100);
+    const saved = JSON.parse(puts.slice(n).find((p) => p.path === 'local-board/cards.json')?.text || '[]');
+    check(saved.some(test), `${label}からカードを足した`);
+    check(!(await pg.evaluate(() => location.search + location.hash)), `${label}のあと URL から命令を消した（開き直しで二重にならない）`);
+    await pg.close();
+  };
+  await viaUrl('#add=' + encodeURIComponent('URL で足したカード') + '&lane=now&due=2026-12-01', 'URL（#add=）', (c) => c.title === 'URL で足したカード' && c.lane === 'now' && c.due === '2026-12-01');
+  await viaUrl('?title=' + encodeURIComponent('共有された記事') + '&url=' + encodeURIComponent('https://example.com/a'), '共有メニュー（?title=&url=）', (c) => c.title === '共有された記事' && c.link === 'https://example.com/a');
+
+  // 音声認識が無いブラウザ（Edge・Firefox）では🎤を出さず、案内を出す
+  const noVoice = await context.newPage();
+  await noVoice.addInitScript(() => { delete window.SpeechRecognition; delete window.webkitSpeechRecognition; });
+  noVoice.on('pageerror', (e) => errors.push(`pageerror(音声認識なし): ${e.message}`));
+  await noVoice.goto(base);
+  await noVoice.waitForSelector('#board .card', { timeout: 10000 });
+  check(await noVoice.$eval('#micBtn', (b) => b.hidden), '音声認識が無いと🎤ボタンを出さない');
+  check(!(await noVoice.$eval('#voiceHint', (b) => b.hidden)), '音声認識が無いと Win+H・キーボードのマイクの案内を出す');
+  await noVoice.close();
+  // 端末の中で聞き取れないブラウザ（サーバーへ送る音声認識しか無い）でも🎤を出さない（プライベートな内容を外に出さない）
+  const serverOnly = await context.newPage();
+  await serverOnly.addInitScript(() => { class SR { start() { window.__started = true; } } window.webkitSpeechRecognition = SR; delete window.SpeechRecognition; });
+  serverOnly.on('pageerror', (e) => errors.push(`pageerror(サーバー版だけ): ${e.message}`));
+  await serverOnly.goto(base);
+  await serverOnly.waitForSelector('#board .card', { timeout: 10000 });
+  await serverOnly.waitForTimeout(300);
+  check(await serverOnly.$eval('#micBtn', (b) => b.hidden), 'サーバーに送る音声認識しか無いと🎤ボタンを出さない');
+  await serverOnly.keyboard.press('m'); await serverOnly.waitForTimeout(200);
+  check(!(await serverOnly.evaluate(() => window.__started)), 'サーバーに送る音声認識は M キーでも動かさない');
+  await serverOnly.close();
+
+  // 🎤：音声認識をにせものに差し替えて、聞き取り → 命令 → 読み上げ の流れを確かめる（候補が複数なら番号で選ぶ）
+  const mic = await context.newPage();
+  mic.on('pageerror', (e) => errors.push(`pageerror(🎤): ${e.message}`));
+  await mic.addInitScript(() => {
+    window.__heard = ['見本のカードを済み', '2番']; window.__spoken = [];
+    class FakeSR {
+      static available(o) { return Promise.resolve(o?.processLocally ? 'available' : 'available'); }
+      start() { window.__local = this.processLocally === true; const t = window.__heard.shift(); setTimeout(() => { if (t) this.onresult({ results: [[{ transcript: t }]] }); this.onend(); }, 50); }
+    }
+    window.webkitSpeechRecognition = FakeSR; delete window.SpeechRecognition;
+    window.speechSynthesis.getVoices = () => [{ name: 'ネットの声', lang: 'ja-JP', localService: false }, { name: '端末の声', lang: 'ja-JP', localService: true }];
+    window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => u.onend && u.onend(), 10); };
+  });
+  const b6 = puts.length;
+  await mic.goto(base);
+  await mic.waitForSelector('#board .card', { timeout: 10000 });
+  await mic.click('#micBtn');
+  const t6 = Date.now();
+  while (!puts.slice(b6).some((p) => p.path === 'local-board/cards.json') && Date.now() - t6 < 12000) await mic.waitForTimeout(100);
+  const spoken = await mic.evaluate(() => window.__spoken);
+  check(spoken.some((t) => /候補が.*何番/.test(t)), `🎤 候補が複数のときは読み上げて番号を聞く（${spoken[0] || 'なし'}）`);
+  const saved6 = JSON.parse(puts.slice(b6).find((p) => p.path === 'local-board/cards.json')?.text || '[]');
+  const picked = saved6.filter((c) => c.lane === 'done' && c.moves?.at(-1)?.to === 'done' && c.moves?.at(-1)?.from !== null && c.doc_id !== 's5');
+  check(picked.length === 1, `🎤「2番」で選んだカードが済みになった（${picked.map((c) => c.title).join('・') || 'なし'}）`);
+  check(spoken.some((t) => /済みにしました/.test(t)), '🎤 結果を読み上げた');
+  check(await mic.evaluate(() => Voice.localVoice()?.name === '端末の声'), '🎤 読み上げは端末の中の声を選ぶ（ネット経由の声は使わない）');
+  check(await mic.evaluate(() => { const g = speechSynthesis.getVoices; speechSynthesis.getVoices = () => [{ name: 'ネットの声', lang: 'ja-JP', localService: false }]; const n = Voice.localVoice(); speechSynthesis.getVoices = g; return n === null; }), '🎤 端末の中の声が無ければ読み上げない');
+  check(await mic.evaluate(() => window.__local), '🎤 端末の中だけで聞き取る設定（processLocally = true）で聞いた');
+  await mic.close();
 
   // service worker とオフライン
   const swOk = await page.evaluate(() => navigator.serviceWorker.ready.then((r) => !!r.active)).catch(() => false);
