@@ -97,6 +97,12 @@ dialog .help{font-size:12px;color:var(--muted)}
 #talkSetForm .chk{display:flex;align-items:center;gap:6px;color:var(--text);font-size:14px}#talkSetForm .chk input{width:auto;min-height:0}
 #aiBox{border:1px solid var(--line);border-radius:8px;margin:12px 0 0;padding:8px 12px}#aiBox legend{font-size:14px;padding:0 4px}#aiBox progress{width:100%}#aiBox .actions{gap:8px;flex-wrap:wrap}
 a{color:var(--accent)}
+button,select,summary,a,[data-opt]{touch-action:manipulation}
+/* 押したあと数秒だけ出る「戻す」（押し間違いをすぐ取り消せるように。右下の「＋ 足す」と重ならない左下） */
+#toast{position:fixed;left:12px;bottom:max(16px,env(safe-area-inset-bottom));z-index:7;max-width:min(420px,calc(100vw - 140px));display:flex;align-items:center;gap:8px;background:var(--text);color:var(--bg);border-radius:8px;padding:6px 6px 6px 12px;box-shadow:0 4px 14px rgba(0,0,0,.25);font-size:13px}
+#toast[hidden]{display:none}
+#toast span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#toast button{background:transparent;color:inherit;border-color:currentColor;font-weight:600;flex:none}
 /* スマホ: 列はタブで1つずつ */
 @media (max-width:760px){
   header{padding-left:12px;padding-right:12px}
@@ -109,6 +115,17 @@ a{color:var(--accent)}
   .card{cursor:default}
   #addForm input,#addForm select{flex:1 1 45%}
   .row{flex-direction:column;gap:0}
+  /* 左右になぞると隣の列へ（縦のスクロールと拡大はそのまま） */
+  #board{touch-action:pan-y pinch-zoom}
+  /* iPhone は 16px 未満の入力欄を押すと画面が勝手に拡大するので 16px にする */
+  input,select,textarea,.actions select{font-size:16px}
+  /* 読めたときの案内は1行にして、カードを見える所を広くする（注意・エラーは全部出す） */
+  #status:not(.warn):not(.err){white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* カードのリンクも指で押せる大きさに（WCAG 2.5.8 は 24px 以上） */
+  .meta a.chip{display:inline-flex;align-items:center;min-height:28px;padding:0 12px}
+  /* カードを直す画面などは下から出す。保存・やめるは下に貼り付けて、スクロールしなくても押せる */
+  dialog:not(#talkDlg){width:100%;max-width:100%;margin:auto 0 0;border-radius:12px 12px 0 0;max-height:92dvh;padding-bottom:0}
+  dialog:not(#talkDlg) form>.actions:last-child{position:sticky;bottom:0;background:var(--panel);margin:12px -16px 0!important;padding:8px 16px max(12px,env(safe-area-inset-bottom));border-top:1px solid var(--line)}
 }
 @media (max-width:520px){
   button,select,input,#menu summary,#tabs button,.actions button,.actions select{min-height:44px}
@@ -170,6 +187,7 @@ a{color:var(--accent)}
   </section>
   <div id="board" hidden></div>
 </main>
+<div id="toast" role="status" aria-live="polite" hidden><span></span><button type="button" id="toastUndo">戻す</button></div>
 
 <dialog id="editDlg">
   <form method="dialog" id="editForm">
@@ -477,6 +495,8 @@ function render(){
     b.onclick = () => { curLane = lane; ls.set('lane', lane); render(); window.scrollTo(0,0); };
     tabs.appendChild(b);
   }
+  // スマホで今の列のタブが画面の外にあるときは見える所まで寄せる
+  tabs.querySelector('.on')?.scrollIntoView({ block: 'nearest', inline: 'center' });
   // アイコンのバッジに「今やる」の枚数（Windows・Mac のインストールしたアプリ）
   if (navigator.setAppBadge) { const n = laneCards('now')[0].length; (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); }
   const board = $('#board'); board.innerHTML = '';
@@ -537,11 +557,11 @@ function cardEl(c){
   if (note && !d) html += `<div class="note">${esc(note)}</div>`;
   html += `<div class="actions">${c.lane!=='done'?'<button data-act="done">済み</button>':'<button data-act="undo">戻す</button>'}<select data-act="move" aria-label="列を移す">${LANES.map(([k,v])=>`<option value="${k}" ${k===c.lane?'selected':''}>${v}</option>`).join('')}</select><button data-act="edit">直す</button></div>`;
   el.innerHTML = html;
-  el.querySelectorAll('[data-opt]').forEach(btn => btn.onclick = () => answer(c, +btn.dataset.opt));
+  el.querySelectorAll('[data-opt]').forEach(btn => btn.onclick = () => undoable(() => answer(c, +btn.dataset.opt), '答えました'));
   el.querySelector('[data-act=edit]').onclick = () => openEdit(c);
-  el.querySelector('[data-act=move]').onchange = e => moveTo(c, e.target.value);
-  const dn = el.querySelector('[data-act=done]'); if (dn) dn.onclick = () => moveTo(c, 'done');
-  const un = el.querySelector('[data-act=undo]'); if (un) un.onclick = () => moveTo(c, c.owner==='agent'?'agent':'next');
+  el.querySelector('[data-act=move]').onchange = e => undoable(() => moveTo(c, e.target.value), `${LANE_LABEL[e.target.value]}へ移しました`);
+  const dn = el.querySelector('[data-act=done]'); if (dn) dn.onclick = () => undoable(() => moveTo(c, 'done'), '済みにしました');
+  const un = el.querySelector('[data-act=undo]'); if (un) un.onclick = () => undoable(() => moveTo(c, c.owner==='agent'?'agent':'next'), '戻しました');
   return el;
 }
 
@@ -615,6 +635,23 @@ const undoStack = [];          // 「戻す」用（命令の前の状態）
 const live = () => cards.filter(c => !c.deleted);
 const remember = () => { undoStack.push(JSON.stringify(cards)); if (undoStack.length > 20) undoStack.shift(); };
 const writable = () => !!(store?.canSave || store?.kind === 'file');
+function undoLast(){
+  hideToast();
+  if (!undoStack.length) return false;
+  cards = JSON.parse(undoStack.pop()); persist('ひとつ前に戻した');
+  return true;
+}
+// カードのボタンで動かしたときは、数秒だけ「戻す」を出す（スマホの押し間違いをすぐ取り消せるように）
+let toastTimer = null;
+function undoable(fn, label){
+  remember();
+  const before = undoStack[undoStack.length - 1];
+  fn();
+  if (JSON.stringify(cards) === before) { undoStack.pop(); return; }
+  const t = $('#toast'); t.querySelector('span').textContent = label; t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, 6000);
+}
+function hideToast(){ clearTimeout(toastTimer); $('#toast').hidden = true; }
 
 function say(text, voice){
   setStatus(text, 'ok');
@@ -654,8 +691,7 @@ function apply(cmd, voice){
       return say(`${LANE_LABEL[cmd.lane]}は${l.length}枚。` + l.slice(0, 5).map((c, i) => `${i + 1}、${c.title}`).join('。') + (l.length > 5 ? `。ほか${l.length - 5}枚。` : '。'), voice);
     }
     case 'undo': {
-      if (!undoStack.length) return say('戻せるものがありません。', voice);
-      cards = JSON.parse(undoStack.pop()); persist('ひとつ前に戻した');
+      if (!undoLast()) return say('戻せるものがありません。', voice);
       return say('ひとつ前に戻しました。', voice);
     }
     case 'done': case 'move': case 'delete': {
@@ -924,6 +960,22 @@ $('#fileInput').onchange = async e => {
   catch (err) { setStatus('読めませんでした: ' + err.message, 'err'); }
   e.target.value = '';
 };
+$('#toastUndo').onclick = () => { undoLast(); };
+// スマホ：カードの所を左右になぞると隣の列へ（タブも残すので、なぞらなくても切り替えられる）
+(() => {
+  let s = null;
+  const board = $('#board');
+  board.addEventListener('pointerdown', e => { s = (e.pointerType === 'touch' && matchMedia('(max-width:760px)').matches) ? { x: e.clientX, y: e.clientY, t: Date.now() } : null; });
+  board.addEventListener('pointercancel', () => { s = null; });
+  board.addEventListener('pointerup', e => {
+    if (!s) return;
+    const dx = e.clientX - s.x, dy = e.clientY - s.y, dt = Date.now() - s.t; s = null;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 2 || dt > 800) return;
+    const i = LANES.findIndex(([k]) => k === curLane) + (dx < 0 ? 1 : -1);
+    if (i < 0 || i >= LANES.length) return;
+    curLane = LANES[i][0]; ls.set('lane', curLane); render(); window.scrollTo(0, 0);
+  });
+})();
 $('#addBtn').onclick = () => { const f = $('#addForm'); f.lane.value = curLane === 'done' ? 'next' : curLane; f.style.display = 'flex'; f.title.focus(); };
 $('#addCancel').onclick = () => { $('#addForm').style.display = 'none'; };
 $('#addForm').onsubmit = e => { e.preventDefault(); addCard(e.target); };

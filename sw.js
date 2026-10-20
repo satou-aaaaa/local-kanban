@@ -2,7 +2,7 @@
 // カードのデータ（api.github.com など他のサイト）と AI のモデル（Hugging Face など）には触らない（モデルは localai.js の部品が自分で保存する）。
 // 先にネットを見て、つながらないときだけ保存したものを使う（更新はすぐ届く）。
 // vendor/（同梱の AI 部品。数十MB）だけは、一度取ったら保存したものを使う（版はフォルダ名で固定なので中身は変わらない。スマホの通信量のため）。
-const CACHE = 'kanban-v6';
+const CACHE = 'kanban-v7';
 const VENDOR_CACHE = 'kanban-vendor';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './qrcode.js', './voice.js', './localai.js', './talk.js'];
 
