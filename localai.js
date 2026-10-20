@@ -322,6 +322,8 @@
   const cancel = () => { try { cancelCur?.(); } catch { /* 止められなくてもよい */ } };
   const release = () => { try { releaseCur?.(); } catch { /* なくてよい */ } };
 
+  const emit = (name, detail) => { try { g.dispatchEvent?.(new CustomEvent(name, { detail })); } catch { /* なくてよい */ } };
+
   // Whisper の作り話（聞こえていないのに出る決まり文句）。動画の字幕で学んだため、静かなときに「ご視聴ありがとうございました」などを返す
   // （Whisper の hallucination として広く知られている。openai/whisper Discussions #928 など）。
   // 強い：カンバンに向かって言うことがまず無い文。声が短い（3秒未満）か小さいときは捨てる
@@ -347,11 +349,20 @@
     catch { throw new Error('マイクが許可されていません'); }
     const prob = earVad ? sileroProb() : loudnessProb();
     const t0 = Date.now(), block0 = blocked.total;
-    let said = [];
+    let said = [], ambient = 0;
+    // 声の大きさを画面へ（耳と輪を声に合わせて動かす。B5）。1秒に10回まで。話し始める前の音の大きさは「まわりの音」として返す（B9）
+    let lastLv = 0, quietN = 0, quietSum = 0;
+    const level = (f, voice) => {
+      let q = 0; for (const v of f) q += v * v;
+      const rms = Math.sqrt(q / f.length);
+      if (!voice) { quietN++; quietSum += rms; ambient = quietSum / quietN; }
+      const now = Date.now();
+      if (now - lastLv > 100) { lastLv = now; emit('voice:level', { v: Math.min(1, rms * 8) }); }
+    };
     try {
       const audio = await new Promise((ok, ng) => {
         const pre = [];
-        let talking = false, quiet = 0, done = false, chain = Promise.resolve();
+        let talking = false, quiet = 0, done = false, chain = Promise.resolve(), nodded = false;
         const end = (err) => { if (done) return; done = true; cancelCur = null; releaseCur = null; clearTimeout(t1); clearTimeout(t2); stop(); stream.getTracks().forEach((t) => t.stop()); err ? ng(err) : ok([...pre, ...said]); };
         cancelCur = () => end(new Error('聞き取れませんでした'));
         releaseCur = () => end(talking ? null : new Error('聞き取れませんでした'));
@@ -362,7 +373,8 @@
           chain = chain.then(async () => {
             if (done) return;
             const p = await prob(f);
-            if (p > 0.5) { talking = true; quiet = 0; } else if (talking) quiet += 32;
+            level(f, p > 0.5);
+            if (p > 0.5) { talking = true; quiet = 0; nodded = false; } else if (talking) { quiet += 32; if (quiet >= 320 && !nodded) { nodded = true; emit('voice:nod'); } } // 話の切れ目でうなずく
             if (talking) said.push(f); else { pre.push(f); if (pre.length > 10) pre.shift(); } // 話し始めの手前 0.3 秒も残す
             if ((talking && quiet >= endMs && !hold) || Date.now() - t0 > maxMs) end();
             else if (!talking && Date.now() - t0 > waitMs) end(new Error('聞き取れませんでした'));
@@ -375,7 +387,7 @@
       const heard = { speechMs: said.length * 32, rms: Math.sqrt(sum / Math.max(1, said.length * 512)) };
       const { text } = await call('asr', { audio: all }, [all.buffer]);
       if (!text || phantom(text, heard)) throw new Error('聞き取れませんでした');
-      return { text };
+      return { text, noise: Math.round(ambient * 1000) / 1000 };
     } finally { prob.end?.(); lastListen = { ms: Date.now() - t0, blockedMs: Math.round(blocked.total - block0) }; }
   }
 

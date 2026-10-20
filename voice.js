@@ -164,10 +164,12 @@
 
   // 1回だけ聞き取る。返り値は Promise<{ text }>。端末の中で聞き取れないときは聞かずにエラーにする
   // hold: true なら、release() を呼ぶまで聞き続ける（間があっても切らない）。waitMs は別の耳（Whisper）で話し始めを待つ長さ
-  async function listen({ lang = 'ja-JP', hold = false, waitMs } = {}) {
+  // endMs は別の耳（Whisper）の話し終わりの待ち。phrases は Chrome の音声認識に「出やすい言葉」として渡す（あれば）。
+  // 返り値の via は 'ear'（Whisper）か 'local'（Chrome の端末内の音声認識）
+  async function listen({ lang = 'ja-JP', hold = false, waitMs, endMs, phrases } = {}) {
     letGo = false;
     const st = await localStatus(lang);
-    if (st !== 'available' && earReady()) return ear.listen({ lang, hold, waitMs });
+    if (st !== 'available' && earReady()) return { ...(await ear.listen({ lang, hold, waitMs, endMs })), via: 'ear' };
     if (st === 'downloadable' || st === 'downloading') {
       if (st === 'downloadable') install(lang);
       throw new Error('日本語の聞き取りの部品を端末に入れています。少し待ってからもう一度押してください。');
@@ -177,17 +179,19 @@
       const r = new SR(); rec = r;
       r.lang = lang; r.interimResults = false; r.maxAlternatives = 1; r.continuous = !!hold;
       r.processLocally = true;
+      // 出やすい言葉（Chrome の contextual biasing。試験的な機能なので、無い・失敗するときは何もしない）
+      try { if (phrases?.length && 'phrases' in r && g.SpeechRecognitionPhrase) r.phrases = phrases.slice(0, 50).map((p) => new g.SpeechRecognitionPhrase(p, 3.0)); } catch { /* なくてよい */ }
       let got = false;
       const parts = []; // hold：離すまでに聞き取れた分を全部つなぐ
       r.onresult = (e) => {
-        if (!hold) { got = true; ok({ text: e.results[0][0].transcript }); return; }
+        if (!hold) { got = true; ok({ text: e.results[0][0].transcript, via: 'local' }); return; }
         for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) parts.push(e.results[i][0].transcript);
       };
       r.onerror = (e) => { if (hold && e.error === 'no-speech') return; ng(new Error(e.error === 'not-allowed' ? 'マイクが許可されていません' : e.error === 'no-speech' ? '聞き取れませんでした' : '音声認識のエラー: ' + e.error)); };
       r.onend = () => {
         if (rec === r) rec = null;
         clearTimeout(cap);
-        if (hold && parts.join('').trim()) { got = true; ok({ text: parts.join('').trim() }); }
+        if (hold && parts.join('').trim()) { got = true; ok({ text: parts.join('').trim(), via: 'local' }); }
         if (!got) ng(new Error('聞き取れませんでした'));
       };
       const cap = hold ? setTimeout(() => { try { r.stop(); } catch { /* なくてよい */ } }, 60000) : 0; // 押しっぱなしでも 1 分で区切る

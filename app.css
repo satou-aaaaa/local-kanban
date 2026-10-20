@@ -127,3 +127,32 @@ button,select,summary,a{touch-action:manipulation}
 #talkDlg[data-mood=think] .fx-think circle{animation:ava-bob 1s ease-in-out infinite}
 #talkDlg[data-mood=think] .fx-think circle+circle{animation-delay:.3s}
 @media (prefers-reduced-motion:reduce){#talkDlg[data-mood=think] .fx-think circle{animation:none}}
+/* 口の形（A8。talk.js の vowels と app.js の startMouth）：あ・い・う・え・お・閉じる */
+.ava .v-a,.ava .v-i,.ava .v-u,.ava .v-e,.ava .v-o{display:none}
+#talkDlg.speaking[data-mouth]:not([data-mood=happy]):not([data-mood=surprise]) .mouth{display:none!important;animation:none}
+#talkDlg.speaking[data-mouth=a]:not([data-mood=happy]):not([data-mood=surprise]) .v-a,
+#talkDlg.speaking[data-mouth=i]:not([data-mood=happy]):not([data-mood=surprise]) .v-i,
+#talkDlg.speaking[data-mouth=u]:not([data-mood=happy]):not([data-mood=surprise]) .v-u,
+#talkDlg.speaking[data-mouth=e]:not([data-mood=happy]):not([data-mood=surprise]) .v-e,
+#talkDlg.speaking[data-mouth=o]:not([data-mood=happy]):not([data-mood=surprise]) .v-o,
+#talkDlg.speaking[data-mouth=n]:not([data-mood=happy]):not([data-mood=surprise]) .m-normal{display:inline!important}
+/* 聞いている間：声の大きさ（--lv）で耳と輪が動き、話の切れ目でうなずく（B5） */
+#talkDlg[data-lv][data-mood=listen] .ears{animation:none;transform:rotate(calc(var(--lv,0) * -10deg));transition:transform .1s}
+#talkDlg[data-lv][data-mood=listen] .fx-ring{animation:none;opacity:calc(.25 + var(--lv,0) * .75);transform:scale(calc(.95 + var(--lv,0) * .2));transition:transform .1s,opacity .1s}
+#talkDlg.nod .body{animation:ava-nod .45s ease-in-out}
+@keyframes ava-nod{40%{transform:translateY(4px) rotate(2deg)}}
+/* 隅のポチのしぐさ（A2）と寝る */
+#lkPochi.g-look .eye{animation:lk-look 1.6s ease-in-out}
+@keyframes lk-look{20%,40%{transform:translateX(-3px)}60%,80%{transform:translateX(3px)}}
+#lkPochi.g-yawn .m-normal{display:none}#lkPochi.g-yawn .v-o{display:inline;animation:lk-yawn 1.6s ease-in-out}#lkPochi.g-yawn .lid{animation:none;transform:scaleY(.7)}
+@keyframes lk-yawn{0%,100%{transform:scale(.4)}50%{transform:scale(1.2)}}
+#lkPochi.g-yawn .v-o{transform-box:fill-box;transform-origin:center}
+#lkPochi.g-ears .ears{animation:ava-ears .4s ease-in-out 4}
+#lkPochi.g-stretch .body{animation:lk-stretch 1.6s ease-in-out}
+@keyframes lk-stretch{40%{transform:scale(.94,1.1)}70%{transform:scale(1.04,.96)}}
+#lkPochi.g-tail{animation:lk-tail .4s ease-in-out 4}
+@keyframes lk-tail{25%{transform:rotate(-6deg)}75%{transform:rotate(6deg)}}
+#lkPochi[data-sleep="1"] .lid{animation:none;transform:scaleY(1)}
+#lkPochi[data-sleep="1"]::after{content:'z';position:absolute;right:-2px;top:-8px;font:700 14px/1 sans-serif;color:var(--muted,#888);animation:lk-z 2.4s ease-in-out infinite}
+@keyframes lk-z{0%{opacity:0;transform:translate(0,4px)}50%{opacity:1}100%{opacity:0;transform:translate(6px,-8px)}}
+@media (prefers-reduced-motion:reduce){#lkPochi[class*=g-],#lkPochi .eye,#lkPochi .body,#talkDlg.nod .body{animation:none!important}#lkPochi[data-sleep="1"]::after{animation:none}}
