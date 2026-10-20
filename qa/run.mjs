@@ -6,7 +6,8 @@
 //     - 見本のカードが列に出ない、「済み」「答える」が GitHub への保存（PUT）に届かない、保存の中身が違う
 //     - 鍵（Authorization）を api.github.com 以外に送った
 //     - service worker が動かない、オフラインで開き直すと画面が出ない
-//     - スマホ幅（390px）で列がタブにならない
+//     - スマホ幅（390px）で列がタブにならない、押すところが小さい（44px・リンク 24px 未満）、入力欄の文字が 16px 未満、
+//       カードを直す画面の「保存」がスクロールしないと見えない、左右になぞっても列が変わらない、済みの後に「戻す」が出ない・戻せない
 //     - 声の命令の読み取り（voice.js）が文型どおりにならない、Ctrl+K の命令が保存に届かない、消す前に聞き返さない
 //     - URL（#add=）・共有メニュー（?title=&url=）からカードを足せない
 //     - 端末の中で聞き取れないブラウザ（Edge・Firefox・サーバー版だけの音声認識）で🎤が出る・聞き取りを始める・エラーになる
@@ -545,6 +546,45 @@ try {
   await phone.locator('#tabs button', { hasText: '次にやる' }).click();
   const cur = await phone.$eval('#board .lane.cur', (s) => s.dataset.lane);
   check(cur === 'next', 'タブを押すとその列に切り替わる');
+
+  // 指で押しやすいこと（2026-10-20 スマホ対応。Apple は 44pt、WCAG 2.5.8 は 24px 以上）
+  // 見えているボタン・選ぶ欄は高さ 44px 以上、カードのリンクは 24px 以上。入力欄の文字は 16px 以上（iPhone が勝手に拡大しない）
+  const tiny = await phone.$$eval('header button, header summary, #tabs button, #board button, #board select, #board a, #addBtn', (els) => els
+    .filter((e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden')
+    .map((e) => { const r = e.getBoundingClientRect(); const min = e.tagName === 'A' ? 24 : 44; return r.width < 24 || r.height < min ? `${e.tagName}「${e.textContent.trim().slice(0, 10)}」${Math.round(r.width)}x${Math.round(r.height)}` : null; })
+    .filter(Boolean));
+  check(tiny.length === 0, `スマホ幅で押すところが小さすぎない（${tiny.join('、') || 'なし'}）`);
+  const smallFont = await phone.$$eval('input:not([type=file]):not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea', (els) => els
+    .filter((e) => parseFloat(getComputedStyle(e).fontSize) < 16).map((e) => e.name || e.id || e.tagName));
+  check(smallFont.length === 0, `スマホ幅で入力欄の文字が 16px 以上（小さいもの: ${smallFont.join('、') || 'なし'}）`);
+  // カードを直す画面は、スクロールしなくても「保存」が押せる位置にある
+  await phone.locator('#board .lane.cur [data-act=edit]').first().click();
+  const saveBox = await phone.$eval('#editForm button[value=ok]', (b) => { const r = b.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, h: innerHeight }; });
+  check(saveBox.top >= 0 && saveBox.bottom <= saveBox.h, `スマホ幅でカードを直す画面の「保存」がスクロールせずに見える（${Math.round(saveBox.bottom)} / ${saveBox.h}px）`);
+  await phone.locator('#editForm button[value=cancel]').click();
+  // 左右になぞると隣の列へ。端の列のタブも見える所まで寄る
+  const swipe = (dx) => phone.$eval('#board .lane.cur', (el, dx) => {
+    const o = { pointerType: 'touch', isPrimary: true, pointerId: 7, bubbles: true };
+    el.dispatchEvent(new PointerEvent('pointerdown', { ...o, clientX: 200, clientY: 400 }));
+    el.dispatchEvent(new PointerEvent('pointerup', { ...o, clientX: 200 + dx, clientY: 410 }));
+  }, dx);
+  await swipe(-150);
+  check(await phone.$eval('#board .lane.cur', (s) => s.dataset.lane) === 'wait', '左になぞると次の列（次にやる → 予定待ち）へ');
+  await swipe(150);
+  check(await phone.$eval('#board .lane.cur', (s) => s.dataset.lane) === 'next', '右になぞると前の列へ戻る');
+  await phone.locator('#tabs button', { hasText: 'エージェント' }).click();
+  await swipe(-150);
+  await phone.waitForTimeout(400);
+  const tabSeen = await phone.$eval('#tabs', (n) => { const a = n.getBoundingClientRect(), b = n.querySelector('.on').getBoundingClientRect(); return b.left >= a.left - 1 && b.right <= a.right + 1; });
+  check(tabSeen, '端の列（済み）へ移ると、そのタブが見える所まで寄る');
+  // 済みを押すと「戻す」が出て、押すと元の列へ戻る
+  await phone.locator('#tabs button', { hasText: '今やる' }).click();
+  const firstTitle = await phone.$eval('#board .lane.cur .card .t', (e) => e.textContent);
+  await phone.locator('#board .lane.cur [data-act=done]').first().click();
+  check(await phone.isVisible('#toast'), 'カードを済みにすると「戻す」が出る');
+  await phone.locator('#toastUndo').click();
+  const back = await phone.$$eval('#board .lane.cur .card .t', (els) => els.map((e) => e.textContent));
+  check(back.includes(firstTitle) && !(await phone.isVisible('#toast')), '「戻す」を押すとカードが元の列へ戻り、「戻す」が消える');
 
   // 切り替えボタンは押すと「選ばれている」印（aria-pressed と見た目のクラス）が変わること
   // （2026-10-19 claude.ai のボードで、表示だけ変わって印が変わらない不具合があった。shared-workflows incidents/2026-10-19-board-toggle-state.md）
