@@ -39,6 +39,7 @@
     ai: 'auto', // auto = 端末の中の AI（内蔵 AI か、入れた WebLLM）があれば使う / off = 使わない
     cue: true, // 聞き始め「ポン」・聞き終わり「ポロン」の音と短い振動（音は端末の中で作る。ファイルも通信も無し）
     waitMore: true, // 言いかけ（〜て・〜けど・〜から・えっと）で終わったら、答えずに続きを聞いてつなげる
+    corner: true, // ボードの隅に小さなポチを出す（しゃべらない。済みにすると跳ねる・夜は眠そう・押すと会話）
     followUp: true, // 会話の終わりに一言まとめて覚え、次に開いたとき「昨日の〇〇、どうなった？」から始める
   };
   const settingsOf = (v) => { const s = { ...DEFAULTS, ...(v || {}) }; if (!s.persona || OLD_PERSONA.includes(s.persona)) s.persona = PERSONA.about; return s; };
@@ -103,7 +104,7 @@
   // 動き（まばたき・呼吸・耳・表情・口・演出）は app.css。表情は #talkDlg の data-mood（normal・happy・think・surprise・sad・listen）で切り替える。
   // 口は表情ごとの形を重ねておき、見せる1つを CSS で選ぶ（d: path() の切り替えより多くのブラウザで動く）
   let avaSeq = 0;
-  function avatarSvg(kind, color) {
+  function avatarSvg(kind, color, wear = []) {
     const c = /^#[0-9a-f]{6}$/i.test(color || '') ? color : DEFAULTS.color;
     const id = 'ava' + (++avaSeq);
     const face = kind === 'kaku'
@@ -135,6 +136,7 @@
           <path class="mouth m-think" d="M52 84 Q58 82 68 85"/>
         </g>
       </g>
+      ${wearSvg(wear)}
       <g class="fx-think" fill="#fff" stroke="${c}" stroke-width="2"><circle cx="104" cy="22" r="4"/><circle cx="112" cy="10" r="6"/></g>
       <g class="fx-sweat"><path d="M100 40 q4 8 0 10 q-4 -2 0 -10 Z" fill="#7dd3fc"/></g>
     </svg>`;
@@ -256,6 +258,7 @@
       else if (m.kind === 'habit' && m.text) out.push(m.text);
       else if (m.kind === 'note') out.push(m.text);
       else if (m.kind === 'last' && m.text) out.push(`前回の会話：${m.text}`);
+      else if (m.kind === 'growth') out.push(growthText(m));
     }
     return out.slice(-15);
   }
@@ -320,6 +323,32 @@
     const day = (x) => Math.floor((new Date(x.getFullYear(), x.getMonth(), x.getDate())) / 864e5);
     const diff = day(now) - day(d);
     return diff <= 0 ? 'さっきの' : diff === 1 ? '昨日の' : 'この前の';
+  }
+
+  // ---------- 成長（A4）：一緒に済みにした合計で小物と言葉が増える。サボっても下がらない・しおれない ----------
+  // たまごっち・Finch のように「お世話で育つ」と愛着がわく。ただし「放っておくと弱る」は仕事の道具には重いので、育つだけにする
+  const GROWTH = [
+    { at: 10, wear: 'bow', say: 'ねえ見て、10枚記念にリボンつけたよ！' },
+    { at: 30, wear: 'scarf', say: '一緒に30枚！ スカーフ巻いてみた。似合う？' },
+    { at: 50, wear: 'hat', say: '50枚だよ！ 記念に帽子かぶっちゃった。' },
+    { at: 100, wear: 'star', say: '100枚！ 相棒の星をもらったよ。これからもよろしくね。' },
+  ];
+  function growthOf(total = 0) {
+    const got = GROWTH.filter((x) => total >= x.at);
+    const next = GROWTH.find((x) => total < x.at) || null;
+    return { level: got.length, wear: got.map((x) => x.wear), next: next ? { at: next.at, left: next.at - total } : null };
+  }
+  const buddyDays = (since, now = new Date()) => { const d = Date.parse(since); return isNaN(d) ? 0 : Math.max(1, Math.floor((now - d) / 864e5) + 1); };
+  function growthText(g) { return `一緒に片づけたのは合計${g.total || 0}枚` + (g.since ? `（相棒歴${buddyDays(g.since)}日）` : ''); }
+  // 小物（avatarSvg の上に重ねる）。夜の帽子（nightcap）は時間で付ける
+  function wearSvg(wear) {
+    const w = new Set(wear || []), out = [];
+    if (w.has('scarf')) out.push('<g class="wear w-scarf"><path d="M26 98 Q60 114 94 98 L96 106 Q60 122 24 106 Z" fill="#3b82f6"/><path d="M80 104 l6 14 l-10 -2 Z" fill="#2563eb"/></g>');
+    if (w.has('bow')) out.push('<g class="wear w-bow"><path d="M84 14 l-12 -8 v16 Z M84 14 l12 -8 v16 Z" fill="#ef4444"/><circle cx="84" cy="14" r="4" fill="#b91c1c"/></g>');
+    if (w.has('hat') && !w.has('nightcap')) out.push('<g class="wear w-hat"><ellipse cx="60" cy="20" rx="30" ry="6" fill="#374151"/><rect x="44" y="0" width="32" height="20" rx="4" fill="#374151"/><rect x="44" y="13" width="32" height="5" fill="#f59e0b"/></g>');
+    if (w.has('nightcap')) out.push('<g class="wear w-nightcap"><path d="M30 26 Q56 -6 96 10 Q74 14 88 30 Z" fill="#6366f1"/><circle cx="98" cy="10" r="6" fill="#fff"/></g>');
+    if (w.has('star')) out.push('<g class="wear w-star"><path d="M22 92 l4 8 9 1 -7 6 2 9 -8 -5 -8 5 2 -9 -7 -6 9 -1 Z" fill="#facc15" stroke="#ca8a04" stroke-width="1.5"/></g>');
+    return out.join('');
   }
 
   // 1回ごとの速さ（聞き取り・考え・話し始めの秒数）。会話の中身は入れない。「この端末の診断」で使う（最新 20 回）
@@ -663,7 +692,9 @@
       if (!on) return;
       const q = host.queue();
       const you = nameOf();
-      const hi = pick('greet', PHRASES.greet[partOfDay()]).replace(/[！!]$/, you ? `、${you}！` : '！') + pick('hi', PHRASES.hi, { name: s.name });
+      const news = growthNews();
+      const hi = pick('greet', PHRASES.greet[partOfDay()]).replace(/[！!]$/, you ? `、${you}！` : '！') + (news ? ' ' + news : pick('hi', PHRASES.hi, { name: s.name }));
+      if (news) mood('happy');
       const nowN = host.board().filter((c) => c.lane === 'now').length;
       const back = followUp();
       const first = tidied?.changed ? `${hi} ${tidied.text}` : (back
@@ -815,6 +846,20 @@
       return `${dayWord(last.at)}「${c.title}」、どうなった？` + (mode === 'ai' ? '' : ' 済み？あとで？');
     }
 
+    // 成長の知らせ：新しい小物をもらったら、会話を開いたときに1回だけ言う。100枚からは1日1回「相棒歴〇日」
+    function growthNews() {
+      const gr = mem().find((m) => m.id === 'growth');
+      if (!gr) return '';
+      const lv = growthOf(gr.total).level;
+      if (lv > (gr.shown || 0)) { try { M.put({ ...gr, shown: lv }); } catch { /* 覚えられなくても言う */ } return GROWTH[lv - 1].say; }
+      if (lv >= GROWTH.length && gr.since) {
+        const day = new Date().toDateString();
+        let seen = ''; try { seen = g.localStorage.getItem('lk.buddyDay') || ''; } catch { /* なくてよい */ }
+        if (seen !== day) { try { g.localStorage.setItem('lk.buddyDay', day); } catch { /* なくてよい */ } return `相棒歴${buddyDays(gr.since)}日だね。今日もよろしく！`; }
+      }
+      return '';
+    }
+
     function stop() {
       if (on) { try { saveLast(); } catch { /* 覚えられなくても閉じる */ } }
       on = false; listening = false; gen++; holding = false;
@@ -832,5 +877,5 @@
     return { start, stop, hear, listen, hold, release, get holding() { return holding; }, get on() { return on; }, get speaking() { return speaking; }, get listening() { return listening; }, set settings(v) { s = settingsOf(v); } };
   }
 
-  g.Talk = { metrics, cueLog, PERSONA, settingsOf, unfinished, joinHeard, create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, PHRASES, picker, partOfDay, dueWords, dueShort, BOARD_MAX, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
+  g.Talk = { metrics, cueLog, PERSONA, GROWTH, growthOf, growthText, buddyDays, wearSvg, settingsOf, unfinished, joinHeard, create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, PHRASES, picker, partOfDay, dueWords, dueShort, BOARD_MAX, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
 })(typeof window !== 'undefined' ? window : globalThis);

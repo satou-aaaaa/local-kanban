@@ -808,7 +808,7 @@ try {
   // B1 押している間だけ聞く：🎤を長押しすると離すまで聞き、離したら答える。今までの「押すと聞き続ける」も残す。合図の音は設定で消せる
   {
     const { pg, outside } = await talkPage({ heard: [] }, '長押し');
-    await pg.evaluate(() => localStorage.setItem('lk.talk', JSON.stringify({ ...Talk.DEFAULTS, cue: false })));
+    const keepTalk = await pg.evaluate(() => { const k = localStorage.getItem('lk.talk'); localStorage.setItem('lk.talk', JSON.stringify({ ...JSON.parse(k || '{}'), cue: false })); return k; });
     await pg.click('#talkBtn');
     await pg.waitForFunction(() => /打つか/.test(document.querySelector('#talkState').textContent), null, { timeout: 15000 }).catch(() => {});
     await pg.evaluate(() => { Talk.cueLog.length = 0; window.__heard.length = 0; });
@@ -825,8 +825,50 @@ try {
     check(await pg.evaluate(() => Talk.cueLog.length === 0), '合図の音：設定で切ると鳴らさない');
     const f = await pg.evaluate(() => { const f = document.querySelector('#talkSetForm'); return !!(f.cue && f.waitMore && f.followUp); });
     check(f, 'キャラの設定：合図の音・言いかけ待ち・前回の続きを設定で切りかえられる');
+    await pg.evaluate((k) => (k == null ? localStorage.removeItem('lk.talk') : localStorage.setItem('lk.talk', k)), keepTalk);
     await pg.close();
     check(outside.length === 0, '長押し：自分のサイトと GitHub 以外へ通信していない');
+  }
+
+  // A1 ボードの隅のポチ・A4 下がらない成長
+  {
+    const { pg, outside } = await talkPage({ heard: [] }, '隅のポチ');
+    await pg.waitForSelector('#lkPochi svg', { timeout: 10000 }).catch(() => {});
+    const a = await pg.evaluate(() => { const b = document.querySelector('#lkPochi'); const r = b?.getBoundingClientRect(); return b && { shown: !b.hidden && r.width > 0, label: b.getAttribute('aria-label'), g: LK.memory.all().find((m) => m.id === 'growth') }; });
+    check(a?.shown && /ポチと話す/.test(a.label), 'ボードの隅のポチ：つないだらボードの隅に小さなポチがいる（押すと会話）');
+    const base = await pg.evaluate(() => cards.filter((c) => !c.deleted && c.lane === 'done' && c.owner !== 'agent').length);
+    check(a?.g?.kind === 'growth' && a.g.total >= base && !!a.g.since, `成長：一緒に済みにした合計を覚えたことに置く（${JSON.stringify(a?.g)}）`);
+    const was = await pg.evaluate(() => { const l = cards.find((c) => c.id === 's3').lane; move('s3', 'done'); return l; }); // 今やるの並びを変えない（あとの検査が今やるの1枚目を使う）
+    await pg.waitForFunction(() => document.querySelector('#lkPochi')?.classList.contains('hop'), null, { timeout: 5000 }).catch(() => {});
+    const h = await pg.evaluate(() => ({ hop: document.querySelector('#lkPochi').classList.contains('hop'), total: LK.memory.all().find((m) => m.id === 'growth')?.total, bubble: document.querySelectorAll('#lkPochi ~ .bubble, #lkPochi .bubble').length, spoken: window.__spoken.length }));
+    check(h.hop && h.total === Math.max(a?.g?.total || 0, base + 1), `ボードの隅のポチ：カードを済みにすると跳ね、合計が増える（${JSON.stringify(h)}）`);
+    check(h.spoken === 0 && h.bubble === 0, 'ボードの隅のポチ：しゃべらない・吹き出しを出さない');
+    // 下がらない：済みを戻しても合計は減らない
+    await pg.evaluate((l) => move('s3', l), was);
+    await pg.waitForTimeout(400);
+    check(await pg.evaluate((n) => LK.memory.all().find((m) => m.id === 'growth')?.total === n, h.total), '成長：済みを戻しても合計は下がらない');
+    // 小物：10枚でリボン・30枚でスカーフ・50枚で帽子・100枚で星。夜はナイトキャップ。会話を開いたら1回だけ知らせる
+    const w = await pg.evaluate(async () => {
+      const box = document.createElement('div'); box.innerHTML = Talk.avatarSvg('maru', '#3b82f6', Talk.growthOf(100).wear); document.body.append(box);
+      const parts = ['bow', 'scarf', 'hat', 'star'].filter((k) => box.querySelector('.w-' + k)); box.remove();
+      const store = [{ id: 'growth', kind: 'growth', total: 12, shown: 0, since: '2026-10-01', at: '2026-10-01T00:00:00Z' }], said = [];
+      const mem = { all: () => store, put: (it) => { const k = store.findIndex((i) => i.id === it.id); if (k >= 0) store[k] = it; else store.push(it); return it; }, forget() {}, forgetAll() {} };
+      const mk = () => Talk.create({ settings: { ai: 'off', bargeIn: false, reply: 'text' }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']], memory: mem, board: () => [], queue: () => [], run: () => '', act: () => 'ok', pending: () => false, onLine: (k, x) => { if (k === 'ai') said.push(x); }, onState() {} });
+      for (let i = 0; i < 2; i++) { const t = mk(); await t.start(); t.stop(); }
+      return { parts, said, shown: store[0].shown, lines: Talk.memoryLines(store).join('|') };
+    });
+    check(w.parts.length === 4, `成長：小物（リボン・スカーフ・帽子・星）を描ける（${w.parts.join(',')}）`);
+    check(/リボン/.test(w.said[0]) && !/リボン/.test(w.said[1] || '') && w.shown === 1, `成長：新しい小物は会話を開いたときに1回だけ知らせる（${w.said.join(' / ')}）`);
+    check(/合計12枚/.test(w.lines), '成長：一緒に片づけた合計を AI への指示に入れる');
+    // 設定で消せる
+    const keepTalk = await pg.evaluate(() => { const k = localStorage.getItem('lk.talk'); localStorage.setItem('lk.talk', JSON.stringify({ ...JSON.parse(k || '{}'), corner: false })); return k; });
+    await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
+    check(await pg.evaluate(() => document.querySelector('#talkSetForm').corner.checked === false), 'キャラの設定：ボードの隅のポチを出すかを切りかえられる');
+    await pg.click('#talkSetForm button[value=ok]');
+    check(await pg.evaluate(() => document.querySelector('#lkPochi').hidden), 'ボードの隅のポチ：設定で消せる');
+    await pg.evaluate((k) => (k == null ? localStorage.removeItem('lk.talk') : localStorage.setItem('lk.talk', k)), keepTalk);
+    await pg.close();
+    check(outside.length === 0, '隅のポチ：自分のサイトと GitHub 以外へ通信していない');
   }
 
   // キャラの見た目：どの形にも まばたき・表情の口・演出の部品がある。動きを減らす設定では動かさない

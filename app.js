@@ -86,6 +86,7 @@
     <label class="chk"><input type="checkbox" name="bargeIn"> 話の途中で割り込める（話している間だけマイクの音の大きさを端末の中で見る）</label>
     <label class="chk"><input type="checkbox" name="cue"> 聞き始め「ポン」・聞き終わり「ポロン」の音と短い振動（音は端末の中で作ります）</label>
     <label class="chk"><input type="checkbox" name="waitMore"> 言いかけ（〜て・〜けど・えっと）で終わったら、答えずに続きを待つ</label>
+    <label class="chk"><input type="checkbox" name="corner"> ボードの隅に小さなポチを出す（しゃべりません。済みにすると跳ねる・夜は眠そう・押すと会話）</label>
     <label class="chk"><input type="checkbox" name="followUp"> 前回の続きから話す（終わりに一言まとめて覚え、次に「昨日の〇〇、どうなった？」と聞く）</label>
     <label class="chk"><input type="checkbox" name="ai"> 端末の中の AI（Chrome の内蔵 AI か、下で入れた AI）があれば使う</label>
     <p class="help">声も会話も端末の外に出しません。AI が無い端末では、カードを1枚ずつ読み上げて「済み・あとで・保留・次」で片づけます。キャラの設定は、つないでいればデータのリポジトリにも置き、PC とスマホで同じになります。</p>
@@ -397,7 +398,53 @@
     const d = $('#talkDlg'); if (!d?.open) return;
     d.dataset.sync = '1'; d.classList.add('mouth-open'); clearTimeout(mouthTimer); mouthTimer = setTimeout(() => d.classList.remove('mouth-open'), 140);
   });
-  function drawTalkHead() { const t = talkSettings(); $('#talkAva').innerHTML = Talk.avatarSvg(t.icon, t.color); $('#talkName').textContent = t.name; }
+  function drawTalkHead() { const t = talkSettings(); $('#talkAva').innerHTML = Talk.avatarSvg(t.icon, t.color, wearNow()); $('#talkName').textContent = t.name; }
+
+  // ---------- ボードの隅のポチ（A1）と成長（A4） ----------
+  // 💬を開かなくても会える相棒（Finch の鳥のように、やったことに反応する）。ただし Clippy にならないよう、しゃべらない・吹き出しを出さない・音を出さない。
+  // 済みにすると跳ね、夜は眠そう。押すと会話。設定で消せる。
+  // 成長：一緒に済みにした合計（データの cards.json の済みのカード）で小物が増える。合計は覚えたこと（pochi-memory の growth）に置き、減らさない
+  const growthItem = () => (L.memory ? L.memory.all().find(m => m.id === 'growth') : null);
+  function wearNow() {
+    const g = growthItem(), w = window.Talk ? Talk.growthOf(g?.total || 0).wear : [];
+    if (Talk.partOfDay() === 'night') w.push('nightcap');
+    return w;
+  }
+  let doneSeen = -1, hopTimer = 0;
+  function pochiTick() {
+    if (!window.Talk || !L.memory) return;
+    const n = live().filter(c => c.lane === 'done' && c.owner !== 'agent').length;
+    const g = growthItem();
+    if (!g) L.memory.put({ id: 'growth', kind: 'growth', total: n, since: ymd(), shown: Talk.growthOf(n).level, text: '' });
+    else if (n > (g.total || 0)) L.memory.put({ ...g, total: n });
+    const gg = growthItem(); if (gg) { const t = Talk.growthText(gg); if (gg.text !== t) L.memory.put({ ...gg, text: t }); }
+    if (doneSeen >= 0 && n > doneSeen) hop();
+    doneSeen = n;
+    drawPochi();
+  }
+  function drawPochi() {
+    const t = talkSettings();
+    let b = $('#lkPochi');
+    if (!window.Talk || !L.ready || t.corner === false) { if (b) b.hidden = true; return; }
+    if (!b) {
+      b = document.createElement('button'); b.type = 'button'; b.id = 'lkPochi';
+      b.onclick = () => openTalk('talk');
+      document.body.appendChild(b);
+    }
+    const g = growthItem(), key = [t.icon, t.color, wearNow().join(',')].join('|');
+    if (b.dataset.key !== key) { b.innerHTML = Talk.avatarSvg(t.icon, t.color, wearNow()); b.dataset.key = key; }
+    b.hidden = false;
+    b.dataset.night = Talk.partOfDay() === 'night' ? '1' : '';
+    const next = Talk.growthOf(g?.total || 0).next;
+    b.setAttribute('aria-label', `${t.name}と話す`);
+    b.title = `${t.name}と話す（一緒に片づけたのは${g?.total || 0}枚${next ? `。あと${next.left}枚で次のごほうび` : ''}）`;
+  }
+  function hop() {
+    const b = $('#lkPochi'); if (!b || b.hidden) return;
+    b.classList.remove('hop'); void b.offsetWidth; b.classList.add('hop');
+    clearTimeout(hopTimer); hopTimer = setTimeout(() => b.classList.remove('hop'), 1200);
+  }
+  setInterval(() => { if ($('#lkPochi') && !$('#lkPochi').hidden) drawPochi(); }, 60e3); // 夜になったら眠そうにする
   const order = l => L.LANES.findIndex(([k]) => k === l);
   // via: 'talk'（💬：あいさつしてから聞く）・'voice'（🎤：すぐ聞く）・'text'（Ctrl+K：打つ欄に入る）
   function openTalk(via = 'talk') {
@@ -470,7 +517,7 @@
   function openTalkSet() {
     if (!window.Talk) { setStatus('会話の部品（talk.js）を読めませんでした。開き直してみてください。', 'err'); return; }
     const f = $('#talkSetForm'), t = talkSettings();
-    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.rate.value = t.rate || 1; f.pitch.value = t.pitch || 1.05; f.ai.checked = t.ai !== 'off'; f.reply.value = t.reply || 'match'; f.tidy.checked = t.tidy !== false; f.cue.checked = t.cue !== false; f.waitMore.checked = t.waitMore !== false; f.followUp.checked = t.followUp !== false;
+    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.rate.value = t.rate || 1; f.pitch.value = t.pitch || 1.05; f.ai.checked = t.ai !== 'off'; f.reply.value = t.reply || 'match'; f.tidy.checked = t.tidy !== false; f.cue.checked = t.cue !== false; f.waitMore.checked = t.waitMore !== false; f.followUp.checked = t.followUp !== false; f.corner.checked = t.corner !== false;
     $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{ maru: 'まる', kaku: 'しかく', shizuku: 'しずく' }[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
     const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
     f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
@@ -601,11 +648,11 @@
   $('#talkSetForm').onsubmit = e => {
     if (e.submitter?.value !== 'ok') return;
     const f = e.target;
-    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value, bargeIn: f.bargeIn.checked, reply: f.reply.value, tidy: f.tidy.checked, cue: f.cue.checked, waitMore: f.waitMore.checked, followUp: f.followUp.checked, ai: f.ai.checked ? 'auto' : 'off' };
+    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value, bargeIn: f.bargeIn.checked, reply: f.reply.value, tidy: f.tidy.checked, cue: f.cue.checked, waitMore: f.waitMore.checked, followUp: f.followUp.checked, corner: f.corner.checked, ai: f.ai.checked ? 'auto' : 'off' };
     try { localStorage.setItem('lk.talk', JSON.stringify(t)); } catch {} // localStorage へ直に書くと、PC とスマホで同じになる（shim.js が見ている）
     voicePrefs(t);
     if (talk) talk.settings = t;
-    drawTalkHead();
+    drawTalkHead(); drawPochi();
   };
   // 声の名前・速さ・高さは voice.js が直に読む（ほかのアプリと同じ置き場）
   function voicePrefs(t) {
@@ -767,6 +814,7 @@
     drawNotify();
     window.claude.use('db').then(db => { let first = true; db.collection('cards').onSnapshot(() => {
       scanNotify(L.cards, first && !ls.get('notified')); first = false;
+      try { pochiTick(); } catch {}
       // インストールしたアプリのアイコンに数を出す（Badging API。対応していない端末では何もしない）。
       // ボードに「返事が来た」の印（repliedToYou・ボード版44）があれば、返事が来てまだ開いていないカードの枚数。無い古いボードでは「今やる」の枚数
       const n = typeof window.repliedToYou === 'function'
