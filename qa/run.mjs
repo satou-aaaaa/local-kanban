@@ -3,11 +3,13 @@
 //   ❌ 失敗にするもの:
 //     - manifest の必須項目・アイコンの大きさ、sw.js の SHELL に書いたファイルが無い
 //     - JS のエラー（pageerror / console.error）
+//     - ボードのにせもの（qa/board.fixture.html。LK_BOARD=ファイル で本物のボードの写しでも回せる）がアプリの中で動かない
+//     - 壁紙が出ない（アプリにすると背景が消えた 2026-10-20）、見た目の設定が local-board/settings.json に保存されない・ほかの端末の設定が当たらない
 //     - 見本のカードが列に出ない、「済み」「答える」が GitHub への保存（PUT）に届かない、保存の中身が違う
 //     - 鍵（Authorization）を api.github.com 以外に送った
 //     - service worker が動かない、オフラインで開き直すと画面が出ない
-//     - スマホ幅（390px）で列がタブにならない、押すところが小さい（44px・リンク 24px 未満）、入力欄の文字が 16px 未満、
-//       カードを直す画面の「保存」がスクロールしないと見えない、左右になぞっても列が変わらない、済みの後に「戻す」が出ない・戻せない
+//     - スマホ幅（390px）で横にはみ出す、アプリの押すところが小さい（44px 未満）、入力欄の文字が 16px 未満、
+//       カードの詳細が下から出ない、左右になぞっても列が変わらない、済みの後に「戻す」が出ない・戻せない
 //     - 声の命令の読み取り（voice.js）が文型どおりにならない、Ctrl+K の命令が保存に届かない、消す前に聞き返さない
 //     - URL（#add=）・共有メニュー（?title=&url=）からカードを足せない
 //     - 端末の中で聞き取れないブラウザ（Edge・Firefox・サーバー版だけの音声認識）で🎤が出る・聞き取りを始める・エラーになる
@@ -57,7 +59,15 @@ for (const p of vendorFiles) {
   check(existsSync(resolve(root, p)), `同梱の部品 ${p} がある`);
   check(existsSync(resolve(root, dirname(p), 'LICENSE')), `同梱の部品 ${dirname(p)} に LICENSE がある`);
 }
+for (const f of ['./boot.js', './shim.js', './app.js', './app.css']) check(shell.includes(f), `SHELL に ${f} がある（ボードの画面をオフラインでも組み立てられる）`);
+check(!shell.some((p) => p.includes('bg/')), 'SHELL に壁紙の写真（bg/）を入れていない（選んだ写真だけを取る）');
+// 壁紙：写真と小さい見本（bg/t/）が対になっている
+const { readdirSync } = await import('node:fs');
+const wps = readdirSync(resolve(root, 'bg')).filter((f) => f.endsWith('.jpg'));
+check(wps.length >= 2, `壁紙の写真が bg/ にある（${wps.length} 枚）`);
+for (const w of wps) check(existsSync(resolve(root, 'bg/t', w)), `壁紙 ${w} の小さい見本（bg/t/）がある`);
 const html = readFileSync(resolve(root, 'index.html'), 'utf8');
+check(/<script src="boot\.js"><\/script>/.test(html) && !/class="lane"|id="board"/.test(html), 'index.html はボードを持たず boot.js で組み立てる（ボードの HTML は非公開の置き場から読む）');
 const csp = (html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/) || [])[1] || '';
 const connect = (csp.match(/connect-src ([^;]+)/) || [])[1]?.trim().split(/\s+/) || [];
 // 許すのは、自分のサイト・GitHub の API（カードの保存）・モデルの置き場（Hugging Face と WebLLM のモデル用 wasm の GitHub raw）だけ
@@ -72,7 +82,7 @@ const st = manifest.share_target || {};
 check(st.action === './' && st.method === 'GET' && st.params?.title === 'title' && st.params?.text === 'text' && st.params?.url === 'url', 'manifest の share_target が ./ に GET で title・text・url を渡す');
 
 // ---------- 2. 手元のサーバー（127.0.0.1 だけ） ----------
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.jpg': 'image/jpeg', '.css': 'text/css' };
 // 同梱の AI 部品のにせもの（検査では本物のモデルを取らない。WebGPU も無い）。fakeVendor が true の間だけ出す
 let fakeVendor = false;
 const vendorHits = [];
@@ -124,6 +134,17 @@ const puts = [];
 const leaks = [];
 let offline = false;
 const errors = [];
+// ボード：ふだんはにせもの。LK_BOARD=<ボードの HTML> を付けると本物の写しで回す（データのリポジトリの CI・手元で。公開リポジトリには置かない）
+const BOARD = readFileSync(process.env.LK_BOARD || resolve(root, 'qa/board.fixture.html'), 'utf8');
+check(true, `ボード: ${process.env.LK_BOARD ? '本物の写し（LK_BOARD）' : 'にせもの（qa/board.fixture.html）'}`);
+// ほかの端末で選んだ見た目（壁紙は「谷」）。この端末で開くと当たること
+const files = {
+  'local-board/settings.json': JSON.stringify({ updated: '2026-01-01T00:00:00Z', values: { 'kanban-wp': 'canyon', 'kanban-pal': 'std' }, at: { 'kanban-wp': '2026-01-01T00:00:00Z' } }),
+  'board/today.json': JSON.stringify({ items: [{ title: '見本の予定', start: '2099-01-05T14:30:00+09:00' }] }),
+};
+let cardsText = null; // ほかの端末・Claude が書いたあとの cards.json（null なら見本のまま）
+let conflictOnce = false;
+let failPuts = false; // true のあいだ保存は失敗する（GitHub に届かない） // true にすると、次の cards.json の保存を 1 回だけ「ほかの端末が先に書いた」にする
 
 const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {});
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -135,12 +156,17 @@ await context.route('https://api.github.com/**', async (route) => {
   const req = route.request();
   const path = new URL(req.url()).pathname.replace(/^.*\/contents\//, '');
   if (req.method() === 'GET') {
-    if (path === 'local-board/cards.json') return route.fulfill({ json: { sha: 'sha-cards', content: Buffer.from(sample).toString('base64') } });
+    if (path === 'local-board/cards.json') return route.fulfill({ json: { sha: 'sha-cards', content: Buffer.from(cardsText || sample).toString('base64') } });
     if (path === 'local-board/BOARD.md') return route.fulfill({ json: { sha: 'sha-md', content: Buffer.from('# board\n').toString('base64') } });
+    if (path === 'board/index.html') return route.fulfill({ json: { sha: 'sha-board', content: Buffer.from(BOARD).toString('base64') } });
+    if (files[path] != null) return route.fulfill({ json: { sha: 'sha-' + path, content: Buffer.from(files[path]).toString('base64') } });
     return route.fulfill({ status: 404, json: { message: 'Not Found' } });
   }
   if (req.method() === 'PUT') {
     const body = req.postDataJSON();
+    if (failPuts) return route.fulfill({ status: 503, json: { message: 'unavailable' } });
+    if (conflictOnce && path === 'local-board/cards.json') { conflictOnce = false; return route.fulfill({ status: 409, json: { message: 'conflict' } }); }
+    if (path === 'local-board/settings.json') files[path] = Buffer.from(body.content, 'base64').toString('utf8');
     puts.push({ path, body, text: Buffer.from(body.content, 'base64').toString('utf8') });
     return route.fulfill({ json: { content: { sha: `sha-${puts.length}` } } });
   }
@@ -157,6 +183,7 @@ const page = await context.newPage();
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 page.on('console', (m) => {
   if (m.type() !== 'error') return;
+  if (/status of (409|503)/.test(m.text())) return; // 保存がぶつかった・届かなかったときの検査でわざと返す
   if (offline && /ERR_INTERNET_DISCONNECTED|Failed to fetch|Failed to load resource/.test(m.text())) return;
   errors.push(`console.error: ${m.text()}`);
 });
@@ -169,49 +196,147 @@ const waitCards = async (pred, label) => {
 };
 const lastCards = () => JSON.parse([...puts].reverse().find((p) => p.path === 'local-board/cards.json')?.text || '[]');
 
+const REAL = !!process.env.LK_BOARD;
+const ready = (pg) => pg.waitForFunction(() => window.LK?.ready && document.querySelector('#board .card'), null, { timeout: 15000 });
 try {
   await page.goto(base);
-  await page.waitForSelector('#board:not([hidden]) .card', { timeout: 10000 });
+  await ready(page);
+  // ボードの HTML を非公開の置き場から読み、端末に取っておいて、それを画面にした
+  check(await page.evaluate(() => LKBoot.hasBoard && !!document.getElementById('wall') && typeof move === 'function' && typeof say === 'function'), 'ボードの HTML を読んで端末に取っておき、それを画面にした（壁紙・move・say がある）');
+  check(await page.evaluate(() => document.title) === 'カンバン', '題は「カンバン」');
   const live = SAMPLE.filter((c) => !c.deleted);
-  const shown = await page.$$eval('#board .card .t', (els) => els.map((e) => e.textContent));
-  check(shown.length === live.length, `見本のカード ${live.length} 枚が出た（出たのは ${shown.length} 枚）`);
-  check(!shown.some((t) => t.includes('消したもの')), '消したカードは出ない');
-  for (const [lane, n] of Object.entries(live.reduce((a, c) => ((a[c.lane] = (a[c.lane] || 0) + 1), a), {}))) {
-    const got = await page.$$eval(`#board .lane[data-lane="${lane}"] .card`, (e) => e.length);
-    check(got === n, `列 ${lane} にカード ${n} 枚（${got} 枚）`);
+  const inBoard = await page.evaluate(() => cards.filter((c) => !c.deleted).map((c) => c.id));
+  check(inBoard.length === live.length && live.every((c) => inBoard.includes(c.doc_id)), `ボードに見本のカード ${live.length} 枚が渡った（${inBoard.length} 枚）`);
+  check(!(await page.evaluate(() => cards.some((c) => c.title.includes('消したもの') && !c.deleted))), '消したカードは消したまま');
+  check(await page.$$eval('#board .card', (e) => e.length) > 0, 'カードが画面に出た');
+
+  // ---------- 壁紙と見た目（アプリにすると背景が消えた 2026-10-20） ----------
+  const look = async (pg) => pg.evaluate(() => ({ wp: document.documentElement.classList.contains('wp'), bg: getComputedStyle(document.getElementById('wall')).backgroundImage, shown: getComputedStyle(document.getElementById('wall')).display !== 'none' }));
+  let lk = await look(page);
+  check(lk.wp && lk.shown && /bg\/canyon\.jpg/.test(lk.bg), `ほかの端末で選んだ壁紙（谷）が当たって出た（${lk.bg}）`);
+  const loaded = await page.evaluate(() => new Promise((ok) => { const i = new Image(); i.onload = () => ok(i.naturalWidth > 0); i.onerror = () => ok(false); i.src = 'bg/canyon.jpg'; }));
+  check(loaded, '壁紙の写真（bg/canyon.jpg）を読めた');
+  const wpNames = await page.evaluate(() => (typeof WPS !== 'undefined' ? WPS.map((w) => (Array.isArray(w) ? w[0] : w.id || w.k || w)) : []).filter((n) => typeof n === 'string' && !/^(none|own)$/.test(n)));
+  const noPhoto = wpNames.filter((n) => !existsSync(resolve(root, 'bg', n + '.jpg')) || !existsSync(resolve(root, 'bg/t', n + '.jpg')));
+  check(wpNames.length > 0 && noPhoto.length === 0, `ボードで選べる壁紙の写真がすべて bg/ と bg/t/ にある（${wpNames.length} 枚${noPhoto.length ? '。無いもの: ' + noPhoto.join(', ') : ''}）`);
+
+  if (!REAL) {
+    // 見た目を変えると local-board/settings.json に保存する（スマホでも同じになる）
+    await page.click('#lookBtn');
+    await page.click('#look [data-wp=lake]');
+    const t0 = Date.now();
+    while (!puts.some((p) => p.path === 'local-board/settings.json') && Date.now() - t0 < 8000) await page.waitForTimeout(100);
+    const sp = [...puts].reverse().find((p) => p.path === 'local-board/settings.json');
+    const sv = sp ? JSON.parse(sp.text) : {};
+    check(sv.values?.['kanban-wp'] === 'lake' && !!sv.at?.['kanban-wp'], `見た目を変えると local-board/settings.json に保存した（${sv.values?.['kanban-wp']}）`);
+    check(!/qa-dummy-token|lk\.gh|"token"/.test(sp?.text || ''), '設定の保存に鍵を入れていない');
+    lk = await look(page);
+    check(/bg\/lake\.jpg/.test(lk.bg), 'この端末でもすぐ壁紙が変わった');
+
+    // 「済み」を押す → 保存の中身を確かめる
+    await page.locator('#lane-now .card', { hasText: '見本のカード（今やる）' }).locator('[data-a=done]').click();
+    await waitCards((cs) => cs.some((c) => c.doc_id === 's1' && c.lane === 'done'), '「済み」');
+    const c1 = lastCards().find((c) => c.doc_id === 's1');
+    check(c1?.lane === 'done' && !!c1.done_at, '「済み」にしたカードが lane done・done_at 付きで保存された');
+    check(c1?.moves?.at(-1)?.from === 'now' && c1?.moves?.at(-1)?.to === 'done', '列の移動（moves）が記録された');
+    check(c1?.local_edit === true, 'ローカルで直した印（local_edit）が付いた');
+    check(puts.find((p) => p.path === 'local-board/cards.json')?.body?.sha === 'sha-cards', '読んだときの sha を付けて保存した（上書きの事故を防ぐ）');
+    check(lastCards().some((c) => c.doc_id === 's6' && c.deleted), '消したカードの行は保存でも残る');
+    check(lastCards().every((c) => !('id' in c) && c.doc_id), '保存の形は cards.json のまま（doc_id。ボードの id を混ぜない）');
+    // ボードの「戻す」
+    check(await page.isVisible('#toast-undo'), '済みにすると「戻す」が出る');
+    await page.click('#toast-undo');
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's1')?.lane === 'now', 'ボードの「戻す」');
+
+    // 確認のカードに答える（Claude に届けられないので「local」で残す。Claude が戻ったら届ける）
+    await page.locator('#board .card', { hasText: '見本の確認' }).locator('[data-a=ans][data-i="0"]').click();
+    await waitCards((cs) => cs.some((c) => c.doc_id === 's2' && c.answer), '確認への答え');
+    const c2 = lastCards().find((c) => c.doc_id === 's2');
+    check(c2?.answer === 'はい' && c2?.answer_status === 'local', `答えは answer_status「local」で保存された（${c2?.answer_status}。取り込みで Claude に届ける印）`);
+    check(c2?.lane === 'agent' && c2?.owner === 'agent', '答えたカードはエージェントの番');
+
+    // ボードの「＋ 頼む・足す」で足す
+    await page.click('#compose-btn');
+    await page.fill('#ask', 'QA で足したカード');
+    await page.click('#add');
+    await waitCards((cs) => cs.some((c) => c.title === 'QA で足したカード'), 'カードの追加');
+    const added = lastCards().find((c) => c.title === 'QA で足したカード');
+    check(/^local-/.test(added?.doc_id || '') && !('no' in added), '足したカードは local- の ID で、番号（no）は付けない（Claude が取り込むときに振る）');
+    check(puts.some((p) => p.path === 'local-board/BOARD.md'), 'BOARD.md も保存した');
+
+    // ほかの端末が先に保存していた（409）→ 読み直して、まだ保存していない変更をかけ直す
+    await page.waitForTimeout(1500);
+    conflictOnce = true;
+    await page.evaluate(() => move('s3', 'hold'));
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold', 'ぶつかった保存のかけ直し');
+    await page.waitForFunction(() => /合わせて保存/.test(document.querySelector('#lkStatus').textContent), null, { timeout: 5000 }).catch(() => {});
+    check(!conflictOnce && /合わせて保存/.test(await page.textContent('#lkStatus')), `保存がぶつかったら読み直してかけ直した（${await page.textContent('#lkStatus')}）`);
+    await page.evaluate(() => move('s3', 'next'));
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'next', '元に戻す');
+
+    // 今日の予定（board/today.json）がボードに渡る
+    check(/予定 1 件/.test(await page.textContent('#agenda')), '今日の予定（board/today.json）をボードに渡した');
+
+    // オフラインで直してアプリを閉じても、次に開いたときに保存する（変更を端末に残す）
+    {
+      const pg = await context.newPage();
+      pg.on('pageerror', (e) => errors.push(`pageerror(オフラインで閉じる): ${e.message}`));
+      await pg.goto(base); await ready(pg);
+      failPuts = true;
+      await pg.evaluate(() => move('s3', 'later'));
+      await pg.waitForTimeout(2000);
+      check(await pg.evaluate(() => JSON.parse(localStorage.getItem('lk.pending') || 'null')?.ops?.length > 0), 'オフラインでまだ送れない変更を端末に残した');
+      await pg.close();
+      failPuts = false;
+      const pg2 = await context.newPage();
+      pg2.on('pageerror', (e) => errors.push(`pageerror(開き直し): ${e.message}`));
+      await pg2.goto(base); await ready(pg2);
+      await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'later', '閉じる前に送れなかった変更（開き直したとき）');
+      await pg2.waitForTimeout(500);
+      check(await pg2.evaluate(() => !localStorage.getItem('lk.pending')), '送れたら端末の控えを消した');
+      await pg2.evaluate(() => move('s3', 'next'));
+      await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'next', '元に戻す');
+      await pg2.close();
+    }
+
+    // 知らせ（通知）：確認が来た・satouさんの番に戻った・今日が期限。アプリの中で作り、外へは送らない
+    {
+      const pg = await context.newPage();
+      pg.on('pageerror', (e) => errors.push(`pageerror(知らせ): ${e.message}`));
+      // 通知はにせものに差し替える（CI のヘッドレスのブラウザは通知を許可できないため。見るのは「いつ・何を知らせるか」）
+      await pg.addInitScript(() => {
+        window.__notes = [];
+        const push = (t, o) => window.__notes.push(t + '｜' + o.body);
+        ServiceWorkerRegistration.prototype.showNotification = function (t, o) { push(t, o); return Promise.resolve(); };
+        window.Notification = class { static permission = 'default'; static requestPermission() { this.permission = 'granted'; return Promise.resolve('granted'); } constructor(t, o) { push(t, o); } };
+      });
+      await pg.goto(base); await ready(pg);
+      await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=notify]');
+      check(await pg.evaluate(() => JSON.parse(localStorage.getItem('lk.notify'))) === true && /止める/.test(await pg.textContent('#lkMenu [data-m=notify]')), '「🔔 知らせを受け取る」で通知を許可して入にした');
+      await pg.waitForTimeout(300);
+      check(await pg.evaluate(() => window.__notes.length) === 0, '入にしたときは、今あるカードでいっぺんに鳴らさない');
+      const t = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+      const after = JSON.parse(sample).map((c) => (c.doc_id === 's4' ? { ...c, owner: 'you', lane: 'now', moves: [{ at: '2099-01-01T00:00:00Z', from: 'agent', to: 'now' }] } : c));
+      after.push({ doc_id: 's8', title: '見本の新しい確認', owner: 'you', lane: 'now', decision: { question: '見本の新しい問い', options: [{ label: 'はい', consequence: '' }] } });
+      after.push({ doc_id: 's9', title: '見本の今日が期限', owner: 'you', lane: 'next', due: t });
+      cardsText = JSON.stringify(after);
+      await pg.evaluate(() => LK.reload());
+      await pg.waitForTimeout(500);
+      const notes = await pg.evaluate(() => window.__notes);;
+      check(notes.some((n) => /確認が来ました｜見本の新しい問い/.test(n)), `確認が来たら知らせた（${notes.join(' / ') || 'なし'}）`);
+      check(notes.some((n) => /satouさんの番になりました｜見本のカード（エージェント）/.test(n)), 'エージェントから satouさんの番に戻ったら知らせた');
+      check(notes.some((n) => /今日が期限です｜見本の今日が期限/.test(n)), '今日が期限のカードを知らせた');
+      const n1 = notes.length;
+      await pg.evaluate(() => LK.reload()); await pg.waitForTimeout(300);
+      check(await pg.evaluate(() => window.__notes.length) === n1, '同じことは二度知らせない');
+      cardsText = null;
+      await pg.evaluate(() => { localStorage.setItem('lk.notify', 'false'); localStorage.removeItem('lk.notified'); });
+      await pg.close();
+    }
+
+    // 画面に戻ったら（1分以上たっていたら）読み直す
+    check(/visibilitychange/.test(readFileSync(resolve(root, 'shim.js'), 'utf8')), '画面に戻ったら読み直す仕組みがある');
   }
-
-  // 「済み」を押す → 保存の中身を確かめる
-  await page.locator('#board .lane[data-lane="now"] .card', { hasText: '見本のカード（今やる）' }).locator('[data-act=done]').click();
-  await waitCards((cs) => cs.some((c) => c.doc_id === 's1' && c.lane === 'done'), '「済み」');
-  let c1 = lastCards().find((c) => c.doc_id === 's1');
-  check(c1?.lane === 'done' && !!c1.done_at, '「済み」にしたカードが lane done・done_at 付きで保存された');
-  check(c1?.moves?.at(-1)?.from === 'now' && c1?.moves?.at(-1)?.to === 'done', '列の移動（moves）が記録された');
-  check(c1?.local_edit === true, 'ローカルで直した印（local_edit）が付いた');
-  check(puts[0]?.body?.sha === 'sha-cards', '読んだときの sha を付けて保存した（上書きの事故を防ぐ）');
-  check(lastCards().some((c) => c.doc_id === 's6' && c.deleted), '消したカードの行は保存でも残る');
-
-  // 確認のカードに答える
-  await page.locator('#board .card.ask [data-opt="0"]').click();
-  await waitCards((cs) => cs.some((c) => c.doc_id === 's2' && c.answer), '確認への答え');
-  const c2 = lastCards().find((c) => c.doc_id === 's2');
-  check(c2?.answer === 'はい' && c2?.answer_status === 'local', '答え（answer・answer_status）が保存された');
-  check(c2?.lane === 'agent' && c2?.owner === 'agent' && !!c2?.started_at && c2?.moves?.at(-1)?.to === 'agent', '答えたカードはエージェントの番（lane・owner agent、started_at・moves 付き。claude.ai のボードと同じ）');
-  // 予定待ち（wait）：列があり、予定の日時を出し、期限切れの印を付けない
-  const w = page.locator('#board .lane[data-lane=wait] .card', { hasText: '見本のカード（予定待ち）' });
-  check(await w.count() === 1, '予定待ちの列（wait）にカードが出る');
-  check(/🗓 1\/5 \d\d:30/.test(await w.textContent()), '予定待ちのカードに予定の日時（🗓 1/5 ◯◯:30）を出す');
-  check(await w.locator('.chip.late').count() === 0, '予定待ちのカードは期限切れに数えない');
-
-  // カードを足す
-  await page.click('#addBtn');
-  await page.fill('#addForm [name=title]', 'QA で足したカード');
-  await page.click('#addForm button.primary');
-  await waitCards((cs) => cs.some((c) => c.title === 'QA で足したカード'), 'カードの追加');
-  check(lastCards().some((c) => c.title === 'QA で足したカード' && /^local-/.test(c.doc_id)), '足したカードが local- の ID で保存された');
-
-  check(puts.some((p) => p.path === 'local-board/BOARD.md'), 'BOARD.md も保存した');
-
   // 声の命令の読み取り（voice.js）
   const parsed = await page.evaluate(() => {
     const L = [['now', '今やる', '今'], ['next', '次にやる', '次'], ['later', '時間があるとき', 'あとで'], ['hold', '保留'], ['agent', 'エージェント'], ['done', '済み']];
@@ -233,7 +358,7 @@ try {
   const b4 = puts.length;
   await cmd('見本のカード（エージェント）を消して');
   await page.waitForTimeout(1600);
-  check(puts.length === b4 && /消しますか/.test(await page.textContent('#status')), '「消して」はすぐ消さずに聞き返す');
+  check(puts.length === b4 && /消しますか/.test(await page.textContent('#toast-msg')), '「消して」はすぐ消さずに聞き返す');
   await page.fill('#cmdIn', 'はい'); await page.press('#cmdIn', 'Enter');
   await waitCards((cs) => cs.find((c) => c.doc_id === 's4')?.deleted === true, '聞き返しへの「はい」');
   check(lastCards().find((c) => c.doc_id === 's4')?.deleted === true, '「はい」でカードが消えた（行は残る）');
@@ -258,25 +383,27 @@ try {
   await viaUrl('#add=' + encodeURIComponent('URL で足したカード') + '&lane=now&due=2026-12-01', 'URL（#add=）', (c) => c.title === 'URL で足したカード' && c.lane === 'now' && c.due === '2026-12-01');
   await viaUrl('?title=' + encodeURIComponent('共有された記事') + '&url=' + encodeURIComponent('https://example.com/a'), '共有メニュー（?title=&url=）', (c) => c.title === '共有された記事' && c.link === 'https://example.com/a');
 
-  // 音声認識が無いブラウザ（Edge・Firefox）では🎤を出さず、案内を出す
+  // 音声認識が無いブラウザ（Edge・Firefox）では🎤で案内を出す
   const noVoice = await context.newPage();
   await noVoice.addInitScript(() => { delete window.SpeechRecognition; delete window.webkitSpeechRecognition; });
   noVoice.on('pageerror', (e) => errors.push(`pageerror(音声認識なし): ${e.message}`));
   await noVoice.goto(base);
-  await noVoice.waitForSelector('#board .card', { timeout: 10000 });
-  check(await noVoice.$eval('#micBtn', (b) => b.hidden), '音声認識が無いと🎤ボタンを出さない');
-  check(!(await noVoice.$eval('#voiceHint', (b) => b.hidden)), '音声認識が無いと Win+H・キーボードのマイクの案内を出す');
+  await ready(noVoice);
+  await noVoice.click('#micBtn');
+  check(/使えません/.test(await noVoice.textContent('#vstatus')), `音声認識が無いと🎤で「使えない」と AI の部品の場所を出す（${await noVoice.textContent('#vstatus')}）`);
+  check(/🎤は/.test(await noVoice.textContent('#talkWhy')), '音声認識が無い理由を上に一言出す');
+  check(!(await noVoice.evaluate(() => window.__boardMic)), 'ボードの🎤ではなくアプリの🎤（端末の中の AI の耳も使える）が動いた');
   await noVoice.close();
-  // 端末の中で聞き取れないブラウザ（サーバーへ送る音声認識しか無い）でも🎤を出さない（プライベートな内容を外に出さない）
+  // 端末の中で聞き取れないブラウザ（サーバーへ送る音声認識しか無い）では聞き取りを始めない（プライベートな内容を外に出さない）
   const serverOnly = await context.newPage();
   await serverOnly.addInitScript(() => { class SR { start() { window.__started = true; } } window.webkitSpeechRecognition = SR; delete window.SpeechRecognition; });
   serverOnly.on('pageerror', (e) => errors.push(`pageerror(サーバー版だけ): ${e.message}`));
   await serverOnly.goto(base);
-  await serverOnly.waitForSelector('#board .card', { timeout: 10000 });
+  await ready(serverOnly);
   await serverOnly.waitForTimeout(300);
-  check(await serverOnly.$eval('#micBtn', (b) => b.hidden), 'サーバーに送る音声認識しか無いと🎤ボタンを出さない');
+  await serverOnly.click('#micBtn'); await serverOnly.waitForTimeout(200);
   await serverOnly.keyboard.press('m'); await serverOnly.waitForTimeout(200);
-  check(!(await serverOnly.evaluate(() => window.__started)), 'サーバーに送る音声認識は M キーでも動かさない');
+  check(!(await serverOnly.evaluate(() => window.__started)), 'サーバーに送る音声認識しか無いと、🎤でも M キーでも聞き取りを始めない（声を外に出さない）');
   await serverOnly.close();
 
   // 🎤：音声認識をにせものに差し替えて、聞き取り → 命令 → 読み上げ の流れを確かめる（候補が複数なら番号で選ぶ）
@@ -294,7 +421,7 @@ try {
   });
   const b6 = puts.length;
   await mic.goto(base);
-  await mic.waitForSelector('#board .card', { timeout: 10000 });
+  await ready(mic);
   await mic.click('#micBtn');
   const t6 = Date.now();
   while (!puts.slice(b6).some((p) => p.path === 'local-board/cards.json') && Date.now() - t6 < 12000) await mic.waitForTimeout(100);
@@ -337,7 +464,7 @@ try {
       } else delete window.LanguageModel;
     }, { heard, replies, sr });
     await pg.goto(base);
-    await pg.waitForSelector('#board .card', { timeout: 10000 });
+    await ready(pg);
     return { pg, outside };
   };
   const waitTalkEnd = async (pg) => { const t0 = Date.now(); while (Date.now() - t0 < 15000 && (await pg.evaluate(() => document.querySelector('#talkDlg').open))) await pg.waitForTimeout(100); };
@@ -408,7 +535,7 @@ try {
     const outside = [];
     pg.on('request', (r) => { const h = new URL(r.url()).host; if (!/^127\.0\.0\.1(:\d+)?$/.test(h) && h !== 'api.github.com') outside.push(r.url()); });
     await pg.goto(base);
-    await pg.waitForSelector('#board .card', { timeout: 10000 });
+    await ready(pg);
     const got = await pg.evaluate(async (v) => {
       const out = {};
       try { const m = await import('./' + v.llm); out.llm = ['CreateMLCEngine', 'deleteModelAllInfoInCache'].filter((k) => typeof m[k] === 'function'); } catch (e) { out.llmErr = String(e); }
@@ -447,9 +574,9 @@ try {
       navigator.mediaDevices.getUserMedia = async () => { const ac = new AudioContext(); const o = ac.createOscillator(); const d = ac.createMediaStreamDestination(); o.connect(d); o.start(); return d.stream; };
     });
     await pg.goto(base);
-    await pg.waitForSelector('#board .card', { timeout: 10000 });
-    check(await pg.isHidden('#micBtn'), '端末の中の AI（入れる前）：耳が無いので🎤は出ない');
-    await pg.evaluate(() => openTalkSet());
+    await ready(pg);
+    check(await pg.evaluate(() => !Voice.supported) && /AI の部品/.test(await pg.textContent('#talkWhy')), '端末の中の AI（入れる前）：耳が無いので🎤は使えないと出し、AI の部品の場所を案内する');
+    await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
     check(/約 0\.5GB/.test(await pg.textContent('#aiGet')), `端末の中の AI：入れる前に大きさの目安を出す（${await pg.textContent('#aiGet')}）`);
     check(net.length === 0, '端末の中の AI：ボタンを押す前はモデルを取りに行かない');
     await pg.click('#aiGet');
@@ -460,7 +587,7 @@ try {
     check(net.length > 0 && net.every((x) => isModelHost(x.host) && x.method === 'GET'), `端末の中の AI：取りに行ったのはモデルの置き場だけで、GET だけ（${[...new Set(net.map((x) => x.method + ' ' + x.host))].join(', ')}）`);
     check(!net.some((x) => /%E8%A6%8B%E6%9C%AC|見本/.test(x.url)), '端末の中の AI：モデルを取るときにカードの中身を送っていない');
     check(/入っています/.test(await pg.textContent('#aiStat')) && /huggingface\.co/.test(await pg.textContent('#aiStat')), '端末の中の AI：どこから取ったかを設定画面に出す');
-    check(await pg.isVisible('#micBtn'), '端末の中の AI：Whisper を入れたら🎤が出る');
+    check(await pg.evaluate(() => Voice.supported) && !/🎤は/.test(await pg.textContent('#talkWhy')), '端末の中の AI：Whisper を入れたら🎤が使えるようになる');
     await pg.click('#talkSetForm button[value=cancel]');
     net.length = 0;
     await pg.evaluate(() => {
@@ -481,29 +608,42 @@ try {
     check(req.length >= 1 && req[0].response_format?.type === 'json_object' && req[0].messages[0].content.includes(charName), '会話（入れた AI）：キャラの指示と JSON の形を WebLLM に渡した');
     check(sent.includes('見本のカード（次にやる・毎週）') && !sent.includes('見本の補足'), '会話（入れた AI）：AI に渡すのは題・列・期限だけ（補足は渡さない）');
     check(net.length === 0, `会話（入れた AI）：会話中は外へ通信していない${net.length ? '（' + net.map((x) => x.url).join(', ') + '）' : ''}`);
-    await pg.evaluate(() => openTalkSet());
+    await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
     await pg.click('#aiDel');
     await pg.waitForFunction(() => /消しました/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 10000 }).catch(() => {});
     check(await pg.evaluate(() => !localStorage.getItem('lk.ai') && window.__deleted === 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC'), '端末の中の AI：「入れた AI を消す」でモデルと印を消した');
-    check(await pg.isHidden('#micBtn'), '端末の中の AI：消したら🎤も消える');
+    check(await pg.evaluate(() => !Voice.supported), '端末の中の AI：消したら🎤も使えなくなる');
     await pg.click('#talkSetForm button[value=cancel]');
     await pg.evaluate(() => caches.delete('kanban-vendor'));
     fakeVendor = false;
     await pg.close();
   }
 
-  // service worker とオフライン
+  // ---------- service worker・オフライン・インストールしたアプリ ----------
   const swOk = await page.evaluate(() => navigator.serviceWorker.ready.then((r) => !!r.active)).catch(() => false);
   check(swOk, 'service worker が動いた');
-  const hasManifest = await page.evaluate(() => !!document.querySelector('link[rel=manifest]'));
-  check(hasManifest, 'manifest のリンクが入った');
+  check(await page.evaluate(() => !!document.querySelector('link[rel=manifest]')), 'manifest のリンクが入った（ボードの画面にも）');
+  check(await page.evaluate(() => document.querySelectorAll('meta[http-equiv="Content-Security-Policy"]').length >= 1 && /connect-src 'self' https:\/\/api\.github\.com/.test(document.querySelector('meta[http-equiv="Content-Security-Policy"]').content)), 'ボードの画面にも同じ CSP（外へ通信しない決まり）が入った');
+  // インストールしたアプリが開くページ（manifest の start_url）でも壁紙が出る（2026-10-20 アプリにすると背景が消えた）
+  {
+    const pg = await context.newPage();
+    pg.on('pageerror', (e) => errors.push(`pageerror(アプリ): ${e.message}`));
+    await pg.goto(new URL(manifest.start_url || './', base).href);
+    await ready(pg);
+    const l = await look(pg);
+    check(l.wp && l.shown && /bg\/\w+\.jpg/.test(l.bg), `インストールしたアプリが開くページ（start_url）でも壁紙が出る（${l.bg}）`);
+    await pg.close();
+  }
   await page.waitForTimeout(500);
   offline = true;
   await context.setOffline(true);
   await page.reload();
-  await page.waitForSelector('#status', { timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector('#board .card'), null, { timeout: 15000 }).catch(() => {});
   const offlineCards = await page.$$eval('#board .card', (e) => e.length);
-  check(offlineCards > 0, `オフラインで開き直しても、画面（service worker の保存分）とカードが出た（${offlineCards} 枚）`);
+  check(offlineCards > 0, `オフラインで開き直しても、ボードの画面（端末に取っておいた分）とカードが出た（${offlineCards} 枚）`);
+  const offWp = await look(page);
+  const offImg = await page.evaluate(() => new Promise((ok) => { const m = /url\("?([^")]+)/.exec(getComputedStyle(document.getElementById('wall')).backgroundImage); if (!m) return ok(false); const i = new Image(); i.onload = () => ok(true); i.onerror = () => ok(false); i.src = m[1]; }));
+  check(offWp.wp && offImg, 'オフラインでも壁紙の写真が出る（一度見た写真は端末に取っておく）');
   await context.setOffline(false);
   offline = false;
   mkdirSync(OUT, { recursive: true });
@@ -517,89 +657,75 @@ try {
     pg.on('pageerror', (e) => errors.push(`pageerror(つなぐ前): ${e.message}`));
     await fresh.route(/^https:\/\/(?!127\.0\.0\.1|localhost)/, (route) => route.abort());
     await pg.goto(base);
-    await pg.waitForSelector('#intro:not([hidden])', { timeout: 10000 });
+    await pg.waitForSelector('#lkIntro:not([hidden])', { timeout: 10000 });
     check(await pg.isHidden('#talkBtn'), 'つなぐ前は💬を出さない');
     const why = (await pg.isVisible('#talkWhy')) ? await pg.textContent('#talkWhy') : '';
     check(/つないだあと/.test(why) && /AI の設定/.test(why), `つなぐ前は💬・🎤が出ない理由と AI の設定の場所を一言出す（${why || 'なし'}）`);
-    await pg.click('#menu summary');
-    await pg.locator('#menu [data-m=aiset]').click();
+    await pg.click('#lkMenu summary');
+    await pg.locator('#lkMenu [data-m=aiset]').click();
     await pg.waitForSelector('#talkSet[open]', { timeout: 5000 }).catch(() => {});
     check(await pg.isVisible('#aiGet'), 'つなぐ前の画面から「⋯ → 🎤と会話・AI の設定」で「AI の部品を入れる」ボタンにたどり着ける');
     await pg.keyboard.press('Escape');
-    await pg.locator('#intro [data-m=aiset]').click();
+    await pg.locator('#lkIntro [data-m=aiset]').click();
     check(await pg.isVisible('#aiGet'), 'つなぐ前の最初の画面のボタンからも AI の設定を開ける');
     await fresh.close();
   }
 
-  // スマホ幅：列はタブで1つずつ
+  // ---------- スマホ幅（390px） ----------
   const phone = await context.newPage();
   phone.on('pageerror', (e) => errors.push(`pageerror(スマホ): ${e.message}`));
   await phone.setViewportSize({ width: 390, height: 844 });
   await phone.goto(base);
-  await phone.waitForSelector('#board .card', { timeout: 10000 });
-  const tabs = await phone.$$eval('#tabs button', (e) => e.filter((b) => b.offsetParent !== null).length);
-  check(tabs === 7, `スマホ幅で列のタブが 7 つ出た（${tabs}）`);
-  const visibleLanes = await phone.$$eval('#board .lane', (e) => e.filter((s) => getComputedStyle(s).display !== 'none').length);
-  check(visibleLanes === 1, `スマホ幅で見える列は 1 つ（${visibleLanes}）`);
+  await ready(phone);
+  const pl = await look(phone);
+  check(pl.wp && pl.shown, 'スマホでも壁紙が出る');
   const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   check(overflow <= 1, `スマホ幅で横にはみ出さない（${overflow}px）`);
-  await phone.locator('#tabs button', { hasText: '次にやる' }).click();
-  const cur = await phone.$eval('#board .lane.cur', (s) => s.dataset.lane);
-  check(cur === 'next', 'タブを押すとその列に切り替わる');
-
-  // 指で押しやすいこと（2026-10-20 スマホ対応。Apple は 44pt、WCAG 2.5.8 は 24px 以上）
-  // 見えているボタン・選ぶ欄は高さ 44px 以上、カードのリンクは 24px 以上。入力欄の文字は 16px 以上（iPhone が勝手に拡大しない）
-  const tiny = await phone.$$eval('header button, header summary, #tabs button, #board button, #board select, #board a, #addBtn', (els) => els
+  // アプリが足したところは、指で押しやすい大きさ（Apple は 44pt、WCAG 2.5.8 は 24px 以上）。入力欄の文字は 16px 以上（iPhone が勝手に拡大しない）
+  await phone.click('#lkMenu summary');
+  const tiny = await phone.$$eval('#lkMenu summary, #lkMenu .items button, #talkBtn, #reloadBtn, #micBtn', (els) => els
     .filter((e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden')
-    .map((e) => { const r = e.getBoundingClientRect(); const min = e.tagName === 'A' ? 24 : 44; return r.width < 24 || r.height < min ? `${e.tagName}「${e.textContent.trim().slice(0, 10)}」${Math.round(r.width)}x${Math.round(r.height)}` : null; })
+    .map((e) => { const r = e.getBoundingClientRect(); return r.width < 44 || r.height < 44 ? `${e.id || e.tagName}「${e.textContent.trim().slice(0, 10)}」${Math.round(r.width)}x${Math.round(r.height)}` : null; })
     .filter(Boolean));
-  check(tiny.length === 0, `スマホ幅で押すところが小さすぎない（${tiny.join('、') || 'なし'}）`);
-  const smallFont = await phone.$$eval('input:not([type=file]):not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea', (els) => els
+  check(tiny.length === 0, `スマホ幅でアプリのボタンが小さすぎない（${tiny.join('、') || 'なし'}）`);
+  await phone.click('#lkMenu summary');
+  const smallFont = await phone.$$eval('input:not([type=file]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]), select, textarea', (els) => els
     .filter((e) => parseFloat(getComputedStyle(e).fontSize) < 16).map((e) => e.name || e.id || e.tagName));
   check(smallFont.length === 0, `スマホ幅で入力欄の文字が 16px 以上（小さいもの: ${smallFont.join('、') || 'なし'}）`);
-  // カードを直す画面は、スクロールしなくても「保存」が押せる位置にある
-  await phone.locator('#board .lane.cur [data-act=edit]').first().click();
-  const saveBox = await phone.$eval('#editForm button[value=ok]', (b) => { const r = b.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, h: innerHeight }; });
-  check(saveBox.top >= 0 && saveBox.bottom <= saveBox.h, `スマホ幅でカードを直す画面の「保存」がスクロールせずに見える（${Math.round(saveBox.bottom)} / ${saveBox.h}px）`);
-  await phone.locator('#editForm button[value=cancel]').click();
-  // 左右になぞると隣の列へ。端の列のタブも見える所まで寄る
-  const swipe = (dx) => phone.$eval('#board .lane.cur', (el, dx) => {
+  // カードの詳細は下から出る（親指で届く）
+  await phone.evaluate(() => openDetail(cards.find((c) => !c.deleted).id));
+  const sheet = await phone.$eval('dialog#detail', (d) => { const r = d.getBoundingClientRect(); return { open: d.open, w: r.width, bottom: r.bottom, h: innerHeight }; });
+  check(sheet.open && sheet.w >= 380 && Math.abs(sheet.bottom - sheet.h) <= 2, `スマホ幅でカードの詳細が下から出る（幅 ${Math.round(sheet.w)}・下端 ${Math.round(sheet.bottom)}/${sheet.h}）`);
+  await phone.keyboard.press('Escape');
+  // 左右になぞると隣の列へ
+  const topLane = () => phone.evaluate(() => { const ls = [...document.querySelectorAll('#board .lane')]; const l = ls.find((x) => x.getBoundingClientRect().bottom > 70) || ls.at(-1); return l?.id; });
+  const swipe = (dx) => phone.evaluate((dx) => {
+    const el = document.getElementById('board');
     const o = { pointerType: 'touch', isPrimary: true, pointerId: 7, bubbles: true };
     el.dispatchEvent(new PointerEvent('pointerdown', { ...o, clientX: 200, clientY: 400 }));
     el.dispatchEvent(new PointerEvent('pointerup', { ...o, clientX: 200 + dx, clientY: 410 }));
   }, dx);
-  await swipe(-150);
-  check(await phone.$eval('#board .lane.cur', (s) => s.dataset.lane) === 'wait', '左になぞると次の列（次にやる → 予定待ち）へ');
-  await swipe(150);
-  check(await phone.$eval('#board .lane.cur', (s) => s.dataset.lane) === 'next', '右になぞると前の列へ戻る');
-  await phone.locator('#tabs button', { hasText: 'エージェント' }).click();
-  await swipe(-150);
-  await phone.waitForTimeout(400);
-  const tabSeen = await phone.$eval('#tabs', (n) => { const a = n.getBoundingClientRect(), b = n.querySelector('.on').getBoundingClientRect(); return b.left >= a.left - 1 && b.right <= a.right + 1; });
-  check(tabSeen, '端の列（済み）へ移ると、そのタブが見える所まで寄る');
-  // 済みを押すと「戻す」が出て、押すと元の列へ戻る
-  await phone.locator('#tabs button', { hasText: '今やる' }).click();
-  const firstTitle = await phone.$eval('#board .lane.cur .card .t', (e) => e.textContent);
-  await phone.locator('#board .lane.cur [data-act=done]').first().click();
-  check(await phone.isVisible('#toast'), 'カードを済みにすると「戻す」が出る');
-  await phone.locator('#toastUndo').click();
-  const back = await phone.$$eval('#board .lane.cur .card .t', (els) => els.map((e) => e.textContent));
-  check(back.includes(firstTitle) && !(await phone.isVisible('#toast')), '「戻す」を押すとカードが元の列へ戻り、「戻す」が消える');
+  await phone.evaluate(() => document.getElementById('lane-now').scrollIntoView({ block: 'start' }));
+  const l0 = await topLane();
+  await swipe(-150); await phone.waitForTimeout(600);
+  const l1 = await topLane();
+  check(l0 !== l1, `左になぞると次の列へ（${l0} → ${l1}）`);
+  await swipe(150); await phone.waitForTimeout(600);
+  check(await topLane() === l0, '右になぞると前の列へ戻る');
 
-  // 切り替えボタンは押すと「選ばれている」印（aria-pressed と見た目のクラス）が変わること
+  // 切り替えボタンは押すと「選ばれている」印（aria-pressed と見た目）が変わること
   // （2026-10-19 claude.ai のボードで、表示だけ変わって印が変わらない不具合があった。shared-workflows incidents/2026-10-19-board-toggle-state.md）
-  // 新しい切り替えボタンを足すときも、同じ並びのボタンに aria-pressed を付ければ、ここで全部押して確かめる。
-  const unmarked = await phone.$$eval('button.on', (bs) => bs.filter((b) => !b.hasAttribute('aria-pressed')).length);
-  check(unmarked === 0, `選ばれている見た目のボタンにはすべて aria-pressed がある（無いもの ${unmarked}）`);
-  const groups = await phone.$$eval('[aria-pressed]', (bs) => [...new Set(bs.map((b) => b.parentElement))].map((p) => (p.id ? '#' + p.id : null)).filter(Boolean));
-  check(groups.includes('#tabs'), '列のタブが切り替えボタン（aria-pressed）になっている');
-  for (const g of groups) {
-    const n = await phone.$$eval(`${g} > [aria-pressed]`, (bs) => bs.length);
-    for (let i = 0; i < n; i++) {
-      await phone.locator(`${g} > [aria-pressed]`).nth(i).click();
-      const st = await phone.$$eval(`${g} > [aria-pressed]`, (bs) => bs.map((b) => [b.getAttribute('aria-pressed'), b.classList.contains('on')]));
-      const ok = st.every(([a, on], j) => (j === i ? a === 'true' && on : a === 'false' && !on));
-      check(ok, `${g} の ${i + 1} 番目を押すと、そのボタンだけが選ばれた印になる`);
+  if (!REAL) {
+    await phone.click('#lookBtn');
+    const groups = await phone.$$eval('[aria-pressed]', (bs) => [...new Set(bs.map((b) => b.parentElement))].map((p) => (p.id ? '#' + p.id : null)).filter(Boolean));
+    check(groups.includes('#look'), 'ボードの壁紙えらびが切り替えボタン（aria-pressed）になっている');
+    for (const g of groups) {
+      const n = await phone.$$eval(`${g} > [aria-pressed]`, (bs) => bs.length);
+      for (let i = 0; i < n; i++) {
+        await phone.locator(`${g} > [aria-pressed]`).nth(i).click();
+        const st = await phone.$$eval(`${g} > [aria-pressed]`, (bs) => bs.map((b) => b.getAttribute('aria-pressed')));
+        check(st.every((a, j) => a === String(j === i)), `${g} の ${i + 1} 番目を押すと、そのボタンだけが選ばれた印になる`);
+      }
     }
   }
   await phone.screenshot({ path: resolve(OUT, 'phone.png'), fullPage: true });
