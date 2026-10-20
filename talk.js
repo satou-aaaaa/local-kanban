@@ -605,7 +605,10 @@
         try { text = (await g.Voice.listen()).text; miss = 0; }
         catch (e) {
           if (!on || my !== gen) break;
-          if (/端末の中だけで聞き取れません|部品|マイク/.test(e.message)) { log('sys', e.message + ' 文字を打って話してね。'); listening = false; state('typing'); return; }
+          const msg = String(e?.message || e || '');
+          if (/端末の中だけで聞き取れません|部品|マイク|準備が終わりません/.test(msg)) { log('sys', msg + ' 文字を打って話してね。'); listening = false; state('typing'); return; }
+          // 「聞こえなかった」以外のエラーは黙らずに出す（何が起きたか分からないまま止まらないように）
+          if (!/聞き取れませんでした/.test(msg)) log('sys', '聞き取れなかった：' + msg);
           if (++miss >= 2) break;
           continue; // 聞き取れなかった → もう一度
         }

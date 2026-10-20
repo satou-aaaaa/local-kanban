@@ -205,7 +205,10 @@
   }
 
   // ---------- 耳（Whisper）と割り込み（Silero VAD） ----------
-  let tfLib = null, asr = null, vadModel = null, earLoading = null;
+  let tfLib = null, asr = null, vadModel = null, earLoading = null, earState = '';
+  // 耳の準備の時間切れ。過ぎたら止め、次に開いたときはスレッド1本で読む（スレッドの準備で止まる端末があったため。2026-10-20 Pixel）
+  const EAR_LIMIT = 60000;
+  const ONE_KEY = 'lk.ort1';
   async function transformers() {
     if (tfLib) return tfLib;
     const m = await import(here(VENDOR.tf));
@@ -213,20 +216,35 @@
     m.env.useWasmCache = false;
     const w = m.env.backends?.onnx?.wasm;
     if (w) w.wasmPaths = { mjs: here(VENDOR.ort + '.mjs'), wasm: here(VENDOR.ort + '.wasm') }; // CDN（jsdelivr）から読まない
+    try { if (w && g.localStorage.getItem(ONE_KEY)) w.numThreads = 1; } catch { /* 読めなければふつうに */ }
     tfLib = m;
     return m;
   }
   function loadEar(onProgress) {
     if (asr) return Promise.resolve();
-    return earLoading || (earLoading = (async () => {
+    if (earLoading) return earLoading;
+    earState = 'pending';
+    // 何も進まないまま EAR_LIMIT たったら時間切れ（取ってきている間は進むたびに数え直す。初めて入れるときの大きい取得で切らない）
+    let timer, fail;
+    const late = new Promise((_, ng) => { fail = ng; });
+    const poke = () => { clearTimeout(timer); timer = setTimeout(() => {
+      try { g.localStorage.setItem(ONE_KEY, '1'); } catch { /* 覚えられなくても知らせる */ }
+      fail(new Error('耳（声の聞き取り）の準備が終わりませんでした。アプリを開き直してください（次は別のやり方で読みます）'));
+    }, EAR_LIMIT); };
+    poke();
+    const work = (async () => {
       const m = await transformers();
       // 版を固定する前に入れた端末は、取り直さないよう前と同じ（main）を使う
       const pin = load().pinned !== false;
       const webgpu = (await gpu())?.mode === 'default'; // 互換モードでしか見つからない GPU では wasm（CPU）で聞く
-      const progress_callback = (p) => { if (p?.status === 'progress' && onProgress) onProgress((p.progress || 0) / 100, p.file || ''); };
+      const progress_callback = (p) => { poke(); if (p?.status === 'progress' && onProgress) onProgress((p.progress || 0) / 100, p.file || ''); };
       asr = await m.pipeline('automatic-speech-recognition', EAR.id, { revision: pin ? EAR.revision : 'main', device: webgpu ? 'webgpu' : 'wasm', dtype: webgpu ? { encoder_model: 'fp32', decoder_model_merged: 'q4' } : 'q8', progress_callback });
       try { vadModel = await m.AutoModel.from_pretrained(VAD.id, { revision: pin ? VAD.revision : 'main', config: { model_type: 'custom' }, dtype: 'fp32', progress_callback }); } catch { vadModel = null; }
-    })().catch((e) => { earLoading = null; throw e; }));
+    })();
+    return (earLoading = Promise.race([work, late])
+      .then(() => { earState = 'ok'; })
+      .catch((e) => { earState = 'error'; earLoading = null; throw e; })
+      .finally(() => clearTimeout(timer)));
   }
 
   // Silero VAD を1つ作る（それぞれ自分の状態を持つ）。512 サンプル（16kHz で 32ms）ごとに「声らしさ」0〜1 を返す
@@ -438,7 +456,8 @@
     const a = await gpu().catch(() => null);
     const st = status();
     return { webgpu: a ? a.mode + (a.f16 ? '・f16' : '') : 'なし', isolated: !!g.crossOriginIsolated, threads: g.navigator?.hardwareConcurrency || 0, memoryGB: g.navigator?.deviceMemory || 0,
-      freeGB: await room().then((f) => (f == null ? null : Math.round(f * 10) / 10)), ai: st.llm ? st.llm + (st.cpu ? '（CPU）' : '') : 'なし', ear: st.ear ? EAR.label : 'なし' };
+      freeGB: await room().then((f) => (f == null ? null : Math.round(f * 10) / 10)), ai: st.llm ? st.llm + (st.cpu ? '（CPU）' : '') : 'なし', ear: st.ear ? EAR.label : 'なし',
+      earState: earState || 'まだ', ortThreads: tfLib?.env?.backends?.onnx?.wasm?.numThreads ?? null, ortOne: (() => { try { return !!g.localStorage.getItem(ONE_KEY); } catch { return false; } })() };
   }
   async function remove() {
     const s = load();
@@ -452,7 +471,7 @@
   }
 
   const LocalAI = {
-    MODELS, CPU, JA, CPU_MODELS, brainPick, setBrain, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, safeInstall, present, info, friendly, SAMPLING, KEEP, CTX, BUDGET, recent, userPart, messages, plan, status, install, remove, session, listen, bargeIn,
+    EAR_LIMIT, MODELS, CPU, JA, CPU_MODELS, brainPick, setBrain, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, safeInstall, present, info, friendly, SAMPLING, KEEP, CTX, BUDGET, recent, userPart, messages, plan, status, install, remove, session, listen, bargeIn,
     llmReady: () => !!load().llm,
     earReady: () => !!load().ear,
     prepareEar: () => (load().ear ? loadEar().catch(() => {}) : Promise.resolve()),
