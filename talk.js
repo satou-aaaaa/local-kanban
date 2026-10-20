@@ -37,6 +37,7 @@
     reply: 'match', // match = 声で話しかけたら声でも返し、打ったら文字だけ / voice = いつも声でも / text = いつも文字だけ
     tidy: true, // 話し始めたら、ポチがボードを自分で整理して報告する（host.tidy。「戻す」で戻せる）
     ai: 'auto', // auto = 端末の中の AI（内蔵 AI か、入れた WebLLM）があれば使う / off = 使わない
+    endWait: 'normal', // 話し終わりの待ち時間（Whisper の耳）：normal = 0.7秒 / slow = 1.2秒（間をとって話す人向け）
     cue: true, // 聞き始め「ポン」・聞き終わり「ポロン」の音と短い振動（音は端末の中で作る。ファイルも通信も無し）
     waitMore: true, // 言いかけ（〜て・〜けど・〜から・えっと）で終わったら、答えずに続きを聞いてつなげる
     streak: false, // 「今週は4日片づけたね」と週で数える（1日休んでも切れない）。気持ちに関わるので最初は切
@@ -139,6 +140,11 @@
           <ellipse class="mouth m-surprise" cx="60" cy="84" rx="6" ry="7" fill="#7f1d1d"/>
           <path class="mouth m-sad" d="M50 88 Q60 80 70 88"/>
           <path class="mouth m-think" d="M52 84 Q58 82 68 85"/>
+          <ellipse class="mouth v-a" cx="60" cy="84" rx="8" ry="8" fill="#7f1d1d"/>
+          <ellipse class="mouth v-i" cx="60" cy="83" rx="10" ry="3" fill="#7f1d1d"/>
+          <ellipse class="mouth v-u" cx="60" cy="84" rx="4" ry="4.5" fill="#7f1d1d"/>
+          <ellipse class="mouth v-e" cx="60" cy="83" rx="9" ry="5" fill="#7f1d1d"/>
+          <ellipse class="mouth v-o" cx="60" cy="85" rx="6" ry="7.5" fill="#7f1d1d"/>
         </g>
       </g>
       ${wearSvg(wear)}
@@ -380,6 +386,13 @@
     if (w.has('bow')) out.push('<g class="wear w-bow"><path d="M84 14 l-12 -8 v16 Z M84 14 l12 -8 v16 Z" fill="#ef4444"/><circle cx="84" cy="14" r="4" fill="#b91c1c"/></g>');
     if (w.has('hat') && !w.has('nightcap')) out.push('<g class="wear w-hat"><ellipse cx="60" cy="20" rx="30" ry="6" fill="#374151"/><rect x="44" y="0" width="32" height="20" rx="4" fill="#374151"/><rect x="44" y="13" width="32" height="5" fill="#f59e0b"/></g>');
     if (w.has('nightcap')) out.push('<g class="wear w-nightcap"><path d="M30 26 Q56 -6 96 10 Q74 14 88 30 Z" fill="#6366f1"/><circle cx="98" cy="10" r="6" fill="#fff"/></g>');
+    if (w.has('muffler') && !w.has('scarf')) out.push('<g class="wear w-muffler"><path d="M26 98 Q60 114 94 98 L96 106 Q60 122 24 106 Z" fill="#dc2626"/><path d="M34 104 l-4 14 l10 -2 Z" fill="#b91c1c"/></g>');
+    if (w.has('sakura')) out.push('<g class="wear w-sakura" fill="#f9a8d4">' + [0, 72, 144, 216, 288].map((r) => `<ellipse cx="88" cy="10" rx="4" ry="7" transform="rotate(${r} 88 17)"/>`).join('') + '<circle cx="88" cy="17" r="2.5" fill="#fde047"/></g>');
+    if (w.has('pumpkin')) out.push('<g class="wear w-pumpkin"><ellipse cx="96" cy="104" rx="13" ry="10" fill="#f97316"/><path d="M96 94 v-6" stroke="#15803d" stroke-width="3"/><path d="M90 102 l3 -3 l3 3 M98 102 l3 -3 l3 3 M90 108 q6 4 12 0" stroke="#7c2d12" stroke-width="1.6" fill="none"/></g>');
+    if (w.has('santa')) out.push('<g class="wear w-santa"><path d="M32 22 Q60 -8 94 16 L100 34 Q60 18 28 30 Z" fill="#dc2626"/><rect x="26" y="22" width="70" height="9" rx="4.5" fill="#fff" transform="rotate(-6 60 26)"/><circle cx="100" cy="36" r="6" fill="#fff"/></g>');
+    if (w.has('oni')) out.push('<g class="wear w-oni" fill="#fde047" stroke="#ca8a04" stroke-width="1.5"><path d="M42 20 l4 -16 l6 18 Z"/><path d="M68 22 l6 -18 l4 16 Z"/></g>');
+    if (w.has('kagami')) out.push('<g class="wear w-kagami"><ellipse cx="96" cy="110" rx="12" ry="5" fill="#f8fafc" stroke="#cbd5e1"/><ellipse cx="96" cy="104" rx="9" ry="4.5" fill="#f8fafc" stroke="#cbd5e1"/><circle cx="96" cy="98" r="3.5" fill="#fb923c"/></g>');
+    if (w.has('uchiwa')) out.push('<g class="wear w-uchiwa"><circle cx="98" cy="96" r="11" fill="#38bdf8"/><circle cx="98" cy="96" r="5" fill="#f472b6"/><path d="M98 107 v12" stroke="#a16207" stroke-width="3"/></g>');
     if (w.has('star')) out.push('<g class="wear w-star"><path d="M22 92 l4 8 9 1 -7 6 2 9 -8 -5 -8 5 2 -9 -7 -6 9 -1 Z" fill="#facc15" stroke="#ca8a04" stroke-width="1.5"/></g>');
     return out.join('');
   }
@@ -416,6 +429,67 @@
     const days = new Set(list.filter((c) => c.done_at && new Date(c.done_at) >= monday(now)).map((c) => ymd(new Date(c.done_at))));
     return days.size >= 2 ? `今週は${days.size}日片づけたね。いい調子！` : '';
   }
+
+  // ---------- 聞き取りの手がかり（B7） ----------
+  // Chrome の音声認識には「この言葉が出やすい」と教える仕組み（phrases。端末の中で聞く設定と一緒に使える）がある。
+  // Pixel の Whisper には無いので、聞いた後で、カードの題に近い言葉をその題に直す（少しだけ違うときだけ。4文字以上の題）
+  function lev(a, b) {
+    const m = a.length, n = b.length; let prev = Array.from({ length: n + 1 }, (_, j) => j);
+    for (let i = 1; i <= m; i++) { const cur = [i]; for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = cur; }
+    return prev[n];
+  }
+  function fixTitles(text, titles) {
+    let t = String(text || '');
+    for (const title of [...new Set(titles || [])].filter((x) => x && x.length >= 4 && x.length <= 30).sort((a, b) => b.length - a.length)) {
+      if (t.includes(title)) continue;
+      const L = title.length, max = Math.floor(L / 4);
+      let best = null;
+      for (let len = L - 1; len <= L + 1; len++) for (let i = 0; i + len <= t.length; i++) {
+        const d = lev(t.slice(i, i + len), title);
+        if (d <= max && (!best || d < best.d)) best = { i, len, d };
+      }
+      if (best && best.d > 0) t = t.slice(0, best.i) + title + t.slice(best.i + best.len);
+    }
+    return t;
+  }
+
+  // ---------- 口の形（A8）：読む文のかなから「あ・い・う・え・お・ん（閉じる）」を並べる ----------
+  // VTuber のアバターや Duolingo の Lily のように、口の形を音に合わせると「本当に話している」感じが出る。
+  // 漢字は読みが分からないので、文字の番号から決まった母音を当てる（毎回同じ文なら同じ動き）。記号は閉じる
+  const KANA_V = (() => {
+    const rows = ['あかさたなはまやらわがざだばぱぁゃゎ', 'いきしちにひみりぎじぢびぴぃ', 'うくすつぬふむゆるぐずづぶぷぅゅっゔ', 'えけせてねへめれげぜでべぺぇ', 'おこそとのほもよろをごぞどぼぽぉょ'];
+    const m = {};
+    rows.forEach((r, i) => { for (const ch of r) { m[ch] = 'aiueo'[i]; m[String.fromCharCode(ch.charCodeAt(0) + 0x60)] = 'aiueo'[i]; } });
+    m['ん'] = m['ン'] = 'n';
+    return m;
+  })();
+  function vowels(text) {
+    const out = [];
+    let prev = 'n';
+    for (const ch of String(text || '')) {
+      if (KANA_V[ch]) prev = KANA_V[ch];
+      else if (ch === 'ー' || ch === '〜') { /* のばす：前と同じ */ }
+      else if (/[\p{Script=Han}A-Za-z0-9]/u.test(ch)) prev = 'aiueo'[ch.codePointAt(0) % 5];
+      else prev = 'n';
+      out.push(prev);
+    }
+    return out;
+  }
+
+  // ---------- 季節と行事（A3） ----------
+  // どうぶつの森のように、本体の時計どおりに季節・行事が進むと「今日開く理由」になる。小物とひとことが変わる（その日だけ）
+  function seasonOf(d = new Date()) {
+    const m = d.getMonth() + 1, day = d.getDate(), md2 = m * 100 + day;
+    const ev = md2 >= 101 && md2 <= 107 ? 'newyear' : md2 >= 201 && md2 <= 203 ? 'setsubun' : md2 >= 325 && md2 <= 410 ? 'hanami'
+      : md2 >= 720 && md2 <= 820 ? 'natsu' : md2 >= 1025 && md2 <= 1031 ? 'halloween' : md2 >= 1220 && md2 <= 1225 ? 'xmas' : '';
+    const wear = { newyear: ['kagami'], setsubun: ['oni'], hanami: ['sakura'], natsu: ['uchiwa'], halloween: ['pumpkin'], xmas: ['santa'] }[ev] || [];
+    if (!ev && (m === 12 || m <= 2)) wear.push('muffler');
+    return { event: ev, wear, say: SEASON_SAY[ev] || '' };
+  }
+  const SEASON_SAY = {
+    newyear: 'あけましておめでとう！ 今年もよろしくね。', setsubun: '今日は節分だね。鬼は外、カードも外！', hanami: '桜の季節だね。お花見の前にちょっと片づけよっか。',
+    natsu: '夏祭りの季節だね。かき氷食べたいなあ。', halloween: 'ハッピーハロウィン！ おかしくれないといたずらしちゃうぞ。', xmas: 'メリークリスマス！ ごほうびのケーキが待ってるよ。',
+  };
 
   // 最近言った文（この端末の localStorage。最新 40 個・3日まで）。会話の中身ではなく、決まった言い回しだけ
   function recentStore(key = 'lk.saidRecent', keep = 40, days = 3) {
@@ -513,13 +587,15 @@
     const idle = () => (g.Voice.supported ? 'idle' : 'typing');
 
     // ---------- 口：出来た文から順に話す（前の文が終わるまで次は待つ）。話している途中で声が来たら止める ----------
-    let speech = Promise.resolve(), cut = false, lastOpen = '';
+    let speech = Promise.resolve(), cut = false, lastOpen = '', interrupted = '', noisySaid = false;
     let turnAt = 0, firstAt = 0;
     async function voiceOut(text) {
       if (!on || cut || !text) return;
       if (turnAt && !firstAt) firstAt = performance.now();
       speaking = true; state('speaking');
-      const stopIt = () => { cut = true; g.Voice?.stop ? g.Voice.stop() : g.speechSynthesis?.cancel(); };
+      host.onSpeak?.(text); // 口の形（あいうえお）を合わせるため
+      // 割り込まれたら止まる。続けて何も言われなければ「ごめん、続けるね」と言い直す（B8。物音で止まったままにしない）
+      const stopIt = () => { cut = true; interrupted = text; g.Voice?.stop ? g.Voice.stop() : g.speechSynthesis?.cancel(); };
       if (s.bargeIn && stream) stopVad = g.LocalAI?.bargeIn(stream, stopIt) || vad(stream, stopIt); // Silero VAD が入っていればそれ、無ければ音の大きさ
       // 文をまとめて声の順番待ちに並べる（1文ずつ止めて読むとカタコトに聞こえる）。割り込まれたら cancel で全部止まる
       try { await (g.Voice.speakAll ? g.Voice.speakAll(text) : g.Voice.speak(text)); } catch { /* 話せなくても会話は続ける */ }
@@ -798,7 +874,9 @@
       const nowN = host.board().filter((c) => c.lane === 'now').length;
       const back = followUp();
       if (back) askedFollow = true;
-      const week = weekly() || streakLine();
+      const ss = seasonOf();
+      const seasonLine = ss.say && lsGet('lk.seasonDay') !== ymd() ? (lsSet('lk.seasonDay', ymd()), ss.say) : '';
+      const week = seasonLine || weekly() || streakLine();
       const qMood = !back && !tidied?.changed ? moodQuestion() : '';
       const body = tidied?.changed ? tidied.text : back || qMood || (mode === 'ai'
         ? `今やるは${nowN}枚${q[0] ? `、まずは「${q[0].title}」から？` : '。'}`
@@ -830,11 +908,20 @@
         state('listening');
         await cue('start');
         if (!on || my !== gen) break;
-        let text; const t0 = performance.now();
-        try { text = (await g.Voice.listen()).text; miss = 0; }
+        let text, got; const t0 = performance.now();
+        const resume = interrupted; interrupted = '';
+        try {
+          got = await g.Voice.listen({ endMs: s.endWait === 'slow' ? 1200 : 700, phrases: hints(), ...(resume ? { waitMs: 2500 } : {}) });
+          text = got.text; miss = 0;
+          if (got.via === 'ear') text = fixTitles(text, host.board().map((c) => c.title)); // Whisper は聞いた後でカードの題に寄せる（B7）
+          // まわりがうるさいときは1回だけ一言（B9）
+          if (got.noise > 0.03 && !noisySaid && lsGet('lk.noisyDay') !== ymd()) { noisySaid = true; lsSet('lk.noisyDay', ymd()); log('sys', 'ちょっとにぎやかだね。イヤホンだと聞こえやすいよ。'); }
+        }
         catch (e) {
           if (!on || my !== gen) break;
           const msg = String(e?.message || e || '');
+          // 割り込まれたのに何も言われなかった（物音だった）→ 続きを話す
+          if (resume && /聞き取れませんでした/.test(msg)) { cut = false; await say('ごめん、続けるね。' + resume, true); await speech; continue; }
           if (/端末の中だけで聞き取れません|部品|マイク|準備が終わりません/.test(msg)) { log('sys', msg + ' 文字を打って話してね。'); listening = false; state('typing'); return; }
           // 「聞こえなかった」以外のエラーは黙らずに出す（何が起きたか分からないまま止まらないように）
           if (!/聞き取れませんでした/.test(msg)) log('sys', '聞き取れなかった：' + msg);
@@ -842,6 +929,8 @@
           continue; // 聞き取れなかった → もう一度
         }
         if (!on || my !== gen) break;
+        // 割り込みで「待って」「ストップ」なら、止まったまま待つ
+        if (resume && /^(待って|まって|ストップ|止まって|とまって|静かに|しずかに)[。！!]?$/.test(g.Voice.norm(text))) { log('you', text); log('ai', 'うん、待ってるね。'); continue; }
         // 言いかけ（〜て・〜けど・えっと）なら、答えずにもう一度聞いてつなげる（1回まで。何も来なければそのまま答える）
         if (s.waitMore !== false && unfinished(text, isCommand)) {
           log('sys', `「${text}」…続けてどうぞ`);
@@ -860,6 +949,8 @@
       g.Voice?.cancelListen?.();
     }
     const listen = () => { if (!on) return; if (listening) { pause(); state(idle()); } else { cut = false; loop(); } };
+    // 聞き取りの手がかり：カードの題と、短い答えの言葉（Chrome の phrases に渡す。ほかの耳は使わない）
+    const hints = () => { try { return [...host.board().slice(0, 30).map((c) => c.title), '済み', 'あとで', '保留', '今やる', '次', '終わり']; } catch { return []; } };
     const isCommand = (t) => { try { const c = g.Voice.parse(t, host.laneWords); return !!c && !SKIP.includes(c.type); } catch { return false; } };
 
     // 押している間だけ聞く（🎤の長押し）。離したら聞き終わり。考えながらゆっくり話しても途中で切らない
@@ -1035,5 +1126,5 @@
     return { start, stop, hear, listen, hold, release, get holding() { return holding; }, get on() { return on; }, get speaking() { return speaking; }, get listening() { return listening; }, set settings(v) { s = settingsOf(v); } };
   }
 
-  g.Talk = { metrics, cueLog, recentStore, kindly, quietToday, weeklyText, streakText, PERSONA, GROWTH, growthOf, growthText, buddyDays, wearSvg, settingsOf, unfinished, joinHeard, create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, EXAMPLES_ALL, pickExamples, PHRASES, picker, partOfDay, dueWords, dueShort, BOARD_MAX, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
+  g.Talk = { metrics, cueLog, recentStore, kindly, quietToday, weeklyText, streakText, fixTitles, seasonOf, vowels, PERSONA, GROWTH, growthOf, growthText, buddyDays, wearSvg, settingsOf, unfinished, joinHeard, create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, EXAMPLES_ALL, pickExamples, PHRASES, picker, partOfDay, dueWords, dueShort, BOARD_MAX, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
 })(typeof window !== 'undefined' ? window : globalThis);

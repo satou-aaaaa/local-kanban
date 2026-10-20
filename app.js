@@ -84,6 +84,7 @@
     <label>返事のしかた</label><select name="reply"><option value="match">声で話したら声で、打ったら文字で（おすすめ）</option><option value="voice">打っても声で返す</option><option value="text">いつも文字だけ（声を出さない）</option></select>
     <label class="chk"><input type="checkbox" name="tidy"> 話し始めたら、ポチがボードを自分で整理して報告する（期限すぎを今やるへ・今やるは3枚まで・Claude ができそうなものは Claude へ。「戻す」で戻せる）</label>
     <label class="chk"><input type="checkbox" name="bargeIn"> 話の途中で割り込める（話している間だけマイクの音の大きさを端末の中で見る）</label>
+    <label>話し終わりの待ち時間（入れた AI の耳のとき）</label><select name="endWait"><option value="normal">ふつう（0.7秒）</option><option value="slow">ゆっくり（1.2秒。間をとって話す人向け）</option></select>
     <label class="chk"><input type="checkbox" name="cue"> 聞き始め「ポン」・聞き終わり「ポロン」の音と短い振動（音は端末の中で作ります）</label>
     <label class="chk"><input type="checkbox" name="waitMore"> 言いかけ（〜て・〜けど・えっと）で終わったら、答えずに続きを待つ</label>
     <label class="chk"><input type="checkbox" name="streak"> 「今週は4日片づけたね」と週で数えて言う（1日休んでも途切れません）</label>
@@ -403,6 +404,27 @@
     const d = $('#talkDlg'); if (!d?.open) return;
     d.dataset.sync = '1'; d.classList.add('mouth-open'); clearTimeout(mouthTimer); mouthTimer = setTimeout(() => d.classList.remove('mouth-open'), 140);
   });
+  // 口の形（A8）：読む文のかなから あ・い・う・え・お・閉じる を選び、話す速さに合わせて切り替える。
+  // 区切りの合図が来る声は、その位置に合わせ直す（Pixel の声は合図が来ないことがあるので、時間で進める）
+  let mouthSeq = [], mouthI = 0, mouthT = 0;
+  function startMouth(text) {
+    const d = $('#talkDlg'); if (!d?.open || !window.Talk?.vowels || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    mouthSeq = Talk.vowels(window.Voice?.speechText ? Voice.speechText(text) : text); mouthI = 0;
+    const rate = +(localStorage.getItem('voice.rate') || 1) || 1;
+    clearInterval(mouthT);
+    mouthT = setInterval(() => {
+      if (!d.classList.contains('speaking')) return;
+      if (mouthI >= mouthSeq.length) { stopMouth(); return; }
+      d.dataset.mouth = mouthSeq[mouthI++];
+    }, Math.round(1000 / (7.5 * rate))); // 日本語はおよそ1秒に7〜8拍
+  }
+  function stopMouth() { clearInterval(mouthT); mouthT = 0; const d = $('#talkDlg'); if (d) delete d.dataset.mouth; }
+  L.mouth = { start: startMouth, stop: stopMouth }; // 検査用
+  addEventListener('voice:boundary', e => { if (mouthT && typeof e.detail?.at === 'number') mouthI = Math.min(mouthSeq.length, e.detail.at); });
+  // 聞いている間：声の大きさで耳と輪を動かし、話の切れ目でうなずく（B5。Whisper の耳のとき）
+  addEventListener('voice:level', e => { const d = $('#talkDlg'); if (!d?.open || d.dataset.state !== 'listening') return; d.dataset.lv = '1'; d.style.setProperty('--lv', String(e.detail?.v || 0)); });
+  addEventListener('voice:nod', () => { const d = $('#talkDlg'); if (!d?.open) return; d.classList.remove('nod'); void d.offsetWidth; d.classList.add('nod'); setTimeout(() => d.classList.remove('nod'), 500); });
+
   function drawTalkHead() { const t = talkSettings(); $('#talkAva').innerHTML = Talk.avatarSvg(t.icon, t.color, wearNow()); $('#talkName').textContent = t.name; }
 
   // ---------- ボードの隅のポチ（A1）と成長（A4） ----------
@@ -413,6 +435,7 @@
   function wearNow() {
     const g = growthItem(), w = window.Talk ? Talk.growthOf(g?.total || 0).wear : [];
     if (Talk.partOfDay() === 'night') w.push('nightcap');
+    for (const x of Talk.seasonOf ? Talk.seasonOf().wear : []) w.push(x); // 季節と行事の小物（その日だけ）
     return w;
   }
   let doneSeen = -1, hopTimer = 0;
@@ -450,6 +473,22 @@
     clearTimeout(hopTimer); hopTimer = setTimeout(() => b.classList.remove('hop'), 1200);
   }
   setInterval(() => { if ($('#lkPochi') && !$('#lkPochi').hidden) drawPochi(); }, 60e3); // 夜になったら眠そうにする
+  // 何もしていないときのしぐさ（A2）：きょろきょろ・あくび・耳ふり・伸び・しっぽふり を、順番を決めずに 8〜20 秒ごとにまぜる。
+  // 10 分さわらなければ寝る（さわると起きる）。Duolingo の Lily は動きを組み合わせて「同じ動きのくり返し」に見えないようにしている
+  const GESTURES = ['g-look', 'g-yawn', 'g-ears', 'g-stretch', 'g-tail'];
+  let lastTouch = Date.now(), lastGesture = '';
+  const wake = () => { lastTouch = Date.now(); const b = $('#lkPochi'); if (b?.dataset.sleep) { b.dataset.sleep = ''; } };
+  addEventListener('pointerdown', wake, { passive: true }); addEventListener('keydown', wake);
+  function idleTick() {
+    const b = $('#lkPochi');
+    if (!b || b.hidden || document.hidden || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (Date.now() - lastTouch > 10 * 60e3) { b.dataset.sleep = '1'; return; }
+    const g = GESTURES.filter(x => x !== lastGesture)[Math.floor(Math.random() * (GESTURES.length - 1))];
+    lastGesture = g; b.classList.add(g); setTimeout(() => b.classList.remove(g), 1600);
+    return g;
+  }
+  (function idle() { setTimeout(idle, 8000 + Math.random() * 12000); idleTick(); })();
+  L.pochiIdle = { GESTURES, tick: idleTick, sleepNow: () => { lastTouch = 0; } }; // 検査用
   const order = l => L.LANES.findIndex(([k]) => k === l);
   // via: 'talk'（💬：あいさつしてから聞く）・'voice'（🎤：すぐ聞く）・'text'（Ctrl+K：打つ欄に入る）
   function openTalk(via = 'talk') {
@@ -479,11 +518,14 @@
       onState: st => {
         $('#talkState').textContent = st === 'listening' && talk?.holding ? '聞いてるよ（離したら答えるね）' : TALK_STATE[st] ?? ''; $('#talkDlg').classList.toggle('speaking', st === 'speaking');
         $('#talkDlg').dataset.state = st;
+        if (st !== 'speaking') stopMouth();
+        if (st !== 'listening') delete $('#talkDlg').dataset.lv;
         const m = $('#talkMic'); if (m) { const on = st === 'listening' || !!talk?.listening; m.setAttribute('aria-pressed', String(on)); m.classList.toggle('on', on); m.hidden = !window.Voice?.supported; }
         if (st === 'listening') setMood('listen', 0); else if (st === 'thinking') setMood('think', 0); else if (st !== 'speaking' && !moodTimer) setMood('normal', 0);
         if (st === 'off' && $('#talkDlg').open) $('#talkDlg').close();
       },
       onMood: m => setMood(m),
+      onSpeak: text => startMouth(text),
       onMode: (m, brain, why) => {
         $('#talkMode').textContent = m === 'ai'
           ? '🧠 AI と話しています（' + (brain === 'cpu' ? '入れた AI・CPU で動かしています（ゆっくり）' : brain === 'webllm' ? '入れた WebLLM' : 'Chrome の内蔵 AI') + '・端末の中だけ）'
@@ -523,7 +565,7 @@
   function openTalkSet() {
     if (!window.Talk) { setStatus('会話の部品（talk.js）を読めませんでした。開き直してみてください。', 'err'); return; }
     const f = $('#talkSetForm'), t = talkSettings();
-    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.rate.value = t.rate || 1; f.pitch.value = t.pitch || 1.05; f.ai.checked = t.ai !== 'off'; f.reply.value = t.reply || 'match'; f.tidy.checked = t.tidy !== false; f.cue.checked = t.cue !== false; f.waitMore.checked = t.waitMore !== false; f.followUp.checked = t.followUp !== false; f.corner.checked = t.corner !== false; f.streak.checked = !!t.streak; f.moodAsk.checked = !!t.moodAsk;
+    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.rate.value = t.rate || 1; f.pitch.value = t.pitch || 1.05; f.ai.checked = t.ai !== 'off'; f.reply.value = t.reply || 'match'; f.tidy.checked = t.tidy !== false; f.cue.checked = t.cue !== false; f.waitMore.checked = t.waitMore !== false; f.followUp.checked = t.followUp !== false; f.corner.checked = t.corner !== false; f.streak.checked = !!t.streak; f.moodAsk.checked = !!t.moodAsk; f.endWait.value = t.endWait === 'slow' ? 'slow' : 'normal';
     $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{ maru: 'まる', kaku: 'しかく', shizuku: 'しずく' }[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
     const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
     f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
@@ -654,7 +696,7 @@
   $('#talkSetForm').onsubmit = e => {
     if (e.submitter?.value !== 'ok') return;
     const f = e.target;
-    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value, bargeIn: f.bargeIn.checked, reply: f.reply.value, tidy: f.tidy.checked, cue: f.cue.checked, waitMore: f.waitMore.checked, followUp: f.followUp.checked, corner: f.corner.checked, streak: f.streak.checked, moodAsk: f.moodAsk.checked, ai: f.ai.checked ? 'auto' : 'off' };
+    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value, bargeIn: f.bargeIn.checked, reply: f.reply.value, tidy: f.tidy.checked, cue: f.cue.checked, waitMore: f.waitMore.checked, followUp: f.followUp.checked, corner: f.corner.checked, streak: f.streak.checked, moodAsk: f.moodAsk.checked, endWait: f.endWait.value, ai: f.ai.checked ? 'auto' : 'off' };
     try { localStorage.setItem('lk.talk', JSON.stringify(t)); } catch {} // localStorage へ直に書くと、PC とスマホで同じになる（shim.js が見ている）
     voicePrefs(t);
     if (talk) talk.settings = t;
@@ -798,10 +840,12 @@
   function noteKeys(c) {
     if (c.deleted || c.lane === 'done') return [];
     const k = [];
-    if (c.decision && !c.answer && c.owner !== 'agent') k.push(['ask:' + c.doc_id, '確認が来ました', c.decision.question || c.title]);
+    // 知らせの文はポチの言葉で、何が起きたかを具体的に短く（C5。Apple の手引き）。鳴らす回数は前と同じ
+    const p = (talkSettings().name || 'ポチ') + '：';
+    if (c.decision && !c.answer && c.owner !== 'agent') k.push(['ask:' + c.doc_id, p + '確認が来てるよ', c.decision.question || c.title]);
     const back = (c.moves || []).at(-1);
-    if (c.owner !== 'agent' && back && back.from === 'agent') k.push(['back:' + c.doc_id + ':' + back.at, 'satouさんの番になりました', c.title]);
-    if (c.due && c.due <= today() && c.lane !== 'wait') k.push(['due:' + c.doc_id + ':' + today(), c.due < today() ? '期限を過ぎています' : '今日が期限です', c.title]);
+    if (c.owner !== 'agent' && back && back.from === 'agent') k.push(['back:' + c.doc_id + ':' + back.at, p + 'satouさんの番だよ', c.title]);
+    if (c.due && c.due <= today() && c.lane !== 'wait') k.push(['due:' + c.doc_id + ':' + today(), p + (c.due < today() ? '期限すぎちゃってるよ' : '今日までだよ！'), c.title]);
     return k;
   }
   // 初めては今あるものを「知らせ済み」にするだけ（いっぺんに鳴らさない。期限だけは知らせる）

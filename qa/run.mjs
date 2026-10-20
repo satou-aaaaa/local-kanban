@@ -377,9 +377,9 @@ try {
       await pg.evaluate(() => LK.reload());
       await pg.waitForTimeout(500);
       const notes = await pg.evaluate(() => window.__notes);;
-      check(notes.some((n) => /確認が来ました｜見本の新しい問い/.test(n)), `確認が来たら知らせた（${notes.join(' / ') || 'なし'}）`);
-      check(notes.some((n) => /satouさんの番になりました｜見本のカード（エージェント）/.test(n)), 'エージェントから satouさんの番に戻ったら知らせた');
-      check(notes.some((n) => /今日が期限です｜見本の今日が期限/.test(n)), '今日が期限のカードを知らせた');
+      check(notes.some((n) => /ポチ：確認が来てるよ｜見本の新しい問い/.test(n)), `確認が来たら知らせた（${notes.join(' / ') || 'なし'}）`);
+      check(notes.some((n) => /ポチ：satouさんの番だよ｜見本のカード（エージェント）/.test(n)), 'エージェントから satouさんの番に戻ったら知らせた');
+      check(notes.some((n) => /ポチ：今日までだよ！｜見本の今日が期限/.test(n)), '今日が期限のカードを、ポチの言葉で知らせた');
       const n1 = notes.length;
       await pg.evaluate(() => LK.reload()); await pg.waitForTimeout(300);
       check(await pg.evaluate(() => window.__notes.length) === n1, '同じことは二度知らせない');
@@ -957,6 +957,82 @@ try {
     check(f, 'キャラの設定：週の連続・今日の調子を設定で入れられる');
     await pg.close();
     check(outside.length === 0, '会話の改善：自分のサイトと GitHub 以外へ通信していない');
+  }
+
+  // 声と見た目の改善（2026-10-21 の案の残り）：しぐさ・季節・口の形・待ち時間・声に合わせた耳・題で聞き直し・割り込みの一時停止・うるさいときの一言
+  {
+    const { pg, outside } = await talkPage({ heard: [] }, '声と見た目');
+    await pg.waitForSelector('#lkPochi svg', { timeout: 10000 }).catch(() => {});
+    const r = await pg.evaluate(async () => {
+      const out = {}, T = Talk;
+      // A8 口の形
+      out.vowels = T.vowels('おはよう、ポチだよ').join('');
+      const d = document.querySelector('#talkDlg'); document.querySelector('#talkAva').innerHTML = T.avatarSvg('maru', '#f59e0b'); d.showModal(); d.classList.add('speaking'); d.dataset.mood = 'normal';
+      LK.mouth.start('あいうえお');
+      await new Promise((ok) => setTimeout(ok, 450));
+      const m = d.dataset.mouth, shown = [...d.querySelectorAll('#talkAva .mouth')].filter((x) => getComputedStyle(x).display !== 'none').map((x) => x.getAttribute('class'));
+      out.mouth = { m, shown };
+      // B5 声の大きさで耳と輪・うなずき
+      d.dataset.state = 'listening'; d.dataset.mood = 'listen';
+      dispatchEvent(new CustomEvent('voice:level', { detail: { v: 0.8 } })); dispatchEvent(new CustomEvent('voice:nod'));
+      out.level = { lv: d.dataset.lv, v: d.style.getPropertyValue('--lv'), nod: d.classList.contains('nod') };
+      LK.mouth.stop(); d.classList.remove('speaking'); d.close();
+      // A3 季節と行事
+      const days = [[2026, 0, 2], [2026, 1, 2], [2026, 3, 1], [2026, 7, 1], [2026, 9, 31], [2026, 11, 24], [2026, 0, 20], [2026, 5, 10]];
+      out.season = days.map(([y, mo, da]) => { const x = T.seasonOf(new Date(y, mo, da)); return (x.event || '-') + ':' + x.wear.join('+'); });
+      const box = document.createElement('div'); box.innerHTML = T.avatarSvg('maru', '#3b82f6', ['muffler', 'sakura', 'pumpkin', 'santa', 'oni', 'kagami', 'uchiwa']); document.body.append(box);
+      out.seasonWear = ['muffler', 'sakura', 'pumpkin', 'santa', 'oni', 'kagami', 'uchiwa'].filter((k) => box.querySelector('.w-' + k)).length; box.remove();
+      out.seasonSay = days.map(([y, mo, da]) => T.seasonOf(new Date(y, mo, da)).say).filter((x) => x && T.PERSONA.neverRe.test(x));
+      // B7 題に寄せる
+      out.fix = [T.fixTitles('牛乳を買たを済み', ['牛乳を買った']), T.fixTitles('今日はいい天気', ['今日の天気予報']), T.fixTitles('牛乳を済み', ['牛乳'])];
+      // A2 しぐさと寝る
+      const g = LK.pochiIdle.tick(), b = document.querySelector('#lkPochi');
+      out.gesture = { g, on: b.classList.contains(g) };
+      LK.pochiIdle.sleepNow(); LK.pochiIdle.tick(); out.sleep = b.dataset.sleep;
+      document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); out.awake = !b.dataset.sleep;
+      // 耳の呼び方（待ち時間・手がかり）・うるさいとき・割り込みの一時停止を、にせものの耳と口で試す
+      const V = window.Voice, keep = { listen: V.listen, speakAll: V.speakAll, stop: V.stop, bi: LocalAI.bargeIn, gum: navigator.mediaDevices.getUserMedia };
+      const calls = [], logs = [];
+      let script = [];
+      V.listen = (o) => { calls.push(o); const x = script.shift(); return x instanceof Error ? Promise.reject(x) : x ? Promise.resolve(x) : Promise.reject(new Error('聞き取れませんでした')); };
+      V.speakAll = () => new Promise((ok) => setTimeout(ok, 200));
+      V.stop = () => {};
+      navigator.mediaDevices.getUserMedia = async () => new MediaStream();
+      let barge = 0;
+      LocalAI.bargeIn = (st, cb) => { if (barge-- > 0) setTimeout(cb, 30); return () => {}; };
+      const mk = (settings) => T.create({ settings: { ai: 'off', reply: 'voice', tidy: false, cue: false, followUp: false, bargeIn: true, ...settings }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']],
+        board: () => [{ title: '牛乳を買った', lane: 'now' }], queue: () => [{ title: '牛乳を買った', lane: 'now' }], weekDone: () => [],
+        run: (x) => '「牛乳を買った」は今やるです。', act: () => 'ok', pending: () => false, onLine: (k, x) => logs.push(k + ':' + x), onState() {} });
+      const done = (t) => new Promise((ok) => { const i = setInterval(() => { if (!t.on || !t.listening) { clearInterval(i); ok(); } }, 50); setTimeout(() => { clearInterval(i); ok(); }, 6000); });
+      localStorage.removeItem('lk.noisyDay');
+      // 待ち時間（ゆっくり）・手がかり・うるさいとき・題に寄せる（Whisper のときだけ）
+      script = [{ text: '牛乳を買たを読んで', via: 'ear', noise: 0.1 }];
+      let t = mk({ endWait: 'slow' }); await t.start('voice'); await done(t); t.stop();
+      out.ear = { endMs: calls[0]?.endMs, hint: (calls[0]?.phrases || []).includes('牛乳を買った'), noisy: logs.filter((x) => /にぎやか/.test(x)).length, fixed: logs.some((x) => x === 'you:牛乳を買ったを読んで') };
+      // 割り込まれて何も言われなければ「ごめん、続けるね」と言い直す。「待って」なら止まったまま
+      logs.length = 0; calls.length = 0; barge = 1;
+      script = [{ text: 'なんかいい天気', via: 'local' }];
+      t = mk({}); await t.start('voice'); await done(t); t.stop();
+      out.resume = logs.some((x) => /ごめん、続けるね/.test(x)) && calls[1]?.waitMs === 2500;
+      logs.length = 0; barge = 1;
+      script = [{ text: 'なんかいい天気', via: 'local' }, { text: '待って', via: 'local' }];
+      t = mk({}); await t.start('voice'); await done(t); t.stop();
+      out.wait = logs.some((x) => /待ってるね/.test(x)) && !logs.some((x) => /ごめん、続けるね/.test(x));
+      Object.assign(V, { listen: keep.listen, speakAll: keep.speakAll, stop: keep.stop }); LocalAI.bargeIn = keep.bi; navigator.mediaDevices.getUserMedia = keep.gum;
+      return out;
+    });
+    check(r.vowels === 'oaounoiao', `口の形：読む文のかなから あいうえお・閉じる を並べる（${r.vowels}）`);
+    check(/^[aiueo]$/.test(r.mouth.m || '') && r.mouth.shown.length === 1 && /v-[aiueo]/.test(r.mouth.shown[0]), `口の形：話している間、母音の口を1つだけ見せる（${JSON.stringify(r.mouth)}）`);
+    check(r.level.lv === '1' && r.level.v === '0.8' && r.level.nod, `聞いている間：声の大きさで耳と輪を動かし、話の切れ目でうなずく（${JSON.stringify(r.level)}）`);
+    check(r.season.join(',') === 'newyear:kagami,setsubun:oni,hanami:sakura,natsu:uchiwa,halloween:pumpkin,xmas:santa,-:muffler,-:' && r.seasonWear === 7 && r.seasonSay.length === 0, `季節と行事：その日だけ小物とひとことが変わる（${r.season.join(',')}・小物 ${r.seasonWear}）`);
+    check(r.fix[0] === '牛乳を買ったを済み' && r.fix[1] === '今日はいい天気' && r.fix[2] === '牛乳を済み', `聞き取りの手がかり：Whisper の聞き違いをカードの題に寄せる（少しだけ違うときだけ）（${r.fix.join(' / ')}）`);
+    check(r.gesture.on && r.sleep === '1' && r.awake, `しぐさ：何もしていないときにしぐさをまぜ、長く放っておくと寝て、さわると起きる（${r.gesture.g}）`);
+    check(r.ear.endMs === 1200 && r.ear.hint && r.ear.noisy === 1 && r.ear.fixed, `耳：待ち時間「ゆっくり」は1.2秒、カードの題を手がかりに渡し、うるさいときは1回だけ一言、Whisper の聞き違いは題に寄せる（${JSON.stringify(r.ear)}）`);
+    check(r.resume, '割り込み：物音で止まって何も言われなければ「ごめん、続けるね」と続きを話す');
+    check(r.wait, '割り込み：「待って」と言われたら止まったまま待つ');
+    check(await pg.evaluate(() => !!document.querySelector('#talkSetForm').endWait), 'キャラの設定：話し終わりの待ち時間を選べる');
+    await pg.close();
+    check(outside.length === 0, '声と見た目：自分のサイトと GitHub 以外へ通信していない');
   }
 
   // キャラの見た目：どの形にも まばたき・表情の口・演出の部品がある。動きを減らす設定では動かさない
