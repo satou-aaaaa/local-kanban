@@ -619,7 +619,7 @@ try {
     const phr = await pg.evaluate(() => Talk.PHRASES.done);
     check(phr.some((p) => spoken.includes(p)), '会話（AI なし）：「済み」でほめた');
     const moods = await pg.evaluate(() => ({ m: window.__moods, c: window.__confetti }));
-    check(moods.m.includes('happy') && moods.m.includes('listen') && moods.c > 0, `キャラの見た目：聞くときは耳を動かし、済みにしたら笑顔と紙吹雪（${[...new Set(moods.m)].join(',')}・紙吹雪 ${moods.c}）`);
+    check(moods.m.includes('happy') && moods.m.includes('listen') && moods.c === 0, `キャラの見た目：聞くときは耳を動かし、1枚済みにしたら笑顔だけ（紙吹雪は区切りの枚数のとき）（${[...new Set(moods.m)].join(',')}・紙吹雪 ${moods.c}）`);
     check(await pg.evaluate(() => document.querySelector('#talkDlg').dataset.sync === '1' && window.__boundaries.includes(2)), '会話：読み上げの言葉の区切りで口を合わせた');
     await waitCards((cs) => cs.find((c) => c.doc_id === 's1')?.lane === 'done' && cs.find((c) => c.doc_id === 's2')?.lane === 'later', '会話（AI なし）の「済み」「あとで」');
     check(!(await pg.evaluate(() => document.querySelector('#talkDlg').open)), '会話（AI なし）：「終わり」で閉じた');
@@ -752,7 +752,7 @@ try {
     const per = await pg.evaluate(() => {
       const P = Talk.PERSONA, all = [];
       for (const v of Object.values(Talk.PHRASES)) for (const x of Array.isArray(v) ? v : Object.values(v).flat()) all.push(x);
-      for (const [, a] of Talk.EXAMPLES) all.push(JSON.parse(a).say);
+      for (const [, a] of Talk.EXAMPLES_ALL) all.push(JSON.parse(a).say);
       const bad = all.filter((x) => P.neverRe.test(x));
       const sys = Talk.systemPrompt(Talk.settingsOf({}), { now: '今やる' });
       const old = Talk.settingsOf({ persona: '気さくな相棒。タメ口で、明るく短く話す。「今日どれからやる？」と一緒に進める友達のように。できたらちゃんとほめる。説教はしない。' }).persona;
@@ -869,6 +869,94 @@ try {
     await pg.evaluate((k) => (k == null ? localStorage.removeItem('lk.talk') : localStorage.setItem('lk.talk', k)), keepTalk);
     await pg.close();
     check(outside.length === 0, '隅のポチ：自分のサイトと GitHub 以外へ通信していない');
+  }
+
+  // 会話の改善（2026-10-21 の案の残り）：見本20個・雑談の決まり・困ったときの言葉・喜び方の大小・「今日は静かにして」・断られた提案・週のふりかえり・連続と調子（設定で入れたときだけ）
+  {
+    const { pg, outside } = await talkPage({ heard: [] }, '会話の改善');
+    const r = await pg.evaluate(async () => {
+      const out = {};
+      const T = Talk;
+      // C2 見本：20個から入れ替える。動かす見本と会話だけの見本を半分ずつ
+      const ex = T.pickExamples(6), acts = ex.filter(([, a]) => !a.includes('"action":null')).length;
+      out.ex = { all: T.EXAMPLES_ALL.length, n: ex.length, acts, diff: new Set(Array.from({ length: 5 }, () => T.pickExamples(4).map((x) => x[0]).join()).values()).size };
+      // C8 困ったとき
+      out.kind = [T.kindly('「牛乳」に合うカードが見つかりません。'), T.kindly('いまは保存できないので動かせません。'), T.kindly('「あれ」は分かりませんでした。例：〇〇を追加、〇〇を済み、今やるを読んで。')];
+      // C6 日をまたいで同じ文を言わない
+      localStorage.removeItem('qa.recent');
+      const st = T.recentStore('qa.recent'), a1 = T.picker(Math.random, st)('hi', ['A', 'B']), a2 = T.picker(Math.random, st)('hi', ['A', 'B']);
+      out.recent = a1 !== a2;
+      // C7・A5 の文
+      const sun = new Date(2026, 9, 25, 18), mon = new Date(2026, 9, 19, 18);
+      const wl = [{ title: '古いカード', created: '2026-09-01', done_at: '2026-10-21T10:00:00' }, { title: '新しいカード', created: '2026-10-20', done_at: '2026-10-23T10:00:00' }];
+      out.week = [T.weeklyText(wl, sun), T.weeklyText(wl, mon), T.weeklyText([], sun), T.streakText(wl, sun), T.streakText(wl.slice(0, 1), sun)];
+      // 会話を作って試す（AI なし）
+      const store = [], said = [], moods = [];
+      const mem = { all: () => store, put: (it) => { const k = store.findIndex((i) => i.id === it.id); const x = { ...it, at: it.at || new Date().toISOString() }; if (k >= 0) store[k] = x; else store.push(x); return x; }, forget() {}, forgetAll() {} };
+      const today = new Date(); const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const mk = (cards, settings = {}) => Talk.create({ settings: { ai: 'off', bargeIn: false, reply: 'text', tidy: false, ...settings }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']], memory: mem,
+        board: () => cards.filter((c) => c.lane !== 'done'), queue: () => cards.filter((c) => c.lane === 'now'), card: (t) => cards.find((c) => c.title === t) || null, weekDone: () => [],
+        run: () => '', act: (c) => { if (c.type === 'done') c.card.lane = 'done'; return 'ok'; }, pending: () => false, onLine: (k, x) => { if (k === 'ai') said.push(x); }, onMood: (m) => moods.push(m), onState() {} });
+      for (const k of ['lk.quietDay', 'lk.moodAskDay', 'lk.moodDay', 'lk.noFollowUntil']) localStorage.removeItem(k);
+      // A7 喜び方：1枚目・2枚目は笑顔だけ、3枚目は紙吹雪、期限すぎのカードは「ついに！」
+      const cs = [{ title: '一', lane: 'now' }, { title: '二', lane: 'now' }, { title: '三', lane: 'now' }, { title: '期限すぎ', lane: 'now', due: '2000-01-01' }];
+      let t = mk(cs); await t.start(); for (let i = 0; i < 4; i++) await t.hear('済み'); t.stop();
+      out.joy = { moods: moods.filter((m) => ['happy', 'party', 'wow'].includes(m)), wow: said.some((x) => /ついに/.test(x)) };
+      // A9 「今日は静かにして」：その日は自分から話しかけない。「もう話していいよ」で戻る
+      said.length = 0;
+      t = mk([{ title: '一', lane: 'now' }]); await t.start(); await t.hear('今日は静かにして'); t.stop();
+      const quietSet = localStorage.getItem('lk.quietDay') === ymd(today);
+      said.length = 0; t = mk([{ title: '一', lane: 'now' }]); await t.start(); const quietSaid = said.length; await t.hear('もう話していいよ'); t.stop();
+      out.quiet = { quietSet, quietSaid, back: !localStorage.getItem('lk.quietDay') && said.some((x) => /おしゃべり/.test(x)) };
+      // 断られた提案：前回の続きを「いいよ」で断られたら、しばらく聞かない
+      mem.put({ id: 'last', kind: 'last', text: '前', follow: '一', at: new Date(Date.now() - 864e5).toISOString() });
+      said.length = 0; t = mk([{ title: '一', lane: 'now' }]); await t.start(); const asked = said.some((x) => /どうなった/.test(x)); await t.hear('いいよ'); t.stop();
+      mem.put({ id: 'last', kind: 'last', text: '前', follow: '一', at: new Date(Date.now() - 864e5).toISOString() }); // 断られた印だけで止まるか（時間では止まらない形にして試す）
+      said.length = 0; t = mk([{ title: '一', lane: 'now' }]); await t.start(); t.stop();
+      out.reject = { asked, until: +localStorage.getItem('lk.noFollowUntil') > Date.now(), again: said.some((x) => /どうなった/.test(x)) };
+      localStorage.removeItem('lk.noFollowUntil'); mem.put({ id: 'last', kind: 'last', text: '前', follow: '', at: new Date().toISOString() });
+      // C4 今日の調子：最初は聞かない。設定で入れると1日1回聞き、しんどいなら1枚で「今日の分はおしまい」
+      said.length = 0; t = mk([{ title: '一', lane: 'now' }]); await t.start(); t.stop();
+      const offAsk = said.some((x) => /調子/.test(x));
+      said.length = 0; t = mk([{ title: '一', lane: 'now' }, { title: '二', lane: 'now' }], { moodAsk: true }); await t.start(); const onAsk = said.some((x) => /調子/.test(x)); await t.hear('しんどい'); await t.hear('済み'); t.stop();
+      const done1 = said.join(' ');
+      said.length = 0; t = mk([{ title: '一', lane: 'now' }], { moodAsk: true }); await t.start(); t.stop();
+      out.mood = { offAsk, onAsk, one: /1枚だけ/.test(done1), enough: /今日の分はおしまい/.test(done1), twice: said.some((x) => /調子/.test(x)), defaults: [T.DEFAULTS.streak, T.DEFAULTS.moodAsk] };
+      for (const k of ['lk.quietDay', 'lk.moodAskDay', 'lk.moodDay']) localStorage.removeItem(k);
+      // C3 雑談の決まり・C9 考え中のひとこと（にせものの内蔵 AI）
+      const prompts = [];
+      const keep = window.LanguageModel;
+      let slow = 0;
+      window.LanguageModel = { availability: () => Promise.resolve('available'), create: () => Promise.resolve({ prompt: (x) => { prompts.push(x); return new Promise((ok) => setTimeout(() => ok(JSON.stringify({ say: 'うん、そうだね。', action: null })), slow)); }, destroy() {} }) };
+      const logs = [];
+      const ai = Talk.create({ settings: { ai: 'auto', bargeIn: false, reply: 'text', tidy: false }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']], memory: mem, board: () => [{ title: '一', lane: 'now' }], queue: () => [], weekDone: () => [],
+        run: () => '', act: () => 'ok', pending: () => false, onLine: (k, x) => logs.push(k + ':' + x), onState() {} });
+      await ai.start('text');
+      for (const x of ['今日はいい天気', 'カフェ行った', 'ケーキおいしかった']) await ai.hear(x);
+      const hint3 = /雑談が続いている/.test(prompts[2] || ''), hint1 = /雑談が続いている/.test(prompts[0] || '');
+      await ai.hear('なんか疲れた');
+      await ai.hear('映画見たい');
+      const tiredNoBack = /疲れているので/.test(prompts[4] || '') && !/雑談が続いている/.test(prompts[4] || '');
+      slow = 5600; await ai.hear('うーん');
+      ai.stop();
+      window.LanguageModel = keep;
+      out.chat = { hint3, hint1, tiredNoBack, slow: logs.some((x) => /ちょっと考えさせて/.test(x)) };
+      return out;
+    });
+    check(r.ex.all === 20 && r.ex.n === 6 && r.ex.acts === 3 && r.ex.diff > 1, `見本の会話：20個から毎回入れ替え、動かす見本と会話だけの見本を半分ずつ入れる（${JSON.stringify(r.ex)}）`);
+    check(/見つからないや/.test(r.kind[0]) && /つながってないのかも/.test(r.kind[1]) && /ぼくには分からなかった/.test(r.kind[2]), `困ったときの返事：キャラの言葉で、理由と次にどうするかを言う（${r.kind.join(' / ')}）`);
+    check(r.recent, '言い回し：日をまたいでも最近言った文を避ける');
+    check(/今週は2枚/.test(r.week[0]) && /古いカード/.test(r.week[0]) && !r.week[1] && !r.week[2] && /今週は2日/.test(r.week[3]) && !r.week[4], `週のふりかえり：日曜の夕方だけ・済みが無い週は言わない／週の連続は2日から（${r.week.join(' | ')}）`);
+    check(r.joy.moods.join(',') === 'happy,happy,party,wow' && r.joy.wow, `喜び方の大小：1・2枚目は笑顔、3枚目は紙吹雪、期限すぎのカードは「ついに！」（${r.joy.moods.join(',')}）`);
+    check(r.quiet.quietSet && r.quiet.quietSaid === 0 && r.quiet.back, `「今日は静かにして」：その日は自分から話しかけず、「もう話していいよ」で戻る（${JSON.stringify(r.quiet)}）`);
+    check(r.reject.asked && r.reject.until && !r.reject.again, `断られた提案：前回の続きを断られたら、しばらく聞かない（${JSON.stringify(r.reject)}）`);
+    check(!r.mood.offAsk && r.mood.onAsk && r.mood.one && r.mood.enough && !r.mood.twice && r.mood.defaults.join() === 'false,false', `今日の調子：最初は聞かない。設定で入れると1日1回だけ聞き、しんどい日は1枚で「今日の分はおしまい」（${JSON.stringify(r.mood)}）`);
+    check(r.chat.hint3 && !r.chat.hint1 && r.chat.tiredNoBack, `雑談の決まり：3往復目でそっとカードに戻す。疲れた日は戻さない（${JSON.stringify(r.chat)}）`);
+    check(r.chat.slow, '考え中：5秒たっても考えていたら「ちょっと考えさせて」と一言');
+    const f = await pg.evaluate(() => { const f = document.querySelector('#talkSetForm'); return !!(f.streak && f.moodAsk); });
+    check(f, 'キャラの設定：週の連続・今日の調子を設定で入れられる');
+    await pg.close();
+    check(outside.length === 0, '会話の改善：自分のサイトと GitHub 以外へ通信していない');
   }
 
   // キャラの見た目：どの形にも まばたき・表情の口・演出の部品がある。動きを減らす設定では動かさない
