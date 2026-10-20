@@ -135,29 +135,69 @@
   }
 
   // 読み上げは端末の中の声（voice.localService が true）だけ。「Google 日本語」などネット経由の声は使わない（文が外に出るため）
+  // 同じ端末の中の声でも、名前に Enhanced・Premium・Natural などが付く声のほうがなめらかなので先に選ぶ
+  const GOOD = /(enhanced|premium|natural|neural|高品質|拡張)/i;
   function localVoice(lang = 'ja-JP') {
     if (!g.speechSynthesis) return null;
     const vs = g.speechSynthesis.getVoices().filter((v) => v.localService && v.lang && v.lang.replace('_', '-').startsWith(lang.slice(0, 2)));
     let want = '';
     try { want = localStorage.getItem('voice.name') || ''; } catch { /* なくてよい */ }
-    return vs.find((v) => v.name === want) || vs.find((v) => v.lang === lang) || vs[0] || null;
+    const exact = vs.filter((v) => v.lang.replace('_', '-') === lang);
+    return vs.find((v) => v.name === want) || exact.find((v) => GOOD.test(v.name)) || vs.find((v) => GOOD.test(v.name)) || exact[0] || vs[0] || null;
   }
-  function speak(text, lang = 'ja-JP') {
+  // 読みにくい記号を除く（絵文字・「…」・「〜」・Markdown の記号は、声にすると止まったり変な読みになったりする）
+  function speechText(text) {
+    return String(text || '')
+      .replace(/\p{Extended_Pictographic}|\uFE0F|\u200D/gu, '')
+      .replace(/[*#`_>|]+/g, '')
+      .replace(/(\d)\s*[〜～~]\s*(\d)/g, '$1から$2')
+      .replace(/[〜～~]+/g, 'ー')
+      .replace(/(…|\.{3}|・{3})+/g, '、')
+      .replace(/[（(]([^）)]{0,40})[）)]/g, '、$1、')
+      .replace(/、\s*([、。！？!?])/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  // 文の区切りで止まりすぎないよう、短い文は 80 字までつなげる（Chrome は長い文を途中で止めることがあるので長すぎにもしない）
+  function chunks(text, max = 80) {
+    const parts = String(text || '').split(/(?<=[。！？!?\n])/).map((x) => x.trim()).filter(Boolean);
+    const out = [];
+    for (const p of parts) {
+      const last = out[out.length - 1];
+      if (last && last.length + p.length <= max) out[out.length - 1] = last + p; else out.push(p);
+    }
+    return out;
+  }
+  function tune() {
+    const num = (k, d) => { try { const n = parseFloat(localStorage.getItem(k)); return n >= 0.5 && n <= 2 ? n : d; } catch { return d; } };
+    return { rate: num('voice.rate', 1), pitch: num('voice.pitch', 1.05) };
+  }
+  // まとめて読み上げる。間で cancel せずに声の順番待ちに並べるので、文と文のあいだが空かない
+  function speakAll(list, lang = 'ja-JP') {
     const v = localVoice(lang);
-    if (!v) return Promise.resolve(false); // 端末の中の声が無ければ読み上げず、画面の文字だけにする
+    const parts = (Array.isArray(list) ? list : chunks(list)).map(speechText).filter(Boolean);
+    if (!v || !parts.length) return Promise.resolve(false); // 端末の中の声が無ければ読み上げず、画面の文字だけにする
+    const { rate, pitch } = tune();
     return new Promise((ok) => {
+      let done = false, base = 0;
+      const end = (r) => { if (!done) { done = true; ok(r); } };
       try {
         g.speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(text); u.lang = v.lang; u.rate = 1.1;
-        try { u.voice = v; } catch { /* 本物の声オブジェクトでないとき（検査）*/ }
-        u.onend = () => ok(true); u.onerror = () => ok(false);
-        // 言葉の区切りごとに知らせる（キャラの口を合わせる。音そのものは読めないので区切りで動かす）
-        u.onboundary = (e) => { try { g.dispatchEvent(new CustomEvent('voice:boundary', { detail: { at: e.charIndex } })); } catch { /* なくてよい */ } };
-        g.speechSynthesis.speak(u);
-        setTimeout(() => ok(true), 400 + text.length * 250); // 読み上げが終わらない環境の保険
-      } catch { ok(false); }
+        parts.forEach((text, i) => {
+          const u = new SpeechSynthesisUtterance(text); u.lang = v.lang; u.rate = rate; u.pitch = pitch;
+          try { u.voice = v; } catch { /* 本物の声オブジェクトでないとき（検査）*/ }
+          const at = base; base += text.length;
+          // 言葉の区切りごとに知らせる（キャラの口を合わせる。音そのものは読めないので区切りで動かす）
+          u.onboundary = (e) => { try { g.dispatchEvent(new CustomEvent('voice:boundary', { detail: { at: at + e.charIndex } })); } catch { /* なくてよい */ } };
+          u.onerror = (e) => end(e && e.error === 'interrupted' ? true : false);
+          if (i === parts.length - 1) u.onend = () => end(true);
+          g.speechSynthesis.speak(u);
+        });
+        setTimeout(() => end(true), 800 + base * 250 / rate); // 読み上げが終わらない環境の保険
+      } catch { end(false); }
     });
   }
+  const speak = (text, lang) => speakAll(chunks(text), lang);
 
-  g.Voice = { parse, match, nearest, laneOf, listen, localStatus, install, speak, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm };
+  g.Voice = { parse, match, nearest, laneOf, listen, localStatus, install, speak, speakAll, speechText, chunks, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm };
 })(typeof window !== 'undefined' ? window : globalThis);
