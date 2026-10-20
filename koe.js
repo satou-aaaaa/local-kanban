@@ -20,7 +20,7 @@
   const STYLE = { normal: 'Neutral', happy: 'Happy', sad: 'Sad', surprise: 'Surprise', think: 'Neutral', listen: 'Neutral', angry: 'Angry', fear: 'Fear', disgust: 'Disgust' };
   const KEY = 'koe.model';
 
-  let lib = null, pipe = null, dict = null, loading = null, ac = null, src = null, stopped = false;
+  let lib = null, pipe = null, dict = null, loading = null, ac = null, src = null, gen = 0;
   const ls = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* なくてよい */ } } };
 
   const gpuOk = () => !!(g.navigator && g.navigator.gpu);
@@ -80,9 +80,9 @@
       ac = ac || new AC();
       const buf = ac.createBuffer(1, audio.data.length, audio.sampleRate);
       buf.copyToChannel(audio.data, 0);
-      src = ac.createBufferSource(); src.buffer = buf;
+      const s = ac.createBufferSource(); s.buffer = buf; src = s;
       const an = ac.createAnalyser(); an.fftSize = 512;
-      src.connect(an); an.connect(ac.destination);
+      s.connect(an); an.connect(ac.destination);
       const t = new Float32Array(an.fftSize); let last = 0, raf = 0;
       const tick = (now) => {
         an.getFloatTimeDomainData(t);
@@ -91,27 +91,29 @@
         raf = g.requestAnimationFrame(tick);
       };
       raf = g.requestAnimationFrame(tick);
-      src.onended = () => { g.cancelAnimationFrame(raf); src = null; ok(true); };
+      s.onended = () => { g.cancelAnimationFrame(raf); if (src === s) src = null; ok(true); };
       if (ac.state === 'suspended') ac.resume().catch(() => {});
-      src.start();
+      s.start();
     });
   }
 
   // 文の並びを話す。次の文は今の文を鳴らしているあいだに作る（間を空けない）
+  // 発話ごとに番号を持ち、止められた・次の発話が始まった古い発話は鳴らさずに終える
   async function speak(parts, { mood = 'normal', rate = 1 } = {}) {
-    stopped = false;
+    stop();
+    const id = ++gen, stopped = () => id !== gen;
     let next = parts.length ? synth(parts[0], mood, rate) : null;
     for (let i = 0; i < parts.length; i++) {
       const audio = await next;
-      if (stopped) return true;
+      if (stopped()) return false;
       next = i + 1 < parts.length ? synth(parts[i + 1], mood, rate) : null;
       await play(audio);
-      if (stopped) return true;
+      if (stopped()) return false;
     }
     return true;
   }
   function stop() {
-    stopped = true;
+    gen++;
     try { src?.stop(); } catch { /* なくてよい */ }
   }
   function setOn(on) { ls.set('koe.on', on ? null : 'off'); }
