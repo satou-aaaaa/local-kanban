@@ -122,3 +122,8 @@ button,select,summary,a{touch-action:manipulation}
 #lkPochi[data-night="1"] .body{animation-duration:6s}
 @media (prefers-reduced-motion:reduce){#lkPochi.hop{animation:none}#lkPochi .body,#lkPochi .lid{animation:none!important}}
 @media print{#lkPochi{display:none}}
+/* 考え中（C9）：首をかしげて目を上へ。待っているのが分かるように */
+#talkDlg[data-mood=think] .body{animation:none;transform:rotate(-7deg);transition:transform .3s}
+#talkDlg[data-mood=think] .fx-think circle{animation:ava-bob 1s ease-in-out infinite}
+#talkDlg[data-mood=think] .fx-think circle+circle{animation-delay:.3s}
+@media (prefers-reduced-motion:reduce){#talkDlg[data-mood=think] .fx-think circle{animation:none}}

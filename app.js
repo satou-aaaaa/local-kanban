@@ -86,6 +86,8 @@
     <label class="chk"><input type="checkbox" name="bargeIn"> 話の途中で割り込める（話している間だけマイクの音の大きさを端末の中で見る）</label>
     <label class="chk"><input type="checkbox" name="cue"> 聞き始め「ポン」・聞き終わり「ポロン」の音と短い振動（音は端末の中で作ります）</label>
     <label class="chk"><input type="checkbox" name="waitMore"> 言いかけ（〜て・〜けど・えっと）で終わったら、答えずに続きを待つ</label>
+    <label class="chk"><input type="checkbox" name="streak"> 「今週は4日片づけたね」と週で数えて言う（1日休んでも途切れません）</label>
+    <label class="chk"><input type="checkbox" name="moodAsk"> 1日1回だけ今日の調子を聞く（しんどい日はすすめる枚数を減らす。答えなくてもよい）</label>
     <label class="chk"><input type="checkbox" name="corner"> ボードの隅に小さなポチを出す（しゃべりません。済みにすると跳ねる・夜は眠そう・押すと会話）</label>
     <label class="chk"><input type="checkbox" name="followUp"> 前回の続きから話す（終わりに一言まとめて覚え、次に「昨日の〇〇、どうなった？」と聞く）</label>
     <label class="chk"><input type="checkbox" name="ai"> 端末の中の AI（Chrome の内蔵 AI か、下で入れた AI）があれば使う</label>
@@ -374,18 +376,21 @@
   const TALK_STATE = { starting: '準備しています…', listening: '聞いてるよ（話してね。打ってもいいよ）', thinking: '考え中…', speaking: '話しています（話しかけても、打っても割り込めます）', typing: '下の欄に打って話してね', idle: '打つか、🎤を押して話してね', off: '' };
   // 表情（data-mood）。少しのあいだだけ見せて、ふつうに戻す。うれしいときは紙吹雪（動きを減らす設定のときは出さない）
   let moodTimer = 0;
+  // party（3枚目・10枚ごと）と wow（ずっと残っていた・期限すぎのカード）は笑顔＋紙吹雪。ふつうの happy は笑顔だけ
   function setMood(m, hold = 2500) {
     const d = $('#talkDlg'); if (!d) return;
+    const big = m === 'party' ? 14 : m === 'wow' ? 32 : 0;
+    if (big) m = 'happy';
     if (!hold && moodTimer) return; // うれしい・驚いたを見せているあいだは、聞く・考える で消さない
     d.dataset.mood = m; if (window.Voice) Voice.mood = m; // 話す声の気持ちも表情に合わせる（koe.js）
     clearTimeout(moodTimer); moodTimer = 0;
     if (hold) moodTimer = setTimeout(() => { moodTimer = 0; d.dataset.mood = d.dataset.state === 'listening' ? 'listen' : d.dataset.state === 'thinking' ? 'think' : 'normal'; if (window.Voice) Voice.mood = 'normal'; }, hold);
-    if (m === 'happy' && !matchMedia('(prefers-reduced-motion: reduce)').matches) confetti();
+    if (big && !matchMedia('(prefers-reduced-motion: reduce)').matches) confetti(big);
   }
-  function confetti() {
+  function confetti(n = 14) {
     const box = $('#talkAva'); if (!box) return;
     const cs = ['#f59e0b', '#22c55e', '#3b82f6', '#ec4899', '#a855f7'];
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < n; i++) {
       const p = document.createElement('i'); p.className = 'confetti';
       p.style.setProperty('--x', (Math.random() * 160 - 80).toFixed(0) + 'px'); p.style.setProperty('--r', (Math.random() * 720 - 360).toFixed(0) + 'deg');
       p.style.background = cs[i % cs.length]; p.style.animationDelay = (Math.random() * 0.15).toFixed(2) + 's';
@@ -462,7 +467,8 @@
       // AI に渡すのは題・列・期限だけ（補足・履歴・リンクは渡さない）
       board: () => live().filter(c => c.lane !== 'done').sort((a, b) => order(a.lane) - order(b.lane) || (a.order || 0) - (b.order || 0)).map(c => ({ title: c.title, lane: c.lane, due: c.due || '' })),
       queue: () => ['now', 'next'].flatMap(laneCards),
-      card: title => live().find(c => c.title === title && c.lane !== 'done') || null, // 前回あとに回したカード（今やる・次にやる以外の列にあるとき）
+      card: (title, any) => live().find(c => c.title === title && (any || c.lane !== 'done')) || null, // 前回あとに回したカード・済みにしたカード（喜び方を決める）
+      weekDone: () => live().filter(c => c.lane === 'done' && c.owner !== 'agent' && c.done_at && Date.parse(c.done_at) > Date.now() - 8 * 864e5).map(c => ({ title: c.title, created: c.created || '', done_at: c.done_at })), // 週のふりかえり（題と日付だけ）
       memory: L.memory,
       // 会話で動かしたものは、履歴に「ポチ」と残す
       run: t => L.as('ポチ', () => runCommand(t)),
@@ -517,7 +523,7 @@
   function openTalkSet() {
     if (!window.Talk) { setStatus('会話の部品（talk.js）を読めませんでした。開き直してみてください。', 'err'); return; }
     const f = $('#talkSetForm'), t = talkSettings();
-    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.rate.value = t.rate || 1; f.pitch.value = t.pitch || 1.05; f.ai.checked = t.ai !== 'off'; f.reply.value = t.reply || 'match'; f.tidy.checked = t.tidy !== false; f.cue.checked = t.cue !== false; f.waitMore.checked = t.waitMore !== false; f.followUp.checked = t.followUp !== false; f.corner.checked = t.corner !== false;
+    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.rate.value = t.rate || 1; f.pitch.value = t.pitch || 1.05; f.ai.checked = t.ai !== 'off'; f.reply.value = t.reply || 'match'; f.tidy.checked = t.tidy !== false; f.cue.checked = t.cue !== false; f.waitMore.checked = t.waitMore !== false; f.followUp.checked = t.followUp !== false; f.corner.checked = t.corner !== false; f.streak.checked = !!t.streak; f.moodAsk.checked = !!t.moodAsk;
     $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{ maru: 'まる', kaku: 'しかく', shizuku: 'しずく' }[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
     const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
     f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
@@ -648,7 +654,7 @@
   $('#talkSetForm').onsubmit = e => {
     if (e.submitter?.value !== 'ok') return;
     const f = e.target;
-    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value, bargeIn: f.bargeIn.checked, reply: f.reply.value, tidy: f.tidy.checked, cue: f.cue.checked, waitMore: f.waitMore.checked, followUp: f.followUp.checked, corner: f.corner.checked, ai: f.ai.checked ? 'auto' : 'off' };
+    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value, bargeIn: f.bargeIn.checked, reply: f.reply.value, tidy: f.tidy.checked, cue: f.cue.checked, waitMore: f.waitMore.checked, followUp: f.followUp.checked, corner: f.corner.checked, streak: f.streak.checked, moodAsk: f.moodAsk.checked, ai: f.ai.checked ? 'auto' : 'off' };
     try { localStorage.setItem('lk.talk', JSON.stringify(t)); } catch {} // localStorage へ直に書くと、PC とスマホで同じになる（shim.js が見ている）
     voicePrefs(t);
     if (talk) talk.settings = t;
