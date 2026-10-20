@@ -120,8 +120,9 @@ Notion の代わりのメモ：https://satou-aaaaa.github.io/local-kanban/notes/
 
 | 役 | モデル | 取ってくる場所 |
 | --- | --- | --- |
-| 頭 | WebLLM で Qwen2.5（メモリ 8GB 以上の端末は 1.5B、それ以外は 0.5B） | huggingface.co/mlc-ai、モデル用 wasm は raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs |
+| 頭 | WebLLM で Qwen2.5 0.5B | huggingface.co/mlc-ai、モデル用 wasm は raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs |
 | 頭（WebGPU が使えない端末） | wllama（llama.cpp の wasm、CPU で動く）で Qwen2.5 0.5B Instruct の Q4_0 GGUF（約430MB、Apache-2.0） | huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF（コミットで固定） |
+| 頭（日本語が得意なほう。⚙ で選んだとき） | wllama（CPU）で sarashina2.2 0.5B instruct の Q4_0 GGUF（約480MB、MIT、SB Intuitions。日本語 MT-Bench 4.55・Qwen2.5 0.5B は 2.95＝モデルカードの値）。WebGPU 版は無いのでいつも CPU。替えると前の頭を消してから入れる | huggingface.co/mmnga/sarashina2.2-0.5b-instruct-v0.1-gguf（コミットで固定） |
 | 耳 | Whisper base（端末内の音声認識が無い・日本語に「使えない」と答える端末だけ。iPhone・Android の一部など。日本語の部品を入れて20秒たっても使えなければ Whisper にする。頭だけ入れた端末は「耳だけ足す」で後から足せる） | huggingface.co/onnx-community/whisper-base |
 | 割り込み | Silero VAD（耳と一緒に入る） | huggingface.co/onnx-community/silero-vad |
 

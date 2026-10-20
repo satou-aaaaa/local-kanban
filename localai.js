@@ -17,9 +17,22 @@
   };
   // CPU 版の頭（wllama）のモデル。Qwen 公式の GGUF（Apache-2.0）。Q4_0 は ARM の CPU で速い。コミットで固定
   const CPU = {
-    label: 'Qwen2.5 0.5B（CPU）', gb: 0.4,
+    label: 'Qwen2.5 0.5B（CPU）', gb: 0.4, from: 'huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF',
     url: 'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_0.gguf',
   };
+  // 日本語が得意な頭（選んだときだけ）。SB Intuitions の sarashina2.2 0.5B instruct（MIT）。
+  // 日本語 MT-Bench 4.55・ELYZA-tasks-100 2.38（Qwen2.5 0.5B instruct は 2.95・1.53。モデルカードの値）。
+  // MLC（WebGPU）版が無いので CPU（wllama）で動かす。GGUF は mmnga さんの量子化（コミットで固定・Q4_0 は ARM の CPU で速い）
+  const JA = {
+    label: 'sarashina2.2 0.5B（CPU・日本語）', gb: 0.5, from: 'huggingface.co/mmnga/sarashina2.2-0.5b-instruct-v0.1-gguf',
+    url: 'https://huggingface.co/mmnga/sarashina2.2-0.5b-instruct-v0.1-gguf/resolve/5c71186a7a57b8c0325dec70ba2f295303effcd8/sarashina2.2-0.5b-instruct-v0.1-Q4_0.gguf',
+    credit: 'sarashina2.2-0.5b-instruct-v0.1 © SB Intuitions（MIT License）。GGUF：mmnga/sarashina2.2-0.5b-instruct-v0.1-gguf',
+  };
+  const CPU_MODELS = { qwen: CPU, sarashina: JA };
+  // どの頭を入れるか（この端末だけの選択。入れた AI を消しても残す）
+  const BRAIN_KEY = 'lk.aiBrain';
+  const brainPick = () => { try { return CPU_MODELS[g.localStorage.getItem(BRAIN_KEY)] ? g.localStorage.getItem(BRAIN_KEY) : 'qwen'; } catch { return 'qwen'; } };
+  const setBrain = (k) => { try { g.localStorage.setItem(BRAIN_KEY, CPU_MODELS[k] ? k : 'qwen'); } catch { /* 選べなくても標準で動く */ } };
   // 言葉のモデル（日本語が通じる小さなもの）。端末のメモリで選び、WebGPU が16ビットの計算をできなければ f32 版にする
   const MODELS = {
     small: { label: 'Qwen2.5 0.5B', gb: 0.4, f16: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', f32: 'Qwen2.5-0.5B-Instruct-q4f32_1-MLC' },
@@ -63,7 +76,7 @@
   }
   // 入れる前に見せる大きさ（目安）。GPU にはまだ触らない（押したときに調べる）
   function plan() {
-    const m = g.navigator?.gpu ? pickModel() : CPU;
+    const m = brainPick() === 'sarashina' ? JA : g.navigator?.gpu ? pickModel() : CPU;
     return { model: m.label, ear: needEar(), gb: Math.round((m.gb + (needEar() ? EAR.gb : 0)) * 10) / 10 };
   }
   // WebGPU の GPU を探す。既定で見つからなければ、電力の指定違い・互換モード（featureLevel: compatibility）でも探す。
@@ -90,13 +103,17 @@
   }
   // ---------- 頭（wllama・CPU） ----------
   let cpuLib = null, cpuEngine = null;
-  async function cpuEngineFor(onProgress) {
-    if (cpuEngine) return cpuEngine;
+  let cpuKey = '';
+  async function cpuEngineFor(onProgress, key = load().cpuModel || 'qwen') {
+    if (cpuEngine && cpuKey === key) return cpuEngine;
+    try { await cpuEngine?.unload(); } catch { /* なくてよい */ }
+    cpuEngine = null;
+    const M = CPU_MODELS[key] || CPU;
     cpuLib = cpuLib || await import(here(VENDOR.cpu));
     const w = new cpuLib.Wllama({ default: here(VENDOR.cpuWasm) }, { allowOffline: true, suppressNativeLog: true });
     // WebGPU は使わない（使えない端末のための頭）。スレッドは COOP/COEP が無い GitHub Pages では1本になる
     try {
-      await w.loadModelFromUrl(CPU.url, { n_gpu_layers: 0, n_ctx: CTX, progressCallback: ({ loaded, total }) => onProgress?.(total ? loaded / total : 0, 'qwen2.5-0.5b-instruct-q4_0.gguf') });
+      await w.loadModelFromUrl(M.url, { n_gpu_layers: 0, n_ctx: CTX, progressCallback: ({ loaded, total }) => onProgress?.(total ? loaded / total : 0, M.url.split('/').pop()) });
     } catch (e) { try { await w.exit(); } catch { /* 片づけられなくてもよい */ } throw e; } // 失敗したら worker と wasm を放す（入れ直しのたびに残らない）
     // WebLLM と同じ形（chat.completions.create）にそろえる
     cpuEngine = {
@@ -104,6 +121,7 @@
       unload: () => w.exit(),
       clear: () => w.cacheManager.clear(),
     };
+    cpuKey = key;
     return cpuEngine;
   }
   // WebLLM の形の頼み方を wllama の形に直す（名前の違う項目と、JSON の形の指定）
@@ -314,7 +332,7 @@
   // ---------- 入れる・消す ----------
   function status() {
     const s = load();
-    return { llm: s.llm || '', cpu: s.engine === 'cpu', ear: !!s.ear, at: s.at || '', from: s.from || [] };
+    return { llm: s.llm || '', cpu: s.engine === 'cpu', brain: s.llm ? (s.engine === 'cpu' ? s.cpuModel || 'qwen' : 'qwen') : '', ear: !!s.ear, at: s.at || '', from: s.from || [] };
   }
   // 「AI の部品を入れる」を押したとき。onProgress(0〜1, 何を取っているか)
   // WebGPU が使えない・WebLLM が動かない端末は、CPU で動く頭（wllama）を入れる
@@ -332,7 +350,15 @@
       onProgress?.(1, '');
       return status();
     }
-    const a = await gpu();
+    // 頭を替えるときは、前の頭を先に消す（端末に2つ残さない）
+    const pick = brainPick(), was = load();
+    if (was.llm && (was.engine === 'cpu' ? (was.cpuModel || 'qwen') !== pick : pick !== 'qwen')) {
+      try { await cpuEngine?.unload(); } catch { /* なくてよい */ }
+      cpuEngine = null; cpuKey = '';
+      try { if (was.engine === 'cpu') { cpuLib = cpuLib || await import(here(VENDOR.cpu)); await new cpuLib.CacheManager().clear(); } else { engine?.unload?.(); engine = null; engineId = ''; await (await webllm()).deleteModelAllInfoInCache?.(was.llm); } } catch { /* 消せなくても入れ直す */ }
+      save({ llm: '', engine: '' });
+    }
+    const a = pick === 'qwen' ? await gpu() : null; // 日本語の頭は MLC 版が無いので、いつも CPU
     let id = '', from = [], why = '';
     if (a) {
       const m = pickModel();
@@ -349,11 +375,12 @@
       }
     }
     if (!id) {
-      onProgress?.(0, why ? 'この端末では WebGPU の AI が動かなかったので、CPU で動く AI を入れます（返事はゆっくり）。' : CPU_NOTE);
-      await cpuEngineFor(step(0, ear ? 0.8 : 1));
-      id = CPU.label;
-      from = ['huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF'];
-      save({ llm: id, engine: 'cpu' });
+      const M = CPU_MODELS[pick];
+      onProgress?.(0, pick === 'sarashina' ? '日本語が得意な AI（sarashina2.2）を入れます。CPU で動くので返事はゆっくりです。' : why ? 'この端末では WebGPU の AI が動かなかったので、CPU で動く AI を入れます（返事はゆっくり）。' : CPU_NOTE);
+      await cpuEngineFor(step(0, ear ? 0.8 : 1), pick);
+      id = M.label;
+      from = [M.from];
+      save({ llm: id, engine: 'cpu', cpuModel: pick });
     }
     if (ear) {
       await loadEar(step(0.8, 0.2));
@@ -388,7 +415,7 @@
     try { lock = await g.navigator.wakeLock?.request?.('screen'); } catch { lock = null; } // 画面が消えると取得が止まるため
     try { return await install(onProgress, opts); }
     catch (e) {
-      if (!before.llm) { try { await remove(); } catch { /* 片づけられなくても続ける */ } } // 初めて入れるのに失敗したら、途中まで取った分を残さない
+      if (!before.llm || !status().llm) { try { await remove(); } catch { /* 片づけられなくても続ける */ } } // 初めて入れる・頭を替えるのに失敗したら、途中まで取った分を残さない
       throw new Error(/^端末の空き/.test(e?.message || '') ? e.message : friendly(e));
     } finally { try { await lock?.release?.(); } catch { /* なくてよい */ } }
   }
@@ -418,14 +445,14 @@
     try { engine?.unload?.(); } catch { /* なくてよい */ }
     try { await cpuEngine?.unload(); } catch { /* なくてよい */ }
     try { if (s.engine === 'cpu') { cpuLib = cpuLib || await import(here(VENDOR.cpu)); await new cpuLib.CacheManager().clear(); } } catch { /* 消せなくても印は消す */ }
-    engine = null; engineId = ''; cpuEngine = null; asr = null; vadModel = null; earLoading = null;
+    engine = null; engineId = ''; cpuEngine = null; cpuKey = ''; asr = null; vadModel = null; earLoading = null;
     try { if (s.llm && s.engine !== 'cpu') await (await webllm()).deleteModelAllInfoInCache?.(s.llm); } catch { /* 消せなくても印は消す */ }
     try { for (const k of await g.caches.keys()) if (/^transformers-cache/.test(k)) await g.caches.delete(k); } catch { /* なくてよい */ }
     try { g.localStorage.removeItem(KEY); } catch { /* なくてよい */ }
   }
 
   const LocalAI = {
-    MODELS, CPU, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, safeInstall, present, info, friendly, SAMPLING, KEEP, CTX, BUDGET, recent, userPart, messages, plan, status, install, remove, session, listen, bargeIn,
+    MODELS, CPU, JA, CPU_MODELS, brainPick, setBrain, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, safeInstall, present, info, friendly, SAMPLING, KEEP, CTX, BUDGET, recent, userPart, messages, plan, status, install, remove, session, listen, bargeIn,
     llmReady: () => !!load().llm,
     earReady: () => !!load().ear,
     prepareEar: () => (load().ear ? loadEar().catch(() => {}) : Promise.resolve()),
