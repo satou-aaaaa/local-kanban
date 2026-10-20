@@ -65,3 +65,6 @@ button,select,summary,a{touch-action:manipulation}
   #lkMenu summary,#talkBtn,#reloadBtn{min-height:44px;min-width:44px;justify-content:center}
   #lkMenu .items button,.lk-intro button,dialog.lk button{min-height:44px}
 }
+#memList{list-style:none;padding:0;margin:4px 0;display:flex;flex-direction:column;gap:4px}
+#memList li{display:flex;justify-content:space-between;align-items:center;gap:8px}
+#memList button{min-height:44px}
