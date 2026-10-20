@@ -63,19 +63,45 @@
     return `期限は${+due.slice(5, 7)}月${+due.slice(8, 10)}日。`;
   }
 
-  // ---------- アイコン（新しく描いたもの。既存の作品の絵は使わない） ----------
+  // ---------- アイコン（新しく描いたもの。既存の作品の絵・Live2D・外の画像は使わない） ----------
+  // 動き（まばたき・呼吸・耳・表情・口・演出）は app.css。表情は #talkDlg の data-mood（normal・happy・think・surprise・sad・listen）で切り替える。
+  // 口は表情ごとの形を重ねておき、見せる1つを CSS で選ぶ（d: path() の切り替えより多くのブラウザで動く）
+  let avaSeq = 0;
   function avatarSvg(kind, color) {
     const c = /^#[0-9a-f]{6}$/i.test(color || '') ? color : DEFAULTS.color;
+    const id = 'ava' + (++avaSeq);
     const face = kind === 'kaku'
-      ? `<rect x="14" y="18" width="92" height="84" rx="22" fill="${c}"/><rect x="54" y="4" width="12" height="16" rx="6" fill="${c}"/><circle cx="60" cy="6" r="6" fill="${c}"/>`
+      ? `<g class="ears"><rect x="54" y="2" width="12" height="18" rx="6" fill="url(#${id}g)"/><circle class="tip" cx="60" cy="5" r="7" fill="#fde68a"/></g>
+         <rect x="12" y="18" width="96" height="88" rx="26" fill="url(#${id}g)"/>`
       : kind === 'shizuku'
-        ? `<path d="M60 8 C 88 40 104 58 104 76 a44 40 0 0 1 -88 0 C16 58 32 40 60 8 Z" fill="${c}"/>`
-        : `<circle cx="60" cy="62" r="48" fill="${c}"/><circle cx="24" cy="26" r="12" fill="${c}"/><circle cx="96" cy="26" r="12" fill="${c}"/>`;
-    return `<svg viewBox="0 0 120 120" class="ava" role="img" aria-label="アイコン">${face}
-      <circle cx="44" cy="60" r="7" fill="#1d2129"/><circle cx="76" cy="60" r="7" fill="#1d2129"/>
-      <circle cx="46" cy="58" r="2.2" fill="#fff"/><circle cx="78" cy="58" r="2.2" fill="#fff"/>
-      <ellipse cx="34" cy="74" rx="7" ry="4" fill="#fff" opacity=".35"/><ellipse cx="86" cy="74" rx="7" ry="4" fill="#fff" opacity=".35"/>
-      <path class="mouth" d="M50 78 Q60 88 70 78" stroke="#1d2129" stroke-width="4" fill="none" stroke-linecap="round"/></svg>`;
+        ? `<g class="ears"><path d="M60 4 C 66 12 70 16 70 22 a10 10 0 0 1 -20 0 C50 16 54 12 60 4 Z" fill="url(#${id}g)" opacity=".9"/></g>
+           <path d="M60 12 C 90 42 106 60 106 78 a46 40 0 0 1 -92 0 C14 60 30 42 60 12 Z" fill="url(#${id}g)"/>`
+        : `<g class="ears"><g class="ear l"><circle cx="24" cy="26" r="14" fill="url(#${id}g)"/><circle cx="24" cy="26" r="7" fill="#fecaca" opacity=".8"/></g>
+           <g class="ear r"><circle cx="96" cy="26" r="14" fill="url(#${id}g)"/><circle cx="96" cy="26" r="7" fill="#fecaca" opacity=".8"/></g></g>
+           <circle cx="60" cy="64" r="48" fill="url(#${id}g)"/>`;
+    const eye = (x) => `<g class="eye"><ellipse cx="${x}" cy="60" rx="8" ry="9" fill="#1d2129"/><circle class="shine" cx="${x + 2.5}" cy="56.5" r="2.6" fill="#fff"/><circle cx="${x - 2.5}" cy="63" r="1.2" fill="#fff" opacity=".7"/>
+      <rect class="lid" x="${x - 10}" y="49" width="20" height="22" fill="${c}"/></g>`;
+    return `<svg viewBox="0 0 120 120" class="ava" role="img" aria-label="キャラの顔">
+      <defs><radialGradient id="${id}g" cx="38%" cy="30%" r="80%"><stop offset="0" stop-color="#fff" stop-opacity=".55"/><stop offset=".35" stop-color="${c}"/><stop offset="1" stop-color="${c}" stop-opacity=".9"/></radialGradient></defs>
+      <g class="fx-ring"><circle cx="60" cy="64" r="56" fill="none" stroke="${c}" stroke-width="3" opacity=".5"/></g>
+      <g class="body">${face}
+        <ellipse class="cheek" cx="32" cy="76" rx="8" ry="4.5" fill="#fb7185" opacity=".35"/><ellipse class="cheek" cx="88" cy="76" rx="8" ry="4.5" fill="#fb7185" opacity=".35"/>
+        <path class="brow l" d="M36 46 Q44 42 52 46" stroke="#1d2129" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <path class="brow r" d="M68 46 Q76 42 84 46" stroke="#1d2129" stroke-width="3" fill="none" stroke-linecap="round"/>
+        ${eye(44)}${eye(76)}
+        <g class="eyes-happy" stroke="#1d2129" stroke-width="4" fill="none" stroke-linecap="round"><path d="M36 62 Q44 52 52 62"/><path d="M68 62 Q76 52 84 62"/></g>
+        <g class="mouths" stroke="#1d2129" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <path class="mouth m-normal" d="M50 80 Q60 88 70 80"/>
+          <path class="mouth m-happy" d="M46 78 Q60 96 74 78 Z" fill="#7f1d1d"/>
+          <path class="mouth m-open" d="M51 80 Q60 94 69 80 Q60 84 51 80 Z" fill="#7f1d1d"/>
+          <ellipse class="mouth m-surprise" cx="60" cy="84" rx="6" ry="7" fill="#7f1d1d"/>
+          <path class="mouth m-sad" d="M50 88 Q60 80 70 88"/>
+          <path class="mouth m-think" d="M52 84 Q58 82 68 85"/>
+        </g>
+      </g>
+      <g class="fx-think" fill="#fff" stroke="${c}" stroke-width="2"><circle cx="104" cy="22" r="4"/><circle cx="112" cy="10" r="6"/></g>
+      <g class="fx-sweat"><path d="M100 40 q4 8 0 10 q-4 -2 0 -10 Z" fill="#7dd3fc"/></g>
+    </svg>`;
   }
 
   // ---------- 文ごとに区切って話す（割り込まれたら止める） ----------
@@ -185,6 +211,7 @@
     let on = false, speaking = false, stopVad = () => {}, stream = null, session = null, mode = 'script', brain = '', idx = 0, cur = null, doneCount = 0;
     const pick = picker();
     const log = (who, text) => host.onLine?.(who, text);
+    const mood = (m) => host.onMood?.(m);
     const M = host.memory || null;
     const mem = () => { try { return M?.all() || []; } catch { return []; } };
     let lastUnknown = '', lastLearned = '', askForgetAll = false;
@@ -270,7 +297,7 @@
       const t = g.Voice.norm(text);
       if (host.pending()) return host.run(text);
       if (/^(ありがとう|ありがと|サンキュー|助かる|助かった)/.test(t)) return pick('thanks', PHRASES.thanks) + ' ' + (cur ? askCard() : '');
-      if (/(疲れ|つかれ|しんどい|眠い|ねむい|だるい)/.test(t)) return pick('tired', PHRASES.tired);
+      if (/(疲れ|つかれ|しんどい|眠い|ねむい|だるい)/.test(t)) { mood('sad'); return pick('tired', PHRASES.tired); }
       if (cur) {
         const learned = aliasOf(t);
         if (learned) return scripted(learned === 'skip' ? '次' : SHORT_LABEL[learned]);
@@ -289,7 +316,7 @@
           else {
             const got = host.act(k === 'done' ? { type: 'done', card: cur } : { type: 'move', card: cur, lane: k });
             if (trouble(got)) return got;
-            if (k === 'done') { doneCount++; learnHabit(); r = pick('done', PHRASES.done) + (doneCount >= 3 ? ` これで${doneCount}枚目！` : ''); }
+            if (k === 'done') { doneCount++; learnHabit(); mood('happy'); r = pick('done', PHRASES.done) + (doneCount >= 3 ? ` これで${doneCount}枚目！` : ''); }
             else r = pick(k, PHRASES[k]);
             if (cur.lane === 'now' || cur.lane === 'next') idx++; // 列から外れたときは同じ番号のまま（次のカードが繰り上がる）
           }
@@ -299,6 +326,7 @@
       const cmd = g.Voice.parse(text, host.laneWords);
       if (cmd && cmd.type !== 'unknown') { lastUnknown = ''; return host.run(text) + (host.pending() ? '' : ' ' + askCard()); }
       lastUnknown = cur && t.length <= 20 ? t : '';
+      mood('surprise');
       return pick('again', PHRASES.again);
     }
 
@@ -321,9 +349,11 @@
         if (['done', 'move', 'delete', 'read', 'status'].includes(a.type)) { cmd.query = String(a.query || a.title || ''); if (a.type !== 'read' && !cmd.query) return out.say || 'どのカード？'; }
         if (a.type === 'move' || a.type === 'read') { if (!host.lanes[a.lane]) return out.say || 'どの列にする？'; cmd.lane = a.lane; }
         r = host.act(cmd);
-        if (a.type === 'done' && !trouble(r)) { doneCount++; learnHabit(); }
+        if (a.type === 'done' && !trouble(r)) { doneCount++; learnHabit(); mood('happy'); }
       }
       // 動かせた・読めたときは AI の返事、聞き返し（消す確認・候補）や見つからないときはアプリの文を優先
+      if (/やった|えらい|ナイス|さすが|いいね|すごい/.test(out?.say || '')) mood('happy');
+      else if (/おつかれ|無理しない|休んで/.test(out?.say || '')) mood('sad');
       if (r && a?.type === 'status') return r; // 様子はアプリがカードから答える（AI に作らせない）
       if (r && (host.pending() || /見つかりません|保存できない|分かりません|空です|枚。/.test(r))) return host.pending() || /枚。|空です/.test(r) ? r : (out.say ? out.say + ' ' : '') + r;
       return String(out?.say || r || 'うん。');
