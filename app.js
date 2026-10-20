@@ -165,8 +165,13 @@
   // ---------- 命令（声・命令欄・会話・URL） ----------
   let pending = null; // 聞き返し中（候補えらび・消す確認）
   const live = () => cards.filter(c => !c.deleted);
+  // 並びはボードと同じ（ボード版48の prioCmp：急ぎ→答える・返事あり→期限が近い→大事さ÷手間）。声とポチが読む順もこれ。古いボードでは手で並べた順
+  const byPrio = (a, b) => { if (typeof window.prioCmp === 'function') { try { return window.prioCmp(a, b); } catch {} } return (a.order ?? 0) - (b.order ?? 0); };
   const laneCards = lane => live().filter(c => (c.lane || 'next') === lane && (lane !== 'done' || !c.done_at || Date.parse(c.done_at) >= Date.now() - 7 * 864e5))
-    .sort((a, b) => lane === 'done' ? String(b.done_at || '').localeCompare(String(a.done_at || '')) : (a.order ?? 0) - (b.order ?? 0));
+    .sort((a, b) => lane === 'done' ? String(b.done_at || '').localeCompare(String(a.done_at || ''))
+      : lane === 'wait' ? String(a.event_start || a.due || '9999').localeCompare(String(b.event_start || b.due || '9999'))
+      : byPrio(a, b));
+  L.queueTitles = lane => laneCards(lane).map(c => c.title); // 検査用
   // undo：声・命令で動かしたときは、数秒「戻す」を出す（聞き間違えたらすぐ戻せる）
   let talkUndo = null; // 会話の中でやった命令の「戻す」（会話の画面の返事に付ける）
   function reply(text, voice, undo) {
@@ -504,7 +509,7 @@
       settings: talkSettings(),
       lanes: LANE_LABEL, laneWords: WORDS,
       // AI に渡すのは題・列・期限だけ（補足・履歴・リンクは渡さない）
-      board: () => live().filter(c => c.lane !== 'done').sort((a, b) => order(a.lane) - order(b.lane) || (a.order || 0) - (b.order || 0)).map(c => ({ title: c.title, lane: c.lane, due: c.due || '' })),
+      board: () => live().filter(c => c.lane !== 'done').sort((a, b) => order(a.lane) - order(b.lane) || byPrio(a, b)).map(c => ({ title: c.title, lane: c.lane, due: c.due || '' })),
       queue: () => ['now', 'next'].flatMap(laneCards),
       card: (title, any) => live().find(c => c.title === title && (any || c.lane !== 'done')) || null, // 前回あとに回したカード・済みにしたカード（喜び方を決める）
       weekDone: () => live().filter(c => c.lane === 'done' && c.owner !== 'agent' && c.done_at && Date.parse(c.done_at) > Date.now() - 8 * 864e5).map(c => ({ title: c.title, created: c.created || '', done_at: c.done_at })), // 週のふりかえり（題と日付だけ）
@@ -866,9 +871,10 @@
       scanNotify(L.cards, first && !ls.get('notified')); first = false;
       try { pochiTick(); } catch {}
       // インストールしたアプリのアイコンに数を出す（Badging API。対応していない端末では何もしない）。
-      // ボードに「返事が来た」の印（repliedToYou・ボード版44）があれば、返事が来てまだ開いていないカードの枚数。無い古いボードでは「今やる」の枚数
+      // ボードに「返事が来た」の印（repliedToYou・ボード版44）があれば、「返事あり＋答える」の枚数（ボード版45）。無い古いボードでは「今やる」の枚数
+      const ask = c => !c.deleted && c.decision && !c.answer && !['done', 'hold', 'wait'].includes(c.lane);
       const n = typeof window.repliedToYou === 'function'
-        ? L.cards.filter(c => { try { return !!window.repliedToYou({ ...c, id: c.id || c.doc_id }); } catch { return false; } }).length
+        ? L.cards.filter(c => { try { if (window.repliedToYou({ ...c, id: c.id || c.doc_id })) return true; } catch {} return ask(c); }).length
         : L.cards.filter(c => !c.deleted && c.lane === 'now').length;
       try { if (navigator.setAppBadge) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); } catch {}
     }); });

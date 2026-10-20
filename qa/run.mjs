@@ -610,6 +610,8 @@ try {
       new MutationObserver(() => window.__moods.push(document.querySelector('#talkDlg').dataset.mood)).observe(document.querySelector('#talkDlg'), { attributes: true, attributeFilter: ['data-mood'] });
       new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => { if (n.classList?.contains('confetti')) window.__confetti++; }))).observe(document.querySelector('#talkAva'), { childList: true });
     });
+    // 読む順はボードの並び（本物のボード版48からは prioCmp。答えていない確認 s2 が s1 より先になる）
+    const [q1, q2] = (await pg.evaluate(() => LK.queueTitles('now'))).map((t) => SAMPLE.find((c) => c.title === t)?.doc_id);
     await pg.click('#talkBtn');
     await waitTalkEnd(pg);
     const spoken = await pg.evaluate(() => window.__spoken.join(''));
@@ -621,7 +623,7 @@ try {
     const moods = await pg.evaluate(() => ({ m: window.__moods, c: window.__confetti }));
     check(moods.m.includes('happy') && moods.m.includes('listen') && moods.c === 0, `キャラの見た目：聞くときは耳を動かし、1枚済みにしたら笑顔だけ（紙吹雪は区切りの枚数のとき）（${[...new Set(moods.m)].join(',')}・紙吹雪 ${moods.c}）`);
     check(await pg.evaluate(() => document.querySelector('#talkDlg').dataset.sync === '1' && window.__boundaries.includes(2)), '会話：読み上げの言葉の区切りで口を合わせた');
-    await waitCards((cs) => cs.find((c) => c.doc_id === 's1')?.lane === 'done' && cs.find((c) => c.doc_id === 's2')?.lane === 'later', '会話（AI なし）の「済み」「あとで」');
+    await waitCards((cs) => !!q1 && !!q2 && cs.find((c) => c.doc_id === q1)?.lane === 'done' && cs.find((c) => c.doc_id === q2)?.lane === 'later', `会話（AI なし）の「済み」「あとで」（${q1}・${q2}）`);
     check(!(await pg.evaluate(() => document.querySelector('#talkDlg').open)), '会話（AI なし）：「終わり」で閉じた');
     check(outside.length === 0, `会話（AI なし）：自分のサイトと GitHub 以外へ通信していない${outside.length ? '（' + outside.join(', ') + '）' : ''}`);
     await pg.close();
@@ -1064,8 +1066,10 @@ try {
     await pg.click('#talkBtn');
     await pg.waitForFunction(() => /打って/.test(document.querySelector('#talkState').textContent), null, { timeout: 10000 });
     check(true, '会話（耳なし）：打って話す案内が出た');
+    const firstT = await pg.evaluate(() => LK.queueTitles('now')[0]);
+    const t1 = SAMPLE.find((c) => c.title === firstT)?.doc_id;
     await pg.fill('#talkIn', '済み'); await pg.press('#talkIn', 'Enter');
-    await waitCards((cs) => cs.find((c) => c.doc_id === 's1')?.lane === 'done', '会話（耳なし）で打った「済み」');
+    await waitCards((cs) => !!t1 && cs.find((c) => c.doc_id === t1)?.lane === 'done', `会話（耳なし）で打った「済み」（${t1}）`);
     await pg.click('#talkSetBtn');
     await pg.fill('#talkSetForm [name=name]', 'テスト名');
     await pg.click('#talkSetForm [name=icon][value=kaku]');
@@ -1583,7 +1587,7 @@ try {
   }
   // インストールしたアプリのアイコンに、コメントに返事が来てまだ開いていないカードの枚数を出す（ボード版44の repliedToYou を使う。2026-10-20）
   if (await page.evaluate(() => typeof repliedToYou === 'function')) {
-    const b0 = await page.evaluate(() => cards.filter((c) => repliedToYou(c)).length);
+    const b0 = await page.evaluate(() => window.__badge || 0); // 返事あり＋答える（版45から）
     const id = await page.evaluate(async () => {
       const c = cards.find((x) => !x.deleted && x.lane !== 'done');
       const now = new Date().toISOString(), db = await window.claude.use('db');
@@ -1591,9 +1595,23 @@ try {
       return c.id;
     });
     const up = await page.waitForFunction((n) => window.__badge === n, b0 + 1, { timeout: 5000 }).then(() => true, () => false);
-    await page.evaluate(async (id) => { await (await window.claude.use('db')).collection('cards').doc(id).update({ reply_seen_at: new Date(Date.now() + 1000).toISOString() }); }, id);
+    // 版44は開いたら（reply_seen_at）、版45からは「読んだ」を押したら（reply_ack_at）消える。両方書いて、どちらの版でも減ること
+    await page.evaluate(async (id) => { const t = new Date(Date.now() + 1000).toISOString(); await (await window.claude.use('db')).collection('cards').doc(id).update({ reply_seen_at: t, reply_ack_at: t }); }, id);
     const down = await page.waitForFunction((n) => (window.__badge || 0) === n, b0, { timeout: 5000 }).then(() => true, () => false);
-    check(up && down, `アプリのアイコンに「返事が来た」カードの枚数を出し、開いたら（reply_seen_at）減らす（${b0}→${b0 + 1}→${b0}、いま ${await page.evaluate(() => window.__badge)}）`);
+    check(up && down, `アプリのアイコンに「返事が来た」カードの枚数を出し、読んだら減らす（${b0}→${b0 + 1}→${b0}、いま ${await page.evaluate(() => window.__badge)}）`);
+  }
+  // アイコンの数には、答えていない確認も入る（ボード版45「返事あり＋答える」。見本の s2 は答えていない確認）
+  if (await page.evaluate(() => typeof needsYou === 'function')) {
+    const want = await page.evaluate(() => cards.filter((c) => { const n = needsYou(c); return n && /返事あり|答える/.test(n.why); }).length);
+    check(want > 0 && await page.evaluate(() => window.__badge || 0) === want, `アプリのアイコンの数は「返事あり＋答える」と同じ（${want}）`);
+  }
+  // 声とポチがカードを読む順は、ボードの並び（prioCmp：急ぎ→答える・返事あり→期限が近い→大事さ÷手間）と同じ（ボード版48）
+  if (await page.evaluate(() => typeof prioCmp === 'function')) {
+    const same = await page.evaluate(() => {
+      const mine = LK.queueTitles('now'), board = cards.filter((c) => !c.deleted && c.lane === 'now').sort(prioCmp).map((c) => c.title);
+      return JSON.stringify(mine) === JSON.stringify(board) ? '' : mine.join('/') + ' ≠ ' + board.join('/');
+    });
+    check(!same, `声とポチが「今やる」を読む順は、ボードの並びと同じ${same ? '（' + same + '）' : ''}`);
   }
   mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: resolve(OUT, 'pc.png'), fullPage: true });
@@ -1710,6 +1728,90 @@ try {
     }
   }
   await phone.screenshot({ path: resolve(OUT, 'phone.png'), fullPage: true });
+
+  // ---------- 基本の使い方（本物のボードの画面を、アプリの中で人が押す順に。ボード版45から） ----------
+  // ボード側の board/check-basics.mjs と同じ流れを、アプリ（鍵・GitHub への保存・アプリの部品が乗った画面）で通す。
+  // 2026-10-20 ボード版46〜48 で、PC の詳細を閉じても画面に残った（#detail.wide の display:grid が閉じた dialog を上書き）。
+  if (REAL && await phone.evaluate(() => typeof ackReply === 'function')) {
+    for (const [w, h] of [[1366, 768], [1280, 640], [390, 844]]) {
+      const pg = await context.newPage();
+      const tag = `${w}x${h}`;
+      pg.on('pageerror', (e) => errors.push(`pageerror(基本 ${tag}): ${e.message}`));
+      pg.on('dialog', (d) => { errors.push(`ブラウザのダイアログが出た(基本 ${tag}): ${d.message()}`); d.dismiss(); });
+      await pg.setViewportSize({ width: w, height: h });
+      await pg.goto(base);
+      await ready(pg);
+      await pg.evaluate(() => { const d = document.getElementById('talkDlg'); if (d?.open) d.close(); });
+      const card = (t) => pg.locator('#board .card', { hasText: t }).first();
+      const shown = () => pg.evaluate(() => { const d = document.getElementById('detail'); return d.open || (getComputedStyle(d).display !== 'none' && d.getBoundingClientRect().height > 0); });
+      const openC = async (t) => { await card(t).locator('.ttl').click({ timeout: 3000 }); await pg.waitForTimeout(200); return shown(); };
+      const shut = () => pg.evaluate(() => { const d = document.getElementById('detail'); if (d.open) d.close(); });
+      const outside = async () => {
+        const pt = await pg.evaluate(() => { const r = document.getElementById('detail').getBoundingClientRect(); return [[4, innerHeight - 4], [innerWidth - 4, innerHeight - 4], [4, 4], [innerWidth - 4, 4]].find(([x, y]) => x < r.left || x > r.right || y < r.top || y > r.bottom) || null; });
+        return pt ? pg.mouse.click(pt[0], pt[1]) : pg.keyboard.press('Escape');
+      };
+      for (const [how, act] of [['✕', () => pg.locator('#detail .dx').click({ timeout: 2000 })], ['下の「閉じる」', () => pg.locator('#detail button', { hasText: /^閉じる$/ }).click({ timeout: 2000 })], ['Esc', () => pg.keyboard.press('Escape')], ['外を押す', outside]]) {
+        let why = '';
+        try {
+          if (!(await openC('見本のカード（今やる）'))) why = '詳細が開かない';
+          else {
+            await act(); await pg.waitForTimeout(250);
+            if (await shown()) why = '閉じても詳細が画面に残る';
+            else if (!(await openC('見本のカード（次にやる'))) why = '閉じたあと、ほかのカードが開けない';
+          }
+        } catch (e) { why = e.message.split('\n')[0]; }
+        await shut();
+        check(!why, `基本 ${tag}：詳細を${how}で閉じると画面から消え、ほかのカードが開ける${why ? '（' + why + '）' : ''}`);
+      }
+      if (w !== 1366) { await pg.close(); continue; }
+      // ここからは書き込む。GitHub への保存（cards.json の PUT）まで届くことを見る
+      const saved = async (pred) => { const t0 = Date.now(); while (!pred(lastCards()) && Date.now() - t0 < 10000) await pg.waitForTimeout(100); return pred(lastCards()); };
+      const step = async (name, fn) => { let why = ''; try { why = await fn() || ''; } catch (e) { why = e.message.split('\n')[0]; } await shut(); check(!why, `基本 ${tag}：${name}${why ? '（' + why + '）' : ''}`); };
+      await step('カードを足すと画面に出て、保存に届く', async () => {
+        if (await pg.locator('#compose').isHidden()) await pg.locator('#compose-btn').click();
+        await pg.fill('#new-title', '基本の検査で足したカード');
+        await pg.locator('#add button[type=submit], #add button').last().click();
+        if (!(await saved((cs) => cs.some((c) => c.title === '基本の検査で足したカード')))) return '保存に届かない';
+        return (await pg.locator('#board .card', { hasText: '基本の検査で足したカード' }).count()) ? '' : '画面に出ない';
+      });
+      await step('⋯ から「今やる」へ移すと保存に届く', async () => {
+        await card('基本の検査で足したカード').locator('details.menu summary').click();
+        await card('基本の検査で足したカード').locator('.pop button', { hasText: '今やるへ' }).click();
+        return (await saved((cs) => cs.some((c) => c.title === '基本の検査で足したカード' && c.lane === 'now'))) ? '' : '今やるにならない';
+      });
+      await step('⋯ から済みにすると保存に届く', async () => {
+        await card('基本の検査で足したカード').locator('details.menu summary').click();
+        await card('基本の検査で足したカード').locator('.pop button', { hasText: '済みにする' }).first().click();
+        return (await saved((cs) => cs.some((c) => c.title === '基本の検査で足したカード' && c.lane === 'done' && c.done_at))) ? '' : '済みにならない';
+      });
+      await step('詳細からコメントを書くと保存に届く', async () => {
+        if (!(await openC('見本のカード（今やる）'))) return '詳細が開かない';
+        await pg.locator('#detail textarea').last().fill('基本の検査のコメント');
+        await pg.locator('#detail button', { hasText: 'コメントして' }).click();
+        return (await saved((cs) => cs.some((c) => c.doc_id === 's1' && (c.history || []).some((x) => x.who === 'you' && x.text === '基本の検査のコメント')))) ? '' : '履歴に書かれない';
+      });
+      await step('確認に答えると保存に届く', async () => {
+        await card('見本の確認').locator('button.opt', { hasText: 'はい' }).first().click();
+        return (await saved((cs) => cs.some((c) => c.doc_id === 's2' && c.answer))) ? '' : '答えが書かれない';
+      });
+      await step('担当で絞る', async () => {
+        await pg.locator('button[data-f=agent]').click(); await pg.waitForTimeout(200);
+        const a = await pg.locator('#board .card', { hasText: '見本のカード（エージェント）' }).count(), y = await pg.locator('#board .card', { hasText: '見本のカード（今やる）' }).count();
+        await pg.locator('button[data-f=all]').click();
+        return a && !y ? '' : '絞り込みが効かない';
+      });
+      await step('探す', async () => {
+        await pg.fill('#q', '予定待ち'); await pg.waitForTimeout(300);
+        const n = await pg.locator('#board .card:visible').count(); await pg.fill('#q', ''); await pg.waitForTimeout(200);
+        return n === 1 ? '' : `探した結果が ${n} 枚`;
+      });
+      await step('一覧と記録に切り替えて戻る', async () => {
+        for (const v of ['list', 'stats', 'board']) { await pg.locator('button[data-v=' + v + ']').click(); await pg.waitForTimeout(200); }
+        return (await pg.locator('#lane-now .card').count()) ? '' : 'ボードに戻らない';
+      });
+      await pg.close();
+    }
+  }
 } catch (e) {
   failures.push(`途中で止まった: ${e.message.split('\n')[0]}`);
 }
