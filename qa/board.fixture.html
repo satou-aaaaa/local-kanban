@@ -50,7 +50,7 @@ const toastEl=document.getElementById("toast"),toastMsg=document.getElementById(
 function say(msg,undo){toastMsg.textContent=msg;undoFn=undo||null;toastUndo.hidden=!undo;toastEl.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{toastEl.hidden=true;undoFn=null},undo?8000:4000)}
 toastUndo.addEventListener("click",()=>{const f=undoFn;undoFn=null;toastEl.hidden=true;if(f)f()});
 function write(fn,msg,undo){fn().then(()=>say(msg,undo)).catch(e=>{statusEl.textContent="書けませんでした（"+(e&&e.code||"error")+"）"})}
-function move(id,lane){const c=cards.find(x=>x.id===id);if(!c||c.lane===lane)return;const from=c.lane||"next",now=new Date().toISOString();
+function move(id,lane,silent,actor){window.__moveActor=actor;const c=cards.find(x=>x.id===id);if(!c||c.lane===lane)return;const from=c.lane||"next",now=new Date().toISOString();
   const patch={lane,updated:now,order:Date.now()/1e6,moves:[...(c.moves||[]),{at:now,from,to:lane}]};if(!c.started_at&&(lane==="now"||lane==="agent"||lane==="done"))patch.started_at=now;patch.done_at=lane==="done"?now:null;
   write(()=>db.collection("cards").doc(id).update(patch),"「"+c.title+"」を移しました",()=>db.collection("cards").doc(id).update({lane:from,done_at:null}))}
 function remove(id){const c=cards.find(x=>x.id===id);write(()=>db.collection("cards").doc(id).update({deleted:true,deleted_at:new Date().toISOString()}),"「"+((c&&c.title)||"")+"」を消しました",()=>db.collection("cards").doc(id).update({deleted:false}))}

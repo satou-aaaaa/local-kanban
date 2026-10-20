@@ -838,6 +838,7 @@ try {
     await pg.waitForTimeout(900);
     await type('りんごとみかんを済みに、ぶどうは明日');
     const fr = await pg.evaluate(() => Object.fromEntries(['りんご', 'みかん', 'ぶどう'].map((f) => { const c = LK.cards.find((x) => x.title === '見本の' + f); return [f, c?.lane + ':' + (c?.due || '')]; })));
+    if (!process.env.LK_BOARD) check(await pg.evaluate(() => window.__moveActor) === 'ポチ', '任せる：ポチが動かすときはボードの move にも「ポチ」を渡す（くり返しの次の回の履歴のため）');
     check(fr['りんご'].startsWith('done') && fr['みかん'].startsWith('done') && fr['ぶどう'] === 'next:' + ymd(1), `任せる：一言で何枚もの操作をこなす（${JSON.stringify(fr)}）`);
     const said = (await pg.$$eval('#talkLog .l.ai', (ls) => ls.map((l) => l.textContent))).at(-1) || '';
     check(/りんご/.test(said) && /みかん/.test(said) && /ぶどう/.test(said) && /明日|\d+月\d+日/.test(said), `任せる：まとめてやったことを一言で全部伝える（${said}）`);
