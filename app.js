@@ -197,13 +197,16 @@
     const nowAll = list.filter(c => c.lane === 'now').concat(up).sort((a, b) => key(a).localeCompare(key(b)));
     const over = nowAll.slice(WIP);
     const down = over.filter(c => c.lane === 'now' && mine(c));
-    const upKeep = up.filter(c => !over.includes(c));
+    // 動かせない今やる（ポチが触ったもの・Claude のもの）も数に入れて、上げるのは空いている分だけ
+    const room = Math.max(0, WIP - (list.filter(c => c.lane === 'now').length - down.length));
+    const upKeep = up.filter(c => !over.includes(c)).slice(0, room);
     const busy = new Set([...upKeep, ...down]);
     const agent = list.filter(c => mine(c) && !busy.has(c) && ['next', 'later'].includes(c.lane) && c.type !== 'mail' && CLAUDE_CAN.test(c.title || '')).slice(0, 2);
     const last = c => Math.max(Date.parse(c.updated || c.created || 0) || 0, ...(c.moves || []).map(m => Date.parse(m.at) || 0));
     const stale = list.find(c => c.lane === 'now' && !down.includes(c) && last(c) > 0 && at - last(c) > 7 * 864e5) || null;
     return { up: upKeep, down, agent, stale };
   }
+  L.tidyPlan = tidyPlan; // 検査用
   function tidyUp() {
     if (!L.writable()) return null;
     const p = tidyPlan();

@@ -603,11 +603,12 @@ try {
   // B. 端末の中の AI（Prompt API）：JSON の命令でカードを動かす。消すのは本人が「消して」と言ったときだけ（聞き返さない）。AI に補足を渡さない
   {
     const { pg, outside } = await talkPage({
-      heard: ['毎週のやつ保留にしといて', 'エージェントのやつ消して', 'そういえば今やるのやつ', '終わり'],
+      heard: ['毎週のやつ保留にしといて', 'エージェントのやつ消して', 'そういえば今やるのやつ', 'クロードって賢いよね', '終わり'],
       replies: [
         { say: 'オッケー、保留にしたよ', action: { type: 'move', query: '見本のカード（次にやる・毎週）', lane: 'hold' } },
         { say: '消すね', action: { type: 'delete', query: '見本のカード（エージェント）' } },
         { say: 'うん', action: { type: 'delete', query: '見本のカード（今やる）' } },
+        { say: 'だよね', action: { type: 'agent', query: '見本のカード（今やる）' } },
       ],
     }, '会話 AI');
     await pg.evaluate(() => LK.memory.put({ id: 'qa-note', kind: 'note', text: '見本の覚えたこと' }));
@@ -618,6 +619,7 @@ try {
     const spoken = await pg.evaluate(() => window.__spoken.join(''));
     check(!/消しますか|消していい/.test(spoken) && /見本のカード（エージェント）/.test(await pg.textContent('#talkLog')), '会話（AI）：「消して」は聞き返さずに消し、どのカードを消したか一言添えた');
     check(!lastCards().find((c) => c.doc_id === 's1')?.deleted, '会話（AI）：本人が「消して」と言っていないのに AI が消そうとしても消さない');
+    check(lastCards().find((c) => c.doc_id === 's1')?.owner !== 'agent', '会話（AI）：本人が「Claude にやらせて」と頼んでいないのに AI が Claude に回そうとしても回さない');
     const prompts = await pg.evaluate(() => window.__prompts.join('\n'));
     check(prompts.includes('見本のカード（次にやる・毎週）') && !prompts.includes('見本の補足'), '会話（AI）：AI に渡すのは題・列・期限だけ（補足は渡さない）');
     check(/（明日まで|（期限すぎ|（\d+月\d+日まで/.test(prompts) && !/期限 20\d\d-/.test(prompts), '会話（AI）：期限は日付ではなく言葉で渡す');
@@ -648,12 +650,16 @@ try {
         day: [3, 7, 13, 19, 23].map((h) => Talk.partOfDay(h)).join(','),
         due: [Talk.dueWords('2026-10-19', t), Talk.dueWords('2026-10-20', t), Talk.dueWords('2026-10-21', t), Talk.dueWords('2026-11-02', t)].join('|'),
         sys: msgs[0].content, n: msgs.length, first: msgs[3]?.content, last: msgs.at(-1).content, keep: LocalAI.KEEP,
+        big: LocalAI.recent([{ role: 'user', content: 'あ'.repeat(5000) }, { role: 'assistant', content: '{"say":"うん"}' }]).reduce((n, m) => n + m.content.length, 0), budget: LocalAI.BUDGET,
+        user: LocalAI.userPart('いまのボード:\n- [今やる] 見本\n\nユーザー: メモ\nユーザー: のまま'),
       };
     });
     check(!r.repeat && r.distinct >= 2, '会話（AI なし）：同じ言い回しを続けて言わない');
     check(r.kinds.length === 0 && r.greet === 0, `会話（AI なし）：どの返事にも言い回しが2つ以上ある${r.kinds.length ? '（' + r.kinds.join(',') + '）' : ''}`);
     check(r.day === 'night,morning,day,evening,night', `会話：時間帯であいさつを変える（${r.day}）`);
     check(r.due === '期限すぎてるよ。|今日が期限だよ。|明日が期限。|期限は11月2日。', `会話：期限の言い方（${r.due}）`);
+    check(r.big <= r.budget, `会話（入れた AI）：1往復だけでも長すぎるときは BUDGET に収める（${r.big}字）`);
+    check(r.user === 'メモ\nユーザー: のまま', `会話（入れた AI）：覚えるときはボードの一覧だけ外し、本人の言葉は削らない（${JSON.stringify(r.user)}）`);
     check(/まとめ/.test(r.sys) && r.n === 1 + 2 + r.keep * 2 + 1 && r.first === String(40 - r.keep * 2) && r.last === 'いま', `会話（入れた AI）：覚えるのは直近 ${r.keep} 往復で、古い分はまとめにして渡す`);
     await pg.close();
   }
@@ -817,6 +823,12 @@ try {
     const hello = await pg.textContent('#talkLog');
     check(/整理したよ/.test(hello) && /見本の期限すぎ/.test(hello) && /戻す/.test(hello), `任せる：話し始めにポチが自分で整理して、やったことを一言で報告する（${hello.slice(0, 120)}）`);
     check(await lane('見本の期限すぎ') === 'now' && await nowN() === 3, `任せる：期限すぎを今やるへ上げ、今やるは3枚までにした（今やる ${await nowN()} 枚）`);
+    const cap = await pg.evaluate(() => {
+      const c = (id, lane, extra = {}) => ({ id, title: id, lane, owner: 'you', order: 1, ...extra });
+      const p = LK.tidyPlan([c('a', 'now', { owner: 'agent' }), c('b', 'now', { owner: 'agent' }), c('c', 'now', { owner: 'agent' }), c('d', 'next', { due: '2000-01-01' })], '2026-10-20', Date.now(), new Set());
+      return p.up.length;
+    });
+    check(cap === 0, `任せる：動かせない今やるで3枚埋まっているときは、期限すぎを上げない（上げた ${cap} 枚）`);
     const agent = await pg.evaluate(() => LK.cards.find((c) => c.title === '見本の調べもの'));
     check(agent?.lane === 'agent' && agent?.owner === 'agent', '任せる：調べものなど Claude ができそうなカードは Claude に回した');
     check(await pg.evaluate(() => LK.cards.filter((c) => (c.history || []).some((h) => h.who === 'ポチ')).length >= 3), '任せる：ポチが動かしたカードの履歴に「ポチ」と残る');

@@ -483,6 +483,8 @@
       let a = out.action;
       // 消すのは、本人が「消して」などと言ったときだけ（小さい AI の思い違いでカードを消さない。動かすのは「戻す」で戻せるのでそのまま任せる）
       if (a?.type === 'delete' && !/(消|削除|いらない|要らない|捨て)/.test(text)) a = null;
+      // Claude に回すのも、本人が「Claude にやらせて」などと頼んだときだけ（話し始めの整理は別。名前が出ただけでは回さない）
+      if (a?.type === 'agent' && !/(claude|クロード)\s*(に|へ)\s*(やら|やって|回|まわ|任|まか|頼|たの|お願い)/i.test(text)) a = null;
       let r = '', doneNow = false;
       if (a && typeof a === 'object' && ['add', 'done', 'move', 'delete', 'read', 'undo', 'status', 'agent'].includes(a.type)) {
         const cmd = { type: a.type };

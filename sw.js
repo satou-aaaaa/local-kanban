@@ -2,7 +2,7 @@
 // カードのデータ（api.github.com など他のサイト）と AI のモデル（Hugging Face など）には触らない（モデルは localai.js の部品が自分で保存する）。
 // 先にネットを見て、つながらないときだけ保存したものを使う（更新はすぐ届く）。
 // vendor/（同梱の AI 部品。数十MB）と bg/（壁紙の写真）は、一度取ったら保存したものを使う（中身は変わらない。スマホの通信量のため。見た目で選んだ写真だけ取る）。
-const CACHE = 'kanban-v20';
+const CACHE = 'kanban-v21';
 const VENDOR_CACHE = 'kanban-vendor';
 // vendor/ の今の版（localai.js の VENDOR と koe.js と同じフォルダ）。これ以外の版を保存していたら消す（版を上げたあと、古い数十MB が端末に残らないように）
 const VENDOR_NOW = ['web-llm-0.2.85', 'transformers-4.3.0', 'onnxruntime-web-1.31.0-dev.20260914-8d85527a0', 'wllama-3.8.1', 'karume-models-0.14.0'];

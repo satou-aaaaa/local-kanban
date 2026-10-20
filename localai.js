@@ -135,11 +135,18 @@
       { role: 'user', content: text },
     ];
   }
+  // 会話から渡す文の頭のボードの一覧（「いまのボード:」〜空行＋「ユーザー: 」）だけを外す。本人の言葉の中の「ユーザー: 」は残す
+  const userPart = (t) => String(t).replace(/^いまのボード:[\s\S]*?\n\nユーザー: /, '');
   // 直近の KEEP 往復のうち、合わせて BUDGET 字に収まる分だけ（古いほうから捨てる）
   function recent(past) {
     let keep = past.slice(-KEEP * 2);
     const size = (l) => l.reduce((n, m) => n + String(m.content || '').length, 0);
     while (keep.length > 2 && size(keep) > BUDGET) keep = keep.slice(2);
+    // 1往復だけでも長すぎるときは、こちらの言ったこと（user）を頭から BUDGET に収まる分だけにする（返事は JSON なので切らない）
+    if (size(keep) > BUDGET) {
+      const rest = size(keep.filter(m => m.role !== 'user'));
+      keep = keep.map(m => m.role === 'user' ? { ...m, content: String(m.content || '').slice(0, Math.max(100, BUDGET - rest)) } : m);
+    }
     return keep;
   }
   // Prompt API の session と同じ形（prompt(文, { responseConstraint })）で返す
@@ -149,7 +156,7 @@
     const e = await brain();
     const past = [];
     const summary = '';
-    const remember = (user, said) => { past.push({ role: 'user', content: user.replace(/^[\s\S]*\nユーザー: /, '') }, { role: 'assistant', content: said }); if (past.length > KEEP * 4) past.splice(0, past.length - KEEP * 2); }; // ボードの一覧は覚えない（毎回渡す）
+    const remember = (user, said) => { past.push({ role: 'user', content: userPart(user) }, { role: 'assistant', content: said }); if (past.length > KEEP * 4) past.splice(0, past.length - KEEP * 2); }; // ボードの一覧は覚えない（毎回渡す）
     return {
       async prompt(text, { responseConstraint } = {}) {
         const r = await e.chat.completions.create({
@@ -418,7 +425,7 @@
   }
 
   const LocalAI = {
-    MODELS, CPU, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, safeInstall, present, info, friendly, SAMPLING, KEEP, CTX, BUDGET, messages, plan, status, install, remove, session, listen, bargeIn,
+    MODELS, CPU, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, safeInstall, present, info, friendly, SAMPLING, KEEP, CTX, BUDGET, recent, userPart, messages, plan, status, install, remove, session, listen, bargeIn,
     llmReady: () => !!load().llm,
     earReady: () => !!load().ear,
     prepareEar: () => (load().ear ? loadEar().catch(() => {}) : Promise.resolve()),
