@@ -87,7 +87,7 @@
           properties: {
             type: { enum: ['add', 'done', 'move', 'delete', 'read', 'undo'] },
             title: { type: 'string' }, query: { type: 'string' },
-            lane: { enum: ['now', 'next', 'later', 'hold', 'agent', 'done'] },
+            lane: { enum: ['now', 'next', 'wait', 'later', 'hold', 'agent', 'done'] },
           },
         }],
       },
