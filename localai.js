@@ -34,8 +34,27 @@
 
   // ---------- 端末の下調べ ----------
   function pickModel() { return (g.navigator?.deviceMemory || 4) >= 8 ? MODELS.large : MODELS.small; }
-  // 端末内の音声認識（Chrome 139 以降）が無い端末だけ Whisper を入れる
-  const needEar = () => !g.Voice?.localApi;
+  // 端末内の音声認識（Chrome 139 以降）で日本語を聞き取れない端末だけ Whisper を入れる。
+  // 関数（SpeechRecognition.available）があっても、Android の Chrome は日本語が 'unavailable' のことがある（2026-10-20 Pixel 6a）ので、
+  // 実際の答えで決める。'downloadable' なら入れてみて、EAR_WAIT ミリ秒たっても使えなければ Whisper にする
+  const EAR_WAIT = 20000;
+  const needEar = () => !g.Voice?.localApi; // すぐ答えが要るとき（画面の目安）の仮の判定
+  async function earNeeded({ tryInstall = false } = {}) {
+    const V = g.Voice;
+    if (!V?.localApi) return true;
+    let st = await V.localStatus('ja-JP').catch(() => 'unavailable');
+    if (st === 'available') return false;
+    if (!tryInstall || (st !== 'downloadable' && st !== 'downloading')) return true;
+    const t0 = Date.now();
+    const done = st === 'downloadable' ? V.install('ja-JP').catch(() => false) : Promise.resolve(false);
+    while (Date.now() - t0 < EAR_WAIT) {
+      await Promise.race([done, new Promise((ok) => setTimeout(ok, 1000))]);
+      st = await V.localStatus('ja-JP').catch(() => 'unavailable');
+      if (st === 'available') return false;
+      if (st === 'unavailable') return true;
+    }
+    return true;
+  }
   // 入れる前に見せる大きさ（目安）。GPU にはまだ触らない（押したときに調べる）
   function plan() {
     const m = g.navigator?.gpu ? pickModel() : CPU;
@@ -271,10 +290,19 @@
   // 「AI の部品を入れる」を押したとき。onProgress(0〜1, 何を取っているか)
   // WebGPU が使えない・WebLLM が動かない端末は、CPU で動く頭（wllama）を入れる
   const CPU_NOTE = 'この端末の Chrome は WebGPU が使えないので、CPU で動く AI を入れます（返事はゆっくり）。';
-  async function install(onProgress) {
-    const a = await gpu();
-    const ear = needEar();
+  // earOnly：頭はもう入っていて、耳（Whisper）だけ足すとき
+  async function install(onProgress, { earOnly = false } = {}) {
+    const ear = await earNeeded({ tryInstall: true });
     const step = (base, part) => (p, what) => onProgress?.(base + part * Math.max(0, Math.min(1, p || 0)), what);
+    if (earOnly && load().llm) {
+      if (ear) {
+        await loadEar(step(0, 1));
+        save({ ear: true, from: [...new Set([...(load().from || []), `huggingface.co/${EAR.id}`, ...(vadModel ? [`huggingface.co/${VAD.id}`] : [])])] });
+      }
+      onProgress?.(1, '');
+      return status();
+    }
+    const a = await gpu();
     let id = '', from = [], why = '';
     if (a) {
       const m = pickModel();
@@ -320,7 +348,7 @@
   }
 
   const LocalAI = {
-    MODELS, CPU, EAR, VAD, VENDOR, TRIES, gpu, SAMPLING, KEEP, messages, plan, status, install, remove, session, listen, bargeIn,
+    MODELS, CPU, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, SAMPLING, KEEP, messages, plan, status, install, remove, session, listen, bargeIn,
     llmReady: () => !!load().llm,
     earReady: () => !!load().ear,
     prepareEar: () => (load().ear ? loadEar().catch(() => {}) : Promise.resolve()),

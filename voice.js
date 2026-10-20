@@ -121,7 +121,7 @@
       if (st === 'downloadable') install(lang);
       throw new Error('日本語の聞き取りの部品を端末に入れています。少し待ってからもう一度押してください。');
     }
-    if (st !== 'available') throw new Error('この端末では、声を端末の中だけで聞き取れません。');
+    if (st !== 'available') throw new Error('この端末では、声を端末の中だけで聞き取れません。' + (g.LocalAI ? '「⋯ → 🎤と会話・AI の設定」で AI の部品（耳）を入れると聞き取れます。' : ''));
     return new Promise((ok, ng) => {
       const r = new SR();
       r.lang = lang; r.interimResults = false; r.maxAlternatives = 1; r.continuous = false;
