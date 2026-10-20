@@ -91,7 +91,7 @@
     const w = new cpuLib.Wllama({ default: here(VENDOR.cpuWasm) }, { allowOffline: true, suppressNativeLog: true });
     // WebGPU は使わない（使えない端末のための頭）。スレッドは COOP/COEP が無い GitHub Pages では1本になる
     try {
-      await w.loadModelFromUrl(CPU.url, { n_gpu_layers: 0, n_ctx: 2048, progressCallback: ({ loaded, total }) => onProgress?.(total ? loaded / total : 0, 'qwen2.5-0.5b-instruct-q4_0.gguf') });
+      await w.loadModelFromUrl(CPU.url, { n_gpu_layers: 0, n_ctx: CTX, progressCallback: ({ loaded, total }) => onProgress?.(total ? loaded / total : 0, 'qwen2.5-0.5b-instruct-q4_0.gguf') });
     } catch (e) { try { await w.exit(); } catch { /* 片づけられなくてもよい */ } throw e; } // 失敗したら worker と wasm を放す（入れ直しのたびに残らない）
     // WebLLM と同じ形（chat.completions.create）にそろえる
     cpuEngine = {
@@ -116,15 +116,26 @@
   // 返事の出し方。Qwen2.5 の公式の既定（generation_config.json：temperature 0.7・top_p 0.8・repetition_penalty 1.1）に合わせる。
   // 0.5 だと毎回同じような返事になり、定型文に聞こえた
   const SAMPLING = { temperature: 0.7, top_p: 0.8, repetition_penalty: 1.1 };
-  const KEEP = 12; // 覚えておくやりとり（往復）。超えた古い分は端末の中で短くまとめて指示に足す
+  // 一度に扱える量（トークン）。2048 だと数往復で超えて「うまく考えられなかった」が続いたので 4096 にし、
+  // さらに古いやりとりから捨てる（KEEP 往復まで・合わせて BUDGET 字まで）。まとめは作らない（返事のたびに計算が走って遅くなったため）
+  const CTX = 4096;
+  const KEEP = 6;
+  const BUDGET = 1500;
   // AI に渡す messages を組み立てる（検査からも呼ぶ）。ボードの一覧は毎回の発言にだけ入れ、覚える方には入れない
   function messages({ system, examples = [], summary = '', past = [], text }) {
     return [
       { role: 'system', content: system + (summary ? `\nこれまでの話のまとめ: ${summary}` : '') },
       ...examples.flatMap(([u, a]) => [{ role: 'user', content: u }, { role: 'assistant', content: a }]),
-      ...past.slice(-KEEP * 2),
+      ...recent(past),
       { role: 'user', content: text },
     ];
+  }
+  // 直近の KEEP 往復のうち、合わせて BUDGET 字に収まる分だけ（古いほうから捨てる）
+  function recent(past) {
+    let keep = past.slice(-KEEP * 2);
+    const size = (l) => l.reduce((n, m) => n + String(m.content || '').length, 0);
+    while (keep.length > 2 && size(keep) > BUDGET) keep = keep.slice(2);
+    return keep;
   }
   // Prompt API の session と同じ形（prompt(文, { responseConstraint })）で返す
   async function session(system, examples = []) {
@@ -132,35 +143,20 @@
     if (!id) return null;
     const e = await brain();
     const past = [];
-    let summary = '', busy = Promise.resolve();
-    // 古いやりとりを1〜2文にまとめる（返事のあとに回すので、待たせない）
-    const squeeze = () => {
-      if (past.length <= KEEP * 2) return;
-      const old = past.splice(0, past.length - KEEP * 2);
-      const talk = old.map((m) => `${m.role === 'user' ? 'ユーザー' : 'あなた'}: ${m.role === 'user' ? m.content : (() => { try { return JSON.parse(m.content).say; } catch { return m.content; } })()}`).join('\n');
-      busy = busy.then(async () => {
-        const r = await e.chat.completions.create({
-          messages: [{ role: 'system', content: '会話のまとめ役。ユーザーの好み・気持ち・決めたことを中心に、日本語で2文以内にまとめる。' }, { role: 'user', content: `${summary ? `前のまとめ: ${summary}\n` : ''}${talk}` }],
-          temperature: 0.3, max_tokens: 120,
-        });
-        summary = String(r?.choices?.[0]?.message?.content || summary).trim().slice(0, 300);
-      }).catch(() => { /* まとめられなくても会話は続ける */ });
-    };
+    const summary = '';
+    const remember = (user, said) => { past.push({ role: 'user', content: user.replace(/^[\s\S]*\nユーザー: /, '') }, { role: 'assistant', content: said }); if (past.length > KEEP * 4) past.splice(0, past.length - KEEP * 2); }; // ボードの一覧は覚えない（毎回渡す）
     return {
       async prompt(text, { responseConstraint } = {}) {
-        await busy;
         const r = await e.chat.completions.create({
           messages: messages({ system, examples, summary, past, text }), ...SAMPLING, max_tokens: 256,
           ...(responseConstraint ? { response_format: { type: 'json_object', schema: JSON.stringify(responseConstraint) } } : {}),
         });
         const out = r?.choices?.[0]?.message?.content || '';
-        past.push({ role: 'user', content: text.replace(/^[\s\S]*\nユーザー: /, '') }, { role: 'assistant', content: out }); // ボードの一覧は覚えない（毎回渡す）
-        squeeze();
+        remember(text, out);
         return out;
       },
       // 出来たところから受け取る（文ごとに読み上げを始めて、遅さを隠す）。流して返せない頭なら、まとめて1回で返す
       async *promptStreaming(text, { responseConstraint } = {}) {
-        await busy;
         const r = await e.chat.completions.create({
           messages: messages({ system, examples, summary, past, text }), ...SAMPLING, max_tokens: 256, stream: true,
           ...(responseConstraint ? { response_format: { type: 'json_object', schema: JSON.stringify(responseConstraint) } } : {}),
@@ -169,11 +165,12 @@
         if (r && typeof r[Symbol.asyncIterator] === 'function') {
           for await (const c of r) { const d = c?.choices?.[0]?.delta?.content ?? c?.choices?.[0]?.text ?? ''; if (d) { out += d; yield d; } }
         } else { out = r?.choices?.[0]?.message?.content || ''; if (out) yield out; }
-        past.push({ role: 'user', content: text.replace(/^[\s\S]*\nユーザー: /, '') }, { role: 'assistant', content: out });
-        squeeze();
+        remember(text, out);
       },
+      // AI を通らなかったやりとり（あいさつ・すぐやった命令）も覚える（「まずは〇〇から？」に「うん」で通じるように）
+      note(user, said) { if (said) remember(user || '（会話を始めた）', JSON.stringify({ say: said, action: null })); },
       get summary() { return summary; },
-      destroy() { past.length = 0; summary = ''; },
+      destroy() { past.length = 0; },
     };
   }
 
@@ -366,7 +363,7 @@
   }
 
   const LocalAI = {
-    MODELS, CPU, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, SAMPLING, KEEP, messages, plan, status, install, remove, session, listen, bargeIn,
+    MODELS, CPU, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, SAMPLING, KEEP, CTX, BUDGET, messages, plan, status, install, remove, session, listen, bargeIn,
     llmReady: () => !!load().llm,
     earReady: () => !!load().ear,
     prepareEar: () => (load().ear ? loadEar().catch(() => {}) : Promise.resolve()),

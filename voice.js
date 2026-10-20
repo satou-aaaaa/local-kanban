@@ -11,7 +11,9 @@
 //   「〇〇を追加」「〇〇を今やるに追加」「今やるに〇〇を追加」 → {type:'add', title, lane}
 //   「〇〇を済み」「〇〇終わった」「〇〇完了」                → {type:'done', query}
 //   「〇〇を<列>へ」「〇〇を<列>に移して」                    → {type:'move', query, lane}
-//   「〇〇を消して」「〇〇を削除」                            → {type:'delete', query}（実行する前に聞き返す）
+//   「〇〇を消して」「〇〇を削除」                            → {type:'delete', query}（すぐ消して「戻す」で戻せる）
+//   「〇〇を Claude に回して」「〇〇は Claude にやらせて」      → {type:'agent', query}（Claude が進める列へ）
+//   「〇〇は明日」「〇〇を金曜までに」「〇〇は25日」            → {type:'due', query, when}（期限を決める。日付は Voice.dueDate）
 //   「<列>を読んで」「<列>は？」「今やることは？」            → {type:'read', lane}
 //   「〇〇はどうなった？」「〇〇の状況」「〇〇の進み具合」      → {type:'status', query}（列・今の段・最後の記録を答える）
 //   「戻す」「元に戻して」「取り消し」                        → {type:'undo'}
@@ -53,6 +55,9 @@
     if (m) return { type: 'add', title: m[1].replace(/を$/, ''), lane: m[5] ? laneOf(m[5], lanes) : null };
     m = t.match(/^(?:追加|メモ)(.+)$/);
     if (m) return { type: 'add', title: m[1], lane: null };
+    // Claude に回す（カードを Claude が進める列へ）
+    m = t.match(/^(.+?)(を|は)?(claude|クロード)(に|へ)(やらせて|やってもらって|回して|まわして|任せて|まかせて|頼んで|たのんで|お願い)(おいて|といて|とい?て|ね|する)?$/i);
+    if (m) return { type: 'agent', query: m[1] };
     // 消す
     m = t.match(/^(.+?)を?(消して|消す|削除(して|する)?)$/);
     if (m) return { type: 'delete', query: m[1] };
@@ -62,7 +67,35 @@
     // 列へ移す
     m = t.match(/^(.+)を(.+?)(へ|に)(移して|移す|動かして|動かす|して|する)?$/);
     if (m && laneOf(m[2], lanes)) return { type: 'move', query: m[1], lane: laneOf(m[2], lanes) };
+    // 期限を決める
+    m = t.match(/^(.+?)(は|を|の期限は?)(今日|きょう|明日|あした|明後日|あさって|来週|週末|[月火水木金土日]曜日?|\d{1,2}日)(まで|中)?(に)?(して|する|やる|で(いい)?)?$/);
+    if (m && dueDate(m[3])) return { type: 'due', query: m[1], when: m[3] };
     return { type: 'unknown', text: t };
+  }
+
+  // 「明日」「金曜」「25日」を YYYY-MM-DD に直す（今日から見て次に来る日）。分からなければ ''
+  function dueDate(word, today = new Date()) {
+    const w = String(word || '').replace(/曜$/, '曜日');
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const add = (n) => d.setDate(d.getDate() + n);
+    if (/^(今日|きょう)$/.test(w)) add(0);
+    else if (/^(明日|あした)$/.test(w)) add(1);
+    else if (/^(明後日|あさって)$/.test(w)) add(2);
+    else if (w === '来週') add(7);
+    else if (w === '週末') add((6 - d.getDay() + 7) % 7);
+    else if (/^[月火水木金土日]曜日$/.test(w)) add(('日月火水木金土'.indexOf(w[0]) - d.getDay() + 7) % 7 || 7);
+    else {
+      const m = w.match(/^(\d{1,2})日$/); const n = m ? +m[1] : 0;
+      if (n < 1 || n > 31) return '';
+      if (n < d.getDate()) d.setMonth(d.getMonth() + 1, 1);
+      d.setDate(n);
+      if (d.getDate() !== n) return ''; // 30日までの月の31日など
+    }
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  // 一言に入った複数の命令を区切る（「AとBを済みに、Cは明日」→ 「AとBを済みに」「Cは明日」）。「あとで」を切らないよう「あと」では切らない
+  function split(text) {
+    return String(text || '').split(/[、。,，]|それと|それから|あとは/).map((x) => x.trim()).filter(Boolean);
   }
 
   // 文字の2つ組の重なり（0〜1）
@@ -223,6 +256,6 @@
     try { g.speechSynthesis?.cancel(); } catch { /* なくてよい */ }
   }
 
-  const api = { mood: 'normal', stop, cancelListen, parse, match, nearest, laneOf, listen, localStatus, install, speak, speakAll, speechText, chunks, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm };
+  const api = { mood: 'normal', stop, cancelListen, parse, dueDate, split, match, nearest, laneOf, listen, localStatus, install, speak, speakAll, speechText, chunks, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm };
   g.Voice = api;
 })(typeof window !== 'undefined' ? window : globalThis);

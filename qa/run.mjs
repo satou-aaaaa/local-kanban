@@ -387,15 +387,14 @@ try {
   check(await page.evaluate(() => document.querySelector('#talkDlg').open && !document.querySelector('#cmdDlg')), 'Ctrl+K は会話と同じ欄を開く（命令だけの欄は無い）');
   await page.waitForFunction(() => /保留にしたよ/.test(document.querySelector('#talkLog').textContent), null, { timeout: 3000 }).catch(() => {});
   check(/保留にしたよ/.test(await page.textContent('#talkLog')), `打った命令の結果をポチが一言で返す（${(await page.textContent('#talkLog')).slice(-60)}）`);
-  // 消す前に聞き返す → はい で消す → 戻す で戻る
+  check((lastCards().find((c) => c.doc_id === 's3')?.history || []).some((h) => h.who === 'ポチ' && /保留/.test(h.text)), '会話で動かしたカードの履歴に「ポチ」と残る');
+  // 消すのも聞き返さずにすぐやり、一言で知らせる → 戻す で戻る（2026-10-20 satouさん「AI に任せる」）
   await page.waitForTimeout(1500);
-  const b4 = puts.length;
   await cmd('見本のカード（エージェント）を消して');
-  await page.waitForTimeout(1600);
-  check(puts.length === b4 && /消しますか/.test(await page.textContent('#toast-msg')), '「消して」はすぐ消さずに聞き返す');
-  await page.fill('#talkIn', 'はい'); await page.press('#talkIn', 'Enter');
-  await waitCards((cs) => cs.find((c) => c.doc_id === 's4')?.deleted === true, '聞き返しへの「はい」');
-  check(lastCards().find((c) => c.doc_id === 's4')?.deleted === true, '「はい」でカードが消えた（行は残る）');
+  await waitCards((cs) => cs.find((c) => c.doc_id === 's4')?.deleted === true, '「消して」');
+  check(lastCards().find((c) => c.doc_id === 's4')?.deleted === true, '「消して」は聞き返さずに消す（行は残る）');
+  await page.waitForFunction(() => /消したよ/.test(document.querySelector('#talkLog').textContent), null, { timeout: 3000 }).catch(() => {});
+  check(/消したよ/.test(await page.textContent('#talkLog')) && !/消していい|消しますか/.test(await page.textContent('#talkLog')), '消したら確認ではなく「消したよ」と一言で知らせる');
   await page.waitForTimeout(1500);
   await cmd('戻す');
   await waitCards((cs) => !cs.find((c) => c.doc_id === 's4')?.deleted, '「戻す」');
@@ -598,25 +597,27 @@ try {
     await pg.close();
   }
 
-  // B. 端末の中の AI（Prompt API）：JSON の命令でカードを動かす。消す前は聞き返す。AI に補足を渡さない
+  // B. 端末の中の AI（Prompt API）：JSON の命令でカードを動かす。消すのは本人が「消して」と言ったときだけ（聞き返さない）。AI に補足を渡さない
   {
     const { pg, outside } = await talkPage({
-      heard: ['毎週のやつ保留にしといて', 'エージェントのやつ消して', 'はい', '終わり'],
+      heard: ['毎週のやつ保留にしといて', 'エージェントのやつ消して', 'そういえば今やるのやつ', '終わり'],
       replies: [
         { say: 'オッケー、保留にしたよ', action: { type: 'move', query: '見本のカード（次にやる・毎週）', lane: 'hold' } },
         { say: '消すね', action: { type: 'delete', query: '見本のカード（エージェント）' } },
+        { say: 'うん', action: { type: 'delete', query: '見本のカード（今やる）' } },
       ],
     }, '会話 AI');
     await pg.evaluate(() => LK.memory.put({ id: 'qa-note', kind: 'note', text: '見本の覚えたこと' }));
     await pg.click('#talkBtn');
     await waitTalkEnd(pg);
     check(/内蔵 AI/.test(await pg.textContent('#talkMode')), '会話（AI）：内蔵 AI があれば使う');
-    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold' && cs.find((c) => c.doc_id === 's4')?.deleted === true, '会話（AI）の「保留」と「消す（はい）」');
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold' && cs.find((c) => c.doc_id === 's4')?.deleted === true, '会話（AI）の「保留」と「消す」');
     const spoken = await pg.evaluate(() => window.__spoken.join(''));
-    check(/消しますか|消していい/.test(spoken), '会話（AI）：消す前に、すぐ消さずに聞き返した');
+    check(!/消しますか|消していい/.test(spoken) && /見本のカード（エージェント）/.test(await pg.textContent('#talkLog')), '会話（AI）：「消して」は聞き返さずに消し、どのカードを消したか一言添えた');
+    check(!lastCards().find((c) => c.doc_id === 's1')?.deleted, '会話（AI）：本人が「消して」と言っていないのに AI が消そうとしても消さない');
     const prompts = await pg.evaluate(() => window.__prompts.join('\n'));
     check(prompts.includes('見本のカード（次にやる・毎週）') && !prompts.includes('見本の補足'), '会話（AI）：AI に渡すのは題・列・期限だけ（補足は渡さない）');
-    check(!prompts.includes('はい'), '会話（AI）：消す確認への「はい」は AI ではなくアプリが受け取る');
+    check(/（明日まで|（期限すぎ|（\d+月\d+日まで/.test(prompts) && !/期限 20\d\d-/.test(prompts), '会話（AI）：期限は日付ではなく言葉で渡す');
     const sys = await pg.evaluate(() => window.__system);
     check(/ポチ/.test(sys) && /タメ口/.test(sys), '会話（AI）：キャラの名前と性格を AI への指示に入れた');
     check(/"role":"assistant"/.test(sys) && /話し言葉/.test(sys), '会話（AI）：指示に話し方と返事の見本（few-shot）を入れた');
@@ -772,6 +773,71 @@ try {
     await waitTalkEnd(pg);
     check(!(await pg.evaluate(() => document.querySelector('#talkDlg').open)), '一つの欄：打つ⇄話すを切り替えたあとも「終わり」で閉じる');
     check(outside.length === 0, '一つの欄：自分のサイトと GitHub 以外へ通信していない');
+    await pg.close();
+  }
+
+  // E. AI に任せる（2026-10-20 satouさん「AI に権限をあげるので、基本的に AI が作業をする形に」）：
+  //    ポチが話し始めに自分で整理して報告する・一言で複数の命令・期限・Claude に回す・どれも「戻す」で戻せる・履歴に「ポチ」
+  {
+    const words = await page.evaluate(() => {
+      const L = [['now', '今やる', '今'], ['next', '次にやる', '次'], ['later', '時間があるとき', 'あとで'], ['agent', 'エージェント'], ['done', '済み']];
+      const t = new Date(2026, 9, 20);
+      return {
+        agent: JSON.stringify(Voice.parse('資料の下書きをClaudeに回して', L)), due: JSON.stringify(Voice.parse('牛乳は金曜までに', L)), later: JSON.stringify(Voice.parse('牛乳をあとでに', L)),
+        split: Voice.split('りんごとみかんを済みに、ぶどうは明日').join('|'), keep: Voice.split('牛乳をあとでにして').length,
+        dates: ['今日', '明日', '金曜', '25日', '5日', '週末'].map((w) => Voice.dueDate(w, t)).join(','),
+      };
+    });
+    check(words.agent === '{"type":"agent","query":"資料の下書き"}', `声の文型：「〇〇を Claude に回して」（${words.agent}）`);
+    check(words.due === '{"type":"due","query":"牛乳","when":"金曜"}' && words.later === '{"type":"move","query":"牛乳","lane":"later"}', `声の文型：「〇〇は金曜までに」で期限、「あとでに」は列のまま（${words.due} ${words.later}）`);
+    check(words.split === 'りんごとみかんを済みに|ぶどうは明日' && words.keep === 1, `一言の中の複数の命令を区切る（${words.split}）`);
+    check(words.dates === '2026-10-20,2026-10-21,2026-10-23,2026-10-25,2026-11-05,2026-10-24', `「明日」「金曜」「25日」を日付に直す（${words.dates}）`);
+
+    const { pg, outside } = await talkPage({ sr: false }, '任せる');
+    const ymd = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+    await pg.evaluate(async ({ yesterday }) => {
+      const t = new Date().toISOString();
+      const body = (title, lane, due, o) => ({ type: 'task', title, owner: 'you', lane, priority: 'mid', order: o, created: t, updated: t, moves: [{ at: t, to: lane }], due, history: [{ at: t, who: 'you', text: '検査で足した' }] });
+      for (const [i, d] of ['2099-02-01', '2099-02-02', '2099-02-03'].entries()) await LK.add(body('見本の今やる' + (i + 1), 'now', d, 10 + i));
+      await LK.add(body('見本の期限すぎ', 'next', yesterday, 20));
+      await LK.add(body('見本の調べもの', 'later', null, 21));
+      for (const [i, f] of ['りんご', 'みかん', 'ぶどう'].entries()) await LK.add(body('見本の' + f, 'next', null, 30 + i));
+    }, { yesterday: ymd(-1) });
+    await pg.waitForTimeout(1200); // 足したのと整理を「戻す」で一緒に戻さないよう、間をあける
+    const lane = (title) => pg.evaluate((t) => LK.cards.find((c) => c.title === t && !c.deleted)?.lane, title);
+    const nowN = () => pg.evaluate(() => LK.cards.filter((c) => c.lane === 'now' && !c.deleted).length);
+    await pg.click('#talkBtn');
+    await pg.waitForFunction(() => /整理したよ/.test(document.querySelector('#talkLog').textContent), null, { timeout: 10000 }).catch(() => {});
+    const hello = await pg.textContent('#talkLog');
+    check(/整理したよ/.test(hello) && /見本の期限すぎ/.test(hello) && /戻す/.test(hello), `任せる：話し始めにポチが自分で整理して、やったことを一言で報告する（${hello.slice(0, 120)}）`);
+    check(await lane('見本の期限すぎ') === 'now' && await nowN() === 3, `任せる：期限すぎを今やるへ上げ、今やるは3枚までにした（今やる ${await nowN()} 枚）`);
+    const agent = await pg.evaluate(() => LK.cards.find((c) => c.title === '見本の調べもの'));
+    check(agent?.lane === 'agent' && agent?.owner === 'agent', '任せる：調べものなど Claude ができそうなカードは Claude に回した');
+    check(await pg.evaluate(() => LK.cards.filter((c) => (c.history || []).some((h) => h.who === 'ポチ')).length >= 3), '任せる：ポチが動かしたカードの履歴に「ポチ」と残る');
+    const type = async (t) => { await pg.fill('#talkIn', t); await pg.press('#talkIn', 'Enter'); await pg.waitForTimeout(400); };
+    await type('戻して');
+    check(await lane('見本の期限すぎ') === 'next' && await lane('見本の調べもの') === 'later' && await nowN() === 5, `任せる：「戻して」で整理を全部まとめて元に戻す（今やる ${await nowN()} 枚）`);
+    await pg.waitForTimeout(900);
+    await type('りんごとみかんを済みに、ぶどうは明日');
+    const fr = await pg.evaluate(() => Object.fromEntries(['りんご', 'みかん', 'ぶどう'].map((f) => { const c = LK.cards.find((x) => x.title === '見本の' + f); return [f, c?.lane + ':' + (c?.due || '')]; })));
+    check(fr['りんご'].startsWith('done') && fr['みかん'].startsWith('done') && fr['ぶどう'] === 'next:' + ymd(1), `任せる：一言で何枚もの操作をこなす（${JSON.stringify(fr)}）`);
+    const said = (await pg.$$eval('#talkLog .l.ai', (ls) => ls.map((l) => l.textContent))).at(-1) || '';
+    check(/りんご/.test(said) && /みかん/.test(said) && /ぶどう/.test(said) && /明日|\d+月\d+日/.test(said), `任せる：まとめてやったことを一言で全部伝える（${said}）`);
+    await pg.waitForTimeout(900);
+    await type('ぶどうをClaudeに回して');
+    const g = await pg.evaluate(() => LK.cards.find((c) => c.title === '見本のぶどう'));
+    check(g?.lane === 'agent' && g?.owner === 'agent' && /Claude に回した/.test(await pg.textContent('#talkLog')), '任せる：「Claude に回して」でカードを Claude の列へ回し、一言で知らせる');
+    // 本人が戻したカードは、次に話し始めたときに二度と動かさない
+    await pg.evaluate(() => { document.querySelector('#talkIn').value = ''; });
+    await type('終わり');
+    await pg.waitForTimeout(500);
+    await pg.click('#talkBtn');
+    await pg.waitForTimeout(1500);
+    check(await lane('見本の期限すぎ') === 'next' && await lane('見本の調べもの') === 'later', '任せる：本人が戻したカードは、次に話し始めても動かさない');
+    await type('終わり');
+    check(outside.length === 0, '任せる：自分のサイトと GitHub 以外へ通信していない（Claude に回すのはカードの列だけ）');
+    const tk = readFileSync(resolve(root, 'talk.js'), 'utf8'), la = readFileSync(resolve(root, 'localai.js'), 'utf8');
+    check(/visibilitychange/.test(tk) && /fails >= 2/.test(tk) && /CTX = 4096/.test(la) && !/会話のまとめ役/.test(la), '会話が続いても止まらない：画面を消したら聞くのをやめる・2回失敗で AI なし・4096・返事のたびにまとめを作らない');
     await pg.close();
   }
 

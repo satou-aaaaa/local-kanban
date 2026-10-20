@@ -147,10 +147,21 @@
     c.local_edit = true; // Claude が戻ったときに取り込む目印
     return true;
   }
+  // 誰が直したか。ポチ（会話）が動かしたときは「ポチ」と履歴に残す（ボードの move・remove は履歴を書かないので、ここで足す）
+  let actor = '';
+  function as(who, fn) { const prev = actor; actor = who; try { return fn(); } finally { actor = prev; } }
+  function stamp(op, before) {
+    if (!actor) return;
+    const at = now();
+    if (op.kind === 'set') { const h = op.body.history || []; op.body.history = before ? [...(before.history || []), { at, who: actor, text: '直した' }].slice(-50) : h.length ? h.map((x) => ({ ...x, who: actor })) : [{ at, who: actor, text: '足した' }]; return; }
+    if (op.patch.history) return; // 履歴を自分で書く操作（コメントなど）はそのまま
+    op.patch.history = [...((before && before.history) || []), { at, who: actor, text: describe(op).replace(/^「[^」]*」[をの]?/, '') || '直した' }].slice(-50);
+  }
   function mutate(op, why) {
     if (!ready) return Promise.reject(Object.assign(new Error('まだつないでいません'), { code: 'unavailable' }));
     if (!writable()) return Promise.reject(Object.assign(new Error('保存できません'), { code: 'permission_denied' }));
     const before = byId(op.id);
+    stamp(op, before);
     undo.push({ id: op.id, before: before ? copy(before) : null, t: Date.now() }); if (undo.length > 60) undo.shift();
     if (!applyOp(op)) { undo.pop(); return Promise.reject(Object.assign(new Error('カードがありません'), { code: 'not_found' })); }
     ops.push(op); rev++; keepOps();
@@ -164,6 +175,7 @@
     const p = op.patch;
     if (p.deleted === true) return `「${t}」を消した`;
     if (p.lane) return `「${t}」を${(LANES.find(([k]) => k === p.lane) || [, p.lane])[1]}へ`;
+    if (p.due !== undefined && Object.keys(p).every((k) => ['due', 'updated', 'history'].includes(k))) return `「${t}」の期限を${p.due || 'なし'}に`;
     if (p.answer) return `「${t}」に「${p.answer}」と答えた`;
     return `「${t}」を直した`;
   }
@@ -419,7 +431,7 @@
 
   // ================= アプリ（app.js）から使う =================
   window.LK = {
-    LANES, SYNC_KEYS, ls, entry, memory: memoryApi, unsent: () => (dirty ? ops.length : 0), ghStore, folderStore, fileStore, connect, reload, flush, undo: undoLast, writable,
+    LANES, SYNC_KEYS, ls, entry, memory: memoryApi, unsent: () => (dirty ? ops.length : 0), ghStore, folderStore, fileStore, connect, reload, flush, undo: undoLast, writable, as,
     get store() { return store; }, get ready() { return ready; }, get dirty() { return dirty; },
     get cards() { return cards; },
     add(body) { const id = newId(); return mutate({ kind: 'set', id, body }).then(() => id); },
