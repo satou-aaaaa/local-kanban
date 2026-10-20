@@ -2,6 +2,7 @@
 //   Voice.parse(文, 列の一覧)  … 文を命令に直す（ブラウザの機能は使わない。テストしやすいように純粋な関数）
 //   Voice.match(言葉, 一覧, 題の取り出し) … あいまい一致で候補を探す
 //   Voice.listen()             … 1回だけ聞き取る（端末の中だけ。サーバーで文字にする音声認識は使わない）
+//   Voice.cancelListen()       … 聞いている途中でやめる（打つほうに切り替えたとき）
 //   Voice.localStatus()        … 端末の中で聞き取れるか（'available' など）
 //   Voice.speak(文)            … 端末の中の声で読み上げる（ネット経由の声は使わない）
 //   Voice.supported            … 端末の中で聞き取れるか（Chrome 139 以降の音声認識、または localai.js で入れた Whisper）
@@ -113,6 +114,14 @@
   function useEar(e) { ear = e; }
   const earReady = () => { try { return !!ear?.ready(); } catch { return false; } };
 
+  // 聞いている途中でやめる（会話の途中で打つほうに切り替えたとき）。別の耳（Whisper）は cancel があれば呼ぶ
+  let rec = null;
+  function cancelListen() {
+    try { rec?.abort(); } catch { /* 止められなくてもよい */ }
+    rec = null;
+    try { ear?.cancel?.(); } catch { /* なくてよい */ }
+  }
+
   // 1回だけ聞き取る。返り値は Promise<{ text }>。端末の中で聞き取れないときは聞かずにエラーにする
   async function listen({ lang = 'ja-JP' } = {}) {
     const st = await localStatus(lang);
@@ -123,13 +132,13 @@
     }
     if (st !== 'available') throw new Error('この端末では、声を端末の中だけで聞き取れません。' + (g.LocalAI ? '「⋯ → 🎤と会話・AI の設定」で AI の部品（耳）を入れると聞き取れます。' : ''));
     return new Promise((ok, ng) => {
-      const r = new SR();
+      const r = new SR(); rec = r;
       r.lang = lang; r.interimResults = false; r.maxAlternatives = 1; r.continuous = false;
       r.processLocally = true;
       let got = false;
       r.onresult = (e) => { got = true; ok({ text: e.results[0][0].transcript }); };
       r.onerror = (e) => ng(new Error(e.error === 'not-allowed' ? 'マイクが許可されていません' : e.error === 'no-speech' ? '聞き取れませんでした' : '音声認識のエラー: ' + e.error));
-      r.onend = () => { if (!got) ng(new Error('聞き取れませんでした')); };
+      r.onend = () => { if (rec === r) rec = null; if (!got) ng(new Error('聞き取れませんでした')); };
       r.start();
     });
   }
@@ -214,6 +223,6 @@
     try { g.speechSynthesis?.cancel(); } catch { /* なくてよい */ }
   }
 
-  const api = { mood: 'normal', stop, parse, match, nearest, laneOf, listen, localStatus, install, speak, speakAll, speechText, chunks, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm };
+  const api = { mood: 'normal', stop, cancelListen, parse, match, nearest, laneOf, listen, localStatus, install, speak, speakAll, speechText, chunks, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm };
   g.Voice = api;
 })(typeof window !== 'undefined' ? window : globalThis);

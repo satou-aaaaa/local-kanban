@@ -1,5 +1,5 @@
 // アプリだけの機能（claude.ai のボードには無いもの）。ボードの画面（index.html＝ボードの HTML から作る）の上に足す。
-//   つなぐ（GitHub・PC のフォルダ・cards.json）・会話モード（talk.js）・🎤（voice.js。端末の中の AI の耳も使う）・命令欄（Ctrl+K）
+//   つなぐ（GitHub・PC のフォルダ・cards.json）・会話（talk.js。打つのも🎤で話すのも同じ欄・同じ流れ。命令もここ）・🎤（voice.js。端末の中の AI の耳も使う）
 //   スマホでも開く（QR）・ダウンロードで保存・インストール・URL や共有から足す・オフライン（sw.js）・スマホで左右になぞって列を移る
 // ボードの関数（move・remove・say・render・openDetail）と cards をそのまま使う。名前が変わったら、データ側の tools/local_board.py check（ボードとの相性）が止める。
 'use strict';
@@ -21,7 +21,7 @@
       <button type="button" data-m="github">GitHub でつなぐ（PC・スマホ）</button>
       <button type="button" data-m="folder">PC のフォルダを開く</button>
       <button type="button" data-m="file">cards.json を選ぶ</button>
-      <button type="button" data-m="cmd" disabled>命令を打つ（Ctrl+K）</button>
+      <button type="button" data-m="cmd" disabled>打って話す・命令（Ctrl+K）</button>
       <button type="button" data-m="aiset">🎤と会話・AI の設定</button>
       <button type="button" data-m="phone" hidden>スマホでも開く（QR）</button>
       <button type="button" data-m="download" disabled>ダウンロードで保存</button>
@@ -65,17 +65,10 @@
       <span><button value="cancel" formnovalidate>やめる</button> <button value="ok" class="primary">つなぐ</button></span></div>
   </form>
 </dialog>
-<dialog id="cmdDlg" class="lk">
-  <form method="dialog" id="cmdForm">
-    <label for="cmdIn">命令（声と同じ言い方）</label>
-    <input id="cmdIn" name="cmd" autocomplete="off" placeholder="例：牛乳を買うを追加 ／ 請求書を済み ／ 請求書を保留へ ／ 今やるを読んで ／ 戻す">
-    <p class="help">「〇〇を追加」「今やるに〇〇を追加」「〇〇を済み」「〇〇を&lt;列&gt;へ」「〇〇を消して」「&lt;列&gt;を読んで」「戻す」。n でカードを足す欄、m で🎤、t で会話、/ で探す、Esc で閉じる。</p>
-  </form>
-</dialog>
 <dialog id="talkDlg" class="lk" aria-labelledby="talkName">
   <div class="who"><span id="talkAva"></span><div><p id="talkName"></p><div id="talkState"></div><div id="talkMode" class="help"></div><button type="button" id="talkAiGet" hidden>🧠 AI を入れて自由に話す</button></div></div>
   <div id="talkLog" aria-live="polite"></div>
-  <form id="talkForm"><input id="talkIn" autocomplete="off" placeholder="打って話す（例：済み・あとで・保留・次）"><button class="primary">送る</button></form>
+  <form id="talkForm"><input id="talkIn" autocomplete="off" aria-label="ポチに話す" placeholder="打っても🎤で話してもOK（例：牛乳を買うを追加・済み・今やるを読んで）"><button type="button" id="talkMic" aria-pressed="false" aria-label="声で話す" title="声で話す（もう一度押すと止める）">🎤</button><button class="primary">送る</button></form>
   <div class="lk-actions"><button type="button" id="talkSetBtn">⚙ キャラの設定</button><button type="button" id="talkEnd">終わる</button></div>
 </dialog>
 <dialog id="talkSet" class="lk">
@@ -88,6 +81,7 @@
     <label>色</label><input name="color" type="color">
     <label>声（この端末の中の声だけ。ネット経由の声は出しません）</label><select name="voice"></select>
     <div class="vtune"><label>話す速さ <input name="rate" type="range" min="0.7" max="1.5" step="0.05"></label><label>声の高さ <input name="pitch" type="range" min="0.7" max="1.5" step="0.05"></label><button type="button" id="voiceTry">試しに聞く</button></div>
+    <label>返事のしかた</label><select name="reply"><option value="match">声で話したら声で、打ったら文字で（おすすめ）</option><option value="voice">打っても声で返す</option><option value="text">いつも文字だけ（声を出さない）</option></select>
     <label class="chk"><input type="checkbox" name="bargeIn"> 話の途中で割り込める（話している間だけマイクの音の大きさを端末の中で見る）</label>
     <label class="chk"><input type="checkbox" name="ai"> 端末の中の AI（Chrome の内蔵 AI か、下で入れた AI）があれば使う</label>
     <p class="help">声も会話も端末の外に出しません。AI が無い端末では、カードを1枚ずつ読み上げて「済み・あとで・保留・次」で片づけます。キャラの設定は、つないでいればデータのリポジトリにも置き、PC とスマホで同じになります。</p>
@@ -158,8 +152,10 @@
   const laneCards = lane => live().filter(c => (c.lane || 'next') === lane && (lane !== 'done' || !c.done_at || Date.parse(c.done_at) >= Date.now() - 7 * 864e5))
     .sort((a, b) => lane === 'done' ? String(b.done_at || '').localeCompare(String(a.done_at || '')) : (a.order ?? 0) - (b.order ?? 0));
   // undo：声・命令で動かしたときは、数秒「戻す」を出す（聞き間違えたらすぐ戻せる）
+  let talkUndo = null; // 会話の中でやった命令の「戻す」（会話の画面の返事に付ける）
   function reply(text, voice, undo) {
     const vs = $('#vstatus'); if (vs && !$('#voice').hidden) vs.textContent = text;
+    if (undo && $('#talkDlg')?.open) talkUndo = undo;
     if (typeof say === 'function') say(text, undo || undefined); else setStatus(text, 'ok');
     if (voice && window.Voice) Voice.speak(text);
     return text;
@@ -201,7 +197,7 @@
     let box = $('#lkPick');
     if (!box) { box = document.createElement('div'); box.id = 'lkPick'; box.setAttribute('role', 'group'); box.setAttribute('aria-label', '候補'); }
     // 開いている命令欄・会話の中に出す（外に出すと、開いた画面の後ろで押せない）
-    (document.querySelector('#cmdDlg[open] form, #talkDlg[open]') || $('#lkBar')).appendChild(box);
+    (document.querySelector('#talkDlg[open]') || $('#lkBar')).appendChild(box);
     box.innerHTML = list.map((c, i) => `<button type="button" data-pick="${i + 1}">${i + 1}. ${esc(c.title)}</button>`).join('') + '<button type="button" data-pick="0">やめる</button>';
     box.hidden = false;
   }
@@ -211,7 +207,6 @@
     e.preventDefault(); hidePick();
     const t = b.dataset.pick === '0' ? 'いいえ' : b.dataset.pick;
     if (talk?.on && $('#talkDlg').open) talk.hear(t); else runCommand(t);
-    if (!pending && $('#cmdDlg').open) $('#cmdDlg').close();
   });
   // カードの様子：列・担当の今の段（progress か live_line）・最後の記録
   function statusOf(c) {
@@ -265,20 +260,18 @@
     }
   }
 
-  // 🎤：ボードの🎤を、端末の中の AI の耳も使える voice.js に置き換える（声は端末の外に出さない）
-  let listening = false;
-  async function listenOnce() {
-    if (listening || !L.ready) return;
-    const box = $('#voice'), vs = $('#vstatus'); if (box) box.hidden = false;
-    if (!window.Voice?.supported) { if (vs) vs.textContent = '🎤は、この端末では使えません。「⋯ → 🎤と会話・AI の設定」で AI の部品を入れると使えます。'; return; }
-    listening = true; $('#micBtn')?.setAttribute('aria-pressed', 'true'); if (vs) vs.textContent = '聞いています…（端末の中だけで聞き取ります）';
-    let heard = false;
-    try { const { text } = await Voice.listen(); heard = true; if (vs) vs.textContent = '「' + text + '」'; runCommand(text, true); }
-    catch (e) { if (vs) vs.textContent = e.message; drawWhy(); }
-    finally { listening = false; $('#micBtn')?.setAttribute('aria-pressed', 'false'); }
-    if (heard && pending) setTimeout(listenOnce, 2500); // 聞き返したときは、読み上げが終わってから続けて聞く
+  // 🎤：ボードの🎤は、会話の欄を開いてすぐ聞く（打つのと同じ流れ。命令ならカードを動かし、そうでなければ会話）。
+  // 耳は端末の中の AI の耳も使える voice.js（声は端末の外に出さない）
+  function micGo() {
+    if (!L.ready) return;
+    if (!window.Voice?.supported) {
+      const box = $('#voice'), vs = $('#vstatus'); if (box) box.hidden = false;
+      if (vs) vs.textContent = '🎤は、この端末では使えません。「⋯ → 🎤と会話・AI の設定」で AI の部品を入れると使えます。打って話すなら💬から。';
+      drawWhy(); return;
+    }
+    openTalk('voice');
   }
-  $('#micBtn')?.addEventListener('click', e => { e.stopImmediatePropagation(); listenOnce(); }, true);
+  $('#micBtn')?.addEventListener('click', e => { e.stopImmediatePropagation(); micGo(); }, true);
 
   // ---------- URL・共有・ショートカットから来た操作（つながってから1回だけ） ----------
   function runEntry() {
@@ -290,8 +283,8 @@
     }
     if (e.cmd) runCommand(e.cmd);
     if (e.form) document.getElementById('compose-btn')?.click();
-    if (e.voice) listenOnce();
-    if (e.talk) openTalk();
+    if (e.voice) micGo();
+    if (e.talk) openTalk('talk');
   }
 
   // ---------- 会話モード（talk.js。すべて端末の中） ----------
@@ -299,9 +292,11 @@
   let talk = null;
   function talkLine(who, text) {
     const d = document.createElement('div'); d.className = 'l ' + who; d.textContent = text;
+    if (who === 'you') talkUndo = null;
+    if (who === 'ai' && talkUndo) { const u = talkUndo; talkUndo = null; const b = document.createElement('button'); b.type = 'button'; b.className = 'undo'; b.textContent = '戻す'; b.onclick = () => { b.remove(); u(); }; d.append(' ', b); }
     const box = $('#talkLog'); box.appendChild(d); while (box.children.length > 30) box.firstChild.remove(); box.scrollTop = box.scrollHeight;
   }
-  const TALK_STATE = { starting: '準備しています…', listening: '聞いてるよ（話してね）', thinking: '考え中…', speaking: '話しています（割り込めます）', typing: '下の欄に打って話してね', off: '' };
+  const TALK_STATE = { starting: '準備しています…', listening: '聞いてるよ（話してね。打ってもいいよ）', thinking: '考え中…', speaking: '話しています（話しかけても、打っても割り込めます）', typing: '下の欄に打って話してね', idle: '打つか、🎤を押して話してね', off: '' };
   // 表情（data-mood）。少しのあいだだけ見せて、ふつうに戻す。うれしいときは紙吹雪（動きを減らす設定のときは出さない）
   let moodTimer = 0;
   function setMood(m, hold = 2500) {
@@ -330,9 +325,14 @@
   });
   function drawTalkHead() { const t = talkSettings(); $('#talkAva').innerHTML = Talk.avatarSvg(t.icon, t.color); $('#talkName').textContent = t.name; }
   const order = l => L.LANES.findIndex(([k]) => k === l);
-  function openTalk() {
+  // via: 'talk'（💬：あいさつしてから聞く）・'voice'（🎤：すぐ聞く）・'text'（Ctrl+K：打つ欄に入る）
+  function openTalk(via = 'talk') {
     if (!window.Talk || !L.ready) return;
-    if (talk?.on) { if (!$('#talkDlg').open) $('#talkDlg').showModal(); return; }
+    if (talk?.on) {
+      if (!$('#talkDlg').open) $('#talkDlg').showModal();
+      if (via === 'voice' && !talk.listening) talk.listen(); else if (via === 'text') $('#talkIn').focus();
+      return;
+    }
     { const t = talkSettings(); try { for (const k of ['rate', 'pitch']) t[k] ? localStorage.setItem('voice.' + k, String(t[k])) : localStorage.removeItem('voice.' + k); } catch {} } // 速さ・高さはほかの端末で決めたものも使う
     drawTalkHead(); $('#talkLog').innerHTML = ''; $('#talkMode').textContent = ''; $('#talkAiGet').hidden = true;
     talk = Talk.create({
@@ -349,6 +349,7 @@
       onState: st => {
         $('#talkState').textContent = TALK_STATE[st] ?? ''; $('#talkDlg').classList.toggle('speaking', st === 'speaking');
         $('#talkDlg').dataset.state = st;
+        const m = $('#talkMic'); if (m) { const on = st === 'listening' || !!talk?.listening; m.setAttribute('aria-pressed', String(on)); m.classList.toggle('on', on); m.hidden = !window.Voice?.supported; }
         if (st === 'listening') setMood('listen', 0); else if (st === 'thinking') setMood('think', 0); else if (st !== 'speaking' && !moodTimer) setMood('normal', 0);
         if (st === 'off' && $('#talkDlg').open) $('#talkDlg').close();
       },
@@ -363,16 +364,18 @@
       },
     });
     $('#talkDlg').showModal();
-    talk.start();
+    if (via === 'text') $('#talkIn').focus();
+    talk.start(via);
   }
-  $('#talkBtn').onclick = openTalk;
+  $('#talkBtn').onclick = () => openTalk('talk');
+  $('#talkMic').onclick = () => talk?.listen();
   $('#talkEnd').onclick = () => { talk?.stop(); if ($('#talkDlg').open) $('#talkDlg').close(); };
   $('#talkDlg').addEventListener('cancel', () => talk?.stop());
-  $('#talkForm').onsubmit = e => { e.preventDefault(); const t = $('#talkIn').value; $('#talkIn').value = ''; talk?.hear(t); };
+  $('#talkForm').onsubmit = e => { e.preventDefault(); const t = $('#talkIn').value; $('#talkIn').value = ''; talk?.hear(t, { voice: false }); };
   function openTalkSet() {
     if (!window.Talk) { setStatus('会話の部品（talk.js）を読めませんでした。開き直してみてください。', 'err'); return; }
     const f = $('#talkSetForm'), t = talkSettings();
-    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.rate.value = t.rate || 1; f.pitch.value = t.pitch || 1.05; f.ai.checked = t.ai !== 'off';
+    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.rate.value = t.rate || 1; f.pitch.value = t.pitch || 1.05; f.ai.checked = t.ai !== 'off'; f.reply.value = t.reply || 'match';
     $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{ maru: 'まる', kaku: 'しかく', shizuku: 'しずく' }[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
     const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
     f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
@@ -468,7 +471,7 @@
   $('#talkSetForm').onsubmit = e => {
     if (e.submitter?.value !== 'ok') return;
     const f = e.target;
-    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value, bargeIn: f.bargeIn.checked, ai: f.ai.checked ? 'auto' : 'off' };
+    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value, bargeIn: f.bargeIn.checked, reply: f.reply.value, ai: f.ai.checked ? 'auto' : 'off' };
     try { localStorage.setItem('lk.talk', JSON.stringify(t)); } catch {} // localStorage へ直に書くと、PC とスマホで同じになる（shim.js が見ている）
     voicePrefs(t);
     if (talk) talk.settings = t;
@@ -552,20 +555,15 @@
   $('#qrClose').onclick = () => $('#qrDlg').close();
   let installEvt = null;
   window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('[data-m=install]').hidden = false; });
-  function openCmd() { if (!L.ready) return; $('#cmdIn').value = ''; $('#cmdDlg').showModal(); $('#cmdIn').focus(); }
-  $('#cmdForm').onsubmit = e => {
-    e.preventDefault();
-    const t = $('#cmdIn').value; $('#cmdIn').value = '';
-    runCommand(t);
-    if (pending) $('#cmdIn').placeholder = '番号か、はい／いいえ'; else { $('#cmdIn').placeholder = '例：牛乳を買うを追加'; $('#cmdDlg').close(); }
-  };
-  // キーボード：Ctrl+K（Mac は ⌘K）で命令欄、m で🎤、t で会話（n と / はボードのまま）
+  // 命令も会話と同じ欄で打つ（入口を一つにした。2026-10-20 satouさん「チャットと声で入力のやり方が違う」）
+  function openCmd() { if (L.ready) openTalk('text'); }
+  // キーボード：Ctrl+K（Mac は ⌘K）で会話の欄に打つ、m で🎤、t で会話（n と / はボードのまま）
   document.addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); openCmd(); return; }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.querySelector('dialog[open]');
     if (typing || e.ctrlKey || e.metaKey || e.altKey || !L.ready) return;
-    if (e.key === 'm' || e.key === 'M') { e.preventDefault(); listenOnce(); }
-    else if (e.key === 't' || e.key === 'T') { e.preventDefault(); openTalk(); }
+    if (e.key === 'm' || e.key === 'M') { e.preventDefault(); micGo(); }
+    else if (e.key === 't' || e.key === 'T') { e.preventDefault(); openTalk('talk'); }
   });
   const actions = { notify: toggleNotify, aiset: openTalkSet, github: openGithub, phone: showPhoneQr, cmd: openCmd, folder: openFolder, file: () => $('#fileInput').click(), download,
     install: async () => { if (installEvt) { installEvt.prompt(); installEvt = null; $('[data-m=install]').hidden = true; } } };

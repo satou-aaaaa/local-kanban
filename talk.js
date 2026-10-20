@@ -20,6 +20,7 @@
     color: '#f59e0b',
     voice: '',
     bargeIn: true,
+    reply: 'match', // match = 声で話しかけたら声でも返し、打ったら文字だけ / voice = いつも声でも / text = いつも文字だけ
     ai: 'auto', // auto = 端末の中の AI（内蔵 AI か、入れた WebLLM）があれば使う / off = 使わない
   };
   const END = /^(終わり|おわり|おしまい|終わる|またね|バイバイ|ばいばい|ストップ|やめる|もういい)$/;
@@ -36,7 +37,13 @@
     now: ['今やるに入れたよ。', 'オッケー、今やるね。'],
     skip: ['じゃあ飛ばすね。', 'そのままにしとく。', 'パスね。'],
     empty: ['カードは全部見たよ。ほかにやることある？ 無ければ「終わり」で。', 'これで全部！ ほかに何かある？ 無ければ「終わり」でいいよ。', '一通り見終わったよ。足したいものがあれば言ってね。'],
-    again: ['ごめん、もう一回言って？ 「済み」「あとで」「保留」「次」で答えてね。', 'ん？ 聞き取れなかった。「済み」か「あとで」で教えて。', 'ごめんね、分からなかった。「済み」「あとで」「保留」「次」のどれか言ってみて。'],
+    again: ['ごめん、もう一回言って？ 「済み」「あとで」「保留」「次」で答えてね。', 'ん？ 聞き取れなかった。「済み」か「あとで」で教えて。', 'ごめんね、分からなかった。「済み」「あとで」「保留」「次」のどれか言ってみて。', 'うーん、どれだろ。済んだなら「済み」、まだなら「あとで」って言ってね。'],
+    // カードの話をしていないとき（AI なし）。相槌を打ってから、できることをさりげなく伝える
+    chat: ['うんうん。カードのことなら「〇〇を追加」とか「今やるを読んで」って言ってね。', 'そっかあ。AI を入れると、もっといろいろ話せるよ。', 'なるほどね。片づけるなら「今やるを読んで」からどう？', 'へえ、そうなんだ。何か足しとく？ 「〇〇を追加」って言ってくれたら入れるよ。'],
+    // 考えているあいだの相槌（AI が遅いときだけ。画面には出さない）
+    aizuchi: ['うん。', 'なるほど。', 'そっか。', 'うんうん。', 'えっとね。', 'ふむふむ。'],
+    // 命令をやったときの最初の一言
+    ack: ['オッケー、', 'うん、', '了解、', 'はーい、', 'よし、', 'わかった、'],
     thanks: ['どういたしまして！', 'いえいえ、こっちこそ！', 'どういたしまして。続けよっか。'],
     tired: ['おつかれ。ひと息ついてもいいよ。', '無理しないでね。あと1枚だけやってみる？', 'がんばってるね。休んでも大丈夫だよ。'],
     bye: ['オッケー、またね！', 'おつかれさま！また呼んでね。', '今日もありがとう、またね！'],
@@ -108,6 +115,26 @@
   function sentences(text) {
     return String(text || '').split(/(?<=[。！？!?\n])/).map((s) => s.trim()).filter(Boolean);
   }
+  // 人の会話は短い。AI の返事は2文までにする
+  function short(text, n = 2) { const ss = sentences(text); return ss.length > n ? ss.slice(0, n).join('') : String(text || '').trim(); }
+  // 言い出し（最初の「、」「。」までの短い一言）。同じ言い出しが続かないように比べる
+  function opening(text) { const m = String(text || '').match(/^(.{1,10}?)[、。！？!?,…]/); return m ? m[1] : ''; }
+  // アプリの決まった文（です・ます）を、ポチの話し方（タメ口）にそろえる
+  function casual(text) {
+    return String(text || '')
+      .replace(/を消しますか？ はい か いいえ で答えてください。/g, 'を消していい？ 「はい」か「いいえ」で教えてね。')
+      .replace(/何番ですか？/g, '何番？').replace(/どれですか？/g, 'どれ？').replace(/つあります。/g, 'つあるよ。')
+      .replace(/見つかりません。/g, '見つからなかった。').replace(/ありません。/g, 'ないよ。')
+      .replace(/ました。/g, 'たよ。').replace(/でした。/g, 'だったよ。').replace(/ません。/g, 'ないよ。')
+      .replace(/ですか？/g, '？').replace(/です。/g, 'だよ。');
+  }
+  // 流れてくる途中の JSON から "say" の文だけを取り出す（閉じていない文字列でもよい）
+  function partialSay(raw) {
+    const m = String(raw || '').match(/"say"\s*:\s*"((?:[^"\\]|\\.)*)/);
+    if (!m) return '';
+    const body = m[1].replace(/\\(u[0-9a-fA-F]{0,3})?$/, ''); // 途中で切れた \ や \u30 は捨てる
+    try { return JSON.parse('"' + body + '"'); } catch { return body; }
+  }
 
   // ---------- 割り込み（自作の簡単な VAD：音の大きさがしばらく続いたら声とみなす） ----------
   function vad(stream, onVoice) {
@@ -163,7 +190,7 @@
       `あなたは「${s.name}」。${s.persona}`,
       ...(memo.length ? ['覚えていること（ユーザーが教えてくれたこと・よくあること。自然に活かす。毎回は口に出さない）:', ...memo.map((m) => '- ' + m)] : []),
       'ユーザーと声で話しながら、カンバンのカードを一緒に片づける相棒。電話で友だちと話すように、自然な話し言葉で返す。',
-      '話し方：1〜2文で短く。まず相手の言ったことに一言反応してから続ける。同じ言い回しを繰り返さない。質問は1回に1つ。説明や箇条書きはしない。',
+      '話し方：1〜2文で短く。まず相手の言ったことに「うん」「そっか」「なるほど」などの相槌か一言の反応をしてから続ける。直前と同じ言い出しや言い回しを繰り返さない。分からないときは短く聞き返す。質問は1回に1つ。説明や箇条書きはしない。',
       '雑談や気持ちの話（疲れた・眠い・うれしい）にも短く付き合い、無理のない範囲で次のカードに戻す。済みにしたらほめる。',
       'ボードの中身（今やるの枚数・期限が近いカード）に触れてよい。ボードに無いカードや知らないことは作らない。分からなければ聞き返す。',
       `列は ${Object.entries(lanes).map(([k, v]) => `${k}=${v}`).join('、')}。`,
@@ -262,19 +289,35 @@
       return null;
     }
     const state = (st) => host.onState?.(st);
+    // 聞いていないときの様子：耳がある端末は「打つか🎤で」、無い端末は「打って」
+    const idle = () => (g.Voice.supported ? 'idle' : 'typing');
 
-    async function say(text) {
-      if (!text) return;
-      log('ai', text);
+    // ---------- 口：出来た文から順に話す（前の文が終わるまで次は待つ）。話している途中で声が来たら止める ----------
+    let speech = Promise.resolve(), cut = false, lastOpen = '';
+    async function voiceOut(text) {
+      if (!on || cut || !text) return;
       speaking = true; state('speaking');
-      let interrupted = false;
-      const cut = () => { interrupted = true; g.Voice?.stop ? g.Voice.stop() : g.speechSynthesis?.cancel(); };
-      if (s.bargeIn && stream) stopVad = g.LocalAI?.bargeIn(stream, cut) || vad(stream, cut); // Silero VAD が入っていればそれ、無ければ音の大きさ
+      const stopIt = () => { cut = true; g.Voice?.stop ? g.Voice.stop() : g.speechSynthesis?.cancel(); };
+      if (s.bargeIn && stream) stopVad = g.LocalAI?.bargeIn(stream, stopIt) || vad(stream, stopIt); // Silero VAD が入っていればそれ、無ければ音の大きさ
       // 文をまとめて声の順番待ちに並べる（1文ずつ止めて読むとカタコトに聞こえる）。割り込まれたら cancel で全部止まる
-      if (on && !interrupted) await (g.Voice.speakAll ? g.Voice.speakAll(text) : g.Voice.speak(text));
+      try { await (g.Voice.speakAll ? g.Voice.speakAll(text) : g.Voice.speak(text)); } catch { /* 話せなくても会話は続ける */ }
       stopVad(); stopVad = () => {};
       speaking = false;
-      return interrupted;
+    }
+    const queueSpeech = (text) => (speech = speech.then(() => voiceOut(text)).catch(() => {}));
+    // 直前と同じ言い出し（「オッケー、」「いいね、」など）を続けない
+    function vary(text) {
+      const o = opening(text);
+      if (o && o === lastOpen) { const rest = text.slice(o.length).replace(/^[、。！？!?,…\s]+/, ''); if (rest) text = rest; }
+      lastOpen = opening(text);
+      return text;
+    }
+    // 画面に出して、声で話しかけられたときは声でも返す（打たれたときは文字だけ。設定で変えられる）
+    async function say(text, speak = true) {
+      if (!text) return;
+      text = vary(casual(text));
+      log('ai', text);
+      if (speak && on) await queueSpeech(text);
     }
 
     function nextCard() {
@@ -288,6 +331,18 @@
       return pick('ask', PHRASES.ask, { t: c.title }) + (c.due ? ' ' + dueWords(c.due) : '');
     }
     const trouble = (r) => /見つかりません|保存できない|分かりません|できません/.test(r || '');
+
+    // はっきりした命令（voice.js の文型に当たり、カードも1枚に決まる）は AI を待たずにすぐ動かし、結果を一言で返す。
+    // カードがあいまい（「〇〇のやつ」など）なら null を返して AI に任せる（AI が無ければ候補を聞き返す）
+    function command(text, sure) {
+      const cmd = g.Voice.parse(text, host.laneWords);
+      if (!cmd || ['unknown', 'pick', 'yes', 'no'].includes(cmd.type)) return null;
+      if (sure && cmd.query && ['done', 'move', 'delete', 'status'].includes(cmd.type) && g.Voice.match(cmd.query, host.board()).length !== 1) return null;
+      const r = host.run(text);
+      if (cmd.type === 'done' && !trouble(r) && !host.pending()) { doneCount++; learnHabit(); mood('happy'); }
+      if (trouble(r) || host.pending() || cmd.type === 'read' || cmd.type === 'status') return r;
+      return pick('ack', PHRASES.ack) + r + (mode !== 'ai' && cur ? ' ' + askCard() : '');
+    }
 
     // AI なし：1枚ずつ聞いて、短い答えで動かす。返事は言い回しを変えながら返す
     function scripted(text) {
@@ -321,50 +376,81 @@
         }
       }
       const cmd = g.Voice.parse(text, host.laneWords);
-      if (cmd && cmd.type !== 'unknown') { lastUnknown = ''; return host.run(text) + (host.pending() ? '' : ' ' + askCard()); }
+      if (cmd && cmd.type !== 'unknown') { lastUnknown = ''; return command(text, false) ?? host.run(text); }
       lastUnknown = cur && t.length <= 20 ? t : '';
+      if (!cur) return pick('chat', PHRASES.chat);
       mood('surprise');
       return pick('again', PHRASES.again);
     }
 
-    // 内蔵 AI：ボード（題・列・期限だけ）と言ったことを渡し、JSON の返事を読む
-    async function smart(text) {
+    // 端末の中の AI：ボード（題・列・期限だけ）と言ったことを渡し、JSON の返事を読む。
+    // 話しかけられたときは、出来た文から順に読み上げる（遅い端末でも待たされた感じを減らす）。
+    // 読み上げた分は画面にも出してあるので、返すのは残りに言うこと（アプリの聞き返しなど）だけ
+    async function smart(text, speak, voice) {
       if (host.pending()) return host.run(text);
       const board = host.board().slice(0, 40).map((c) => `- [${host.lanes[c.lane] || c.lane}] ${c.title}${c.due ? `（期限 ${c.due}）` : ''}`).join('\n');
+      const ask = `いまのボード:\n${board || '（カードなし）'}\n（いまは${new Date().getHours()}時。この会話で済みにしたのは${doneCount}枚。直前のあなたの言い出しは「${lastOpen}」なので、違う言い出しにする）\n\nユーザー: ${text}`;
+      let raw = '', said = '', n = 0, first = null; // first: 読み上げた1文目の [元の文, 言い出しを変えた文]
+      // 考えているあいだに相槌（すぐに答えが来たときは言わない）
+      const filler = voice && speak ? setTimeout(() => { if (!said) queueSpeech(pick('aizuchi', PHRASES.aizuchi)); }, 700) : 0;
+      const flush = (final) => {
+        if (!speak) return;
+        const all = partialSay(raw);
+        const ready = final ? all : all.replace(/[^。！？!?\n]*$/, '');
+        if (ready.length <= said.length) return;
+        for (let part of sentences(ready.slice(said.length))) {
+          if (n >= 2) break; // 短く（2文まで）
+          if (!first) { const orig = part; part = vary(casual(part)); first = [orig, part]; }
+          queueSpeech(part); n++;
+        }
+        said = ready;
+      };
       let out;
       try {
-        const raw = await session.prompt(`いまのボード:\n${board || '（カードなし）'}\n（いまは${new Date().getHours()}時。この会話で済みにしたのは${doneCount}枚）\n\nユーザー: ${text}`, { responseConstraint: SCHEMA });
+        if (typeof session.promptStreaming === 'function') {
+          for await (const ch of session.promptStreaming(ask, { responseConstraint: SCHEMA })) {
+            const c = String(ch ?? '');
+            raw = raw && c.startsWith(raw) ? c : raw + c; // 前までの分を含めて返すブラウザもある
+            flush(false);
+          }
+          flush(true);
+          if (!raw) throw new Error('空');
+        } else raw = await session.prompt(ask, { responseConstraint: SCHEMA });
         out = JSON.parse(raw);
       } catch {
-        return 'ごめん、うまく考えられなかった。もう一回言って？';
-      }
-      const a = out && out.action;
+        out = partialSay(raw) ? { say: partialSay(raw), action: null } : null;
+      } finally { clearTimeout(filler); }
+      if (!out) return 'ごめん、うまく考えられなかった。もう一回言って？';
+      const a = out.action;
       let r = '', doneNow = false;
       if (a && typeof a === 'object' && ['add', 'done', 'move', 'delete', 'read', 'undo', 'status'].includes(a.type)) {
         const cmd = { type: a.type };
-        if (a.type === 'add') { if (!a.title) return out.say || 'なんて題にする？'; cmd.title = String(a.title).slice(0, 200); cmd.lane = host.lanes[a.lane] ? a.lane : null; }
-        if (['done', 'move', 'delete', 'read', 'status'].includes(a.type)) { cmd.query = String(a.query || a.title || ''); if (a.type !== 'read' && !cmd.query) return out.say || 'どのカード？'; }
-        if (a.type === 'move' || a.type === 'read') { if (!host.lanes[a.lane]) return out.say || 'どの列にする？'; cmd.lane = a.lane; }
+        let bad = '';
+        if (a.type === 'add') { if (!a.title) bad = 'なんて題にする？'; else { cmd.title = String(a.title).slice(0, 200); cmd.lane = host.lanes[a.lane] ? a.lane : null; } }
+        if (!bad && ['done', 'move', 'delete', 'read', 'status'].includes(a.type)) { cmd.query = String(a.query || a.title || ''); if (a.type !== 'read' && !cmd.query) bad = 'どのカード？'; }
+        if (!bad && (a.type === 'move' || a.type === 'read')) { if (!host.lanes[a.lane]) bad = 'どの列にする？'; else cmd.lane = a.lane; }
+        if (bad) return said ? (out.say ? '' : bad) : (out.say || bad);
         r = host.act(cmd);
         if (a.type === 'done' && !trouble(r)) { doneCount++; learnHabit(); mood('happy'); doneNow = true; }
       }
-      // 動かせた・読めたときは AI の返事、聞き返し（消す確認・候補）や見つからないときはアプリの文を優先
+      const sayText = short(String(out.say || ''));
       if (doneNow) { /* 済みにできたときは笑顔のまま（「おつかれさま」で悲しい顔にしない） */ }
-      else if (/やった|えらい|ナイス|さすが|いいね|すごい/.test(out?.say || '')) mood('happy');
-      else if (/おつかれ|無理しない|休んで/.test(out?.say || '')) mood('sad');
-      if (r && a?.type === 'status') return r; // 様子はアプリがカードから答える（AI に作らせない）
-      if (r && (host.pending() || /見つかりません|保存できない|分かりません|空です|枚。/.test(r))) return host.pending() || /枚。|空です/.test(r) ? r : (out.say ? out.say + ' ' : '') + r;
-      return String(out?.say || r || 'うん。');
+      else if (/やった|えらい|ナイス|さすが|いいね|すごい/.test(sayText)) mood('happy');
+      else if (/おつかれ|無理しない|休んで/.test(sayText)) mood('sad');
+      // 動かせた・読めたときは AI の返事、聞き返し（消す確認・候補）や見つからないときはアプリの文を優先
+      const appFirst = r && (a?.type === 'status' || host.pending() || /枚。|空です/.test(r)); // 様子・聞き返し・一覧はアプリがカードから答える（AI に作らせない）
+      const appToo = r && !appFirst && /見つかりません|保存できない|分かりません/.test(r);
+      if (said) { // もう読み上げ始めている：AI の文は画面に出し、アプリの文は続けて言う
+        if (sayText) log('ai', casual(first && sayText.startsWith(first[0]) ? first[1] + sayText.slice(first[0].length) : sayText));
+        return appFirst || appToo ? r : '';
+      }
+      if (appFirst) return r;
+      if (appToo) return (sayText ? sayText + ' ' : '') + r;
+      return sayText || r || 'うん。';
     }
 
-    async function start() {
-      if (on) return;
-      on = true; idx = 0; cur = null; doneCount = 0;
-      state('starting');
-      // 割り込み用のマイク（使えなければ割り込みなし）
-      if (s.bargeIn && g.navigator?.mediaDevices?.getUserMedia) {
-        try { stream = await g.navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); } catch { stream = null; }
-      }
+    // 頭の準備（内蔵 AI か、入れた AI）。会話を開いてすぐは待たせず、うしろで進める
+    async function prepare() {
       mode = 'script'; brain = '';
       if (s.ai !== 'off') {
         const st = await aiStatus();
@@ -375,7 +461,7 @@
             mode = 'ai'; brain = 'builtin';
           } catch { session = null; }
         }
-        // 内蔵 AI が無い端末（スマホなど）は、「AI の部品を入れる」で入れた WebLLM を使う
+        // 内蔵 AI が無い端末（スマホなど）は、「AI の部品を入れる」で入れた AI を使う
         if (mode !== 'ai' && g.LocalAI?.llmReady()) {
           try {
             log('sys', '端末の中の AI を読み込んでいます（数秒〜数十秒）…');
@@ -387,7 +473,26 @@
       if (!on) return;
       g.LocalAI?.prepareEar(); // Whisper・Silero を入れてあれば先に読み込んでおく
       host.onMode?.(mode, brain, s.ai === 'off' ? 'off' : 'none');
-      if (mode !== 'ai') log('sys', s.ai === 'off' ? 'AI は設定で切っています。決まった返事で1枚ずつ聞きます。' : 'いまは AI なし（決まった返事）です。⚙ キャラの設定で AI を入れると、自由に話せます。');
+      if (mode !== 'ai') log('sys', s.ai === 'off' ? 'AI は設定で切っています。決まった返事で話します。' : 'いまは AI なし（決まった返事）です。⚙ キャラの設定で AI を入れると、自由に話せます。');
+    }
+    // 割り込み用のマイク（使えなければ割り込みなし）。声で話すときだけ取る（打つだけなら許可を聞かない）
+    async function mic() {
+      if (stream || !s.bargeIn || !g.navigator?.mediaDevices?.getUserMedia) return;
+      try { stream = await g.navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); } catch { stream = null; }
+    }
+
+    // via: 'talk'（💬：あいさつしてから聞く）・'voice'（🎤：すぐ聞く）・'text'（打つ：聞かずに待つ）
+    let ready = Promise.resolve();
+    async function start(via = 'talk') {
+      if (on) return;
+      on = true; idx = 0; cur = null; doneCount = 0; cut = false; lastOpen = '';
+      state('starting');
+      ready = prepare();
+      if (via === 'voice') { loop(); return; }
+      if (via === 'text') { state(idle()); return; }
+      await mic();
+      await ready;
+      if (!on) return;
       const q = host.queue();
       const you = nameOf();
       const hi = pick('greet', PHRASES.greet[partOfDay()]).replace(/[！!]$/, you ? `、${you}！` : '！') + pick('hi', PHRASES.hi, { name: s.name });
@@ -395,39 +500,70 @@
       const first = mode === 'ai'
         ? `${hi} 今やるは${nowN}枚${q[0] ? `、まずは「${q[0].title}」から？` : '。'}`
         : `${hi} ${askCard()}`;
-      await say(first);
+      await say(first, true);
       loop();
     }
 
+    // 聞き続ける（声で話しているあいだ）。2回続けて何も聞こえなければ、いったん止めて🎤を待つ
+    let listening = false, gen = 0;
     async function loop() {
-      while (on) {
-        if (!g.Voice.supported) { state('typing'); return; } // 耳が無い端末は文字で（hear() を呼んでもらう）
+      if (listening || !on) return;
+      if (!g.Voice.supported) { state('typing'); return; } // 耳が無い端末は文字で（hear() を呼んでもらう）
+      listening = true; const my = ++gen; let miss = 0;
+      await mic();
+      while (on && my === gen) {
         state('listening');
         let text;
-        try { text = (await g.Voice.listen()).text; }
+        try { text = (await g.Voice.listen()).text; miss = 0; }
         catch (e) {
-          if (!on) return;
-          if (/端末の中だけで聞き取れません|部品|マイク/.test(e.message)) { log('sys', e.message + ' 文字を打って話してね。'); state('typing'); return; }
+          if (!on || my !== gen) break;
+          if (/端末の中だけで聞き取れません|部品|マイク/.test(e.message)) { log('sys', e.message + ' 文字を打って話してね。'); listening = false; state('typing'); return; }
+          if (++miss >= 2) break;
           continue; // 聞き取れなかった → もう一度
         }
-        if (!on) return;
-        await hear(text, true);
+        if (!on || my !== gen) break;
+        await hear(text, { voice: true });
       }
+      if (my === gen) { listening = false; if (on) state(idle()); }
     }
+    // 聞くのをやめる（打つほうに切り替えた・🎤をもう一度押した）
+    function pause() {
+      if (!listening) return;
+      listening = false; gen++;
+      g.Voice?.cancelListen?.();
+    }
+    const listen = () => { if (!on) return; if (listening) { pause(); state(idle()); } else { cut = false; loop(); } };
 
-    // 1回分の言葉を受け取って返事する（声でも、打った文字でも）
-    async function hear(text, fromLoop = false) {
+    // 1回分の言葉を受け取って返事する（声でも、打った文字でも同じ流れ）
+    async function hear(text, opts = {}) {
+      const voice = opts === true || !!opts?.voice;
       if (!on || !String(text || '').trim()) return;
+      if (!voice) { // 打ったら聞くのをやめ、話している途中なら止める（打つ⇄話すを途中で切り替えられる）
+        pause(); cut = true;
+        try { g.Voice?.stop ? g.Voice.stop() : g.speechSynthesis?.cancel(); } catch { /* なくてよい */ }
+        await speech;
+      }
+      cut = false;
+      const speak = s.reply === 'voice' ? true : s.reply === 'text' ? false : voice;
       log('you', text);
-      if (END.test(g.Voice.norm(text))) { await say((doneCount ? `今日は${doneCount}枚片づけたね。` : '') + pick('bye', PHRASES.bye)); stop(); return; }
+      if (END.test(g.Voice.norm(text))) { await say((doneCount ? `今日は${doneCount}枚片づけたね。` : '') + pick('bye', PHRASES.bye), speak); await speech; stop(); return; }
       state('thinking');
-      const reply = memoryTalk(text) ?? (mode === 'ai' ? await smart(text) : scripted(text));
-      await say(reply);
-      if (!fromLoop && on) state(g.Voice.supported ? 'listening' : 'typing');
+      let r = memoryTalk(text);
+      if (r == null && host.pending()) r = host.run(text);
+      if (r == null) r = command(text, true);
+      if (r == null) {
+        await ready;
+        if (!on) return;
+        r = mode === 'ai' ? await smart(text, speak, voice) : scripted(text);
+      }
+      await say(r, speak);
+      await speech;
+      if (on && !listening) state(idle());
     }
 
     function stop() {
-      on = false;
+      on = false; listening = false; gen++;
+      try { g.Voice?.cancelListen?.(); } catch { /* なくてよい */ }
       try { g.Voice?.stop ? g.Voice.stop() : g.speechSynthesis?.cancel(); } catch { /* なくてよい */ }
       stopVad();
       stream?.getTracks().forEach((t) => t.stop()); stream = null;
@@ -436,8 +572,8 @@
       state('off');
     }
 
-    return { start, stop, hear, get on() { return on; }, get speaking() { return speaking; }, set settings(v) { s = { ...DEFAULTS, ...v }; } };
+    return { start, stop, hear, listen, get on() { return on; }, get speaking() { return speaking; }, get listening() { return listening; }, set settings(v) { s = { ...DEFAULTS, ...v }; } };
   }
 
-  g.Talk = { create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, PHRASES, picker, partOfDay, dueWords, sentences, memoryLines, habitText, WORD_MIN };
+  g.Talk = { create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, PHRASES, picker, partOfDay, dueWords, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
 })(typeof window !== 'undefined' ? window : globalThis);

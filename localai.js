@@ -102,11 +102,11 @@
     return cpuEngine;
   }
   // WebLLM の形の頼み方を wllama の形に直す（名前の違う項目と、JSON の形の指定）
-  function cpuReq({ messages: m, temperature, top_p, repetition_penalty, max_tokens, response_format: rf }) {
+  function cpuReq({ messages: m, temperature, top_p, repetition_penalty, max_tokens, stream, response_format: rf }) {
     let schema = null;
     try { schema = rf?.schema ? JSON.parse(rf.schema) : null; } catch { schema = null; }
     return {
-      messages: m, max_tokens, temp: temperature, top_p, penalty_repeat: repetition_penalty,
+      messages: m, max_tokens, temp: temperature, top_p, penalty_repeat: repetition_penalty, ...(stream ? { stream: true } : {}),
       ...(schema ? { response_format: { type: 'json_schema', json_schema: { name: 'reply', schema } } } : rf ? { response_format: { type: 'json_object' } } : {}),
     };
   }
@@ -157,6 +157,20 @@
         past.push({ role: 'user', content: text.replace(/^[\s\S]*\nユーザー: /, '') }, { role: 'assistant', content: out }); // ボードの一覧は覚えない（毎回渡す）
         squeeze();
         return out;
+      },
+      // 出来たところから受け取る（文ごとに読み上げを始めて、遅さを隠す）。流して返せない頭なら、まとめて1回で返す
+      async *promptStreaming(text, { responseConstraint } = {}) {
+        await busy;
+        const r = await e.chat.completions.create({
+          messages: messages({ system, examples, summary, past, text }), ...SAMPLING, max_tokens: 256, stream: true,
+          ...(responseConstraint ? { response_format: { type: 'json_object', schema: JSON.stringify(responseConstraint) } } : {}),
+        });
+        let out = '';
+        if (r && typeof r[Symbol.asyncIterator] === 'function') {
+          for await (const c of r) { const d = c?.choices?.[0]?.delta?.content ?? c?.choices?.[0]?.text ?? ''; if (d) { out += d; yield d; } }
+        } else { out = r?.choices?.[0]?.message?.content || ''; if (out) yield out; }
+        past.push({ role: 'user', content: text.replace(/^[\s\S]*\nユーザー: /, '') }, { role: 'assistant', content: out });
+        squeeze();
       },
       get summary() { return summary; },
       destroy() { past.length = 0; summary = ''; },
@@ -232,7 +246,9 @@
     return () => { sp.onaudioprocess = null; try { src.disconnect(); sp.disconnect(); ac.close(); } catch { /* 閉じられなくてもよい */ } };
   }
 
-  // 1回分を聞き取って文字にする（Voice.listen から呼ばれる）
+  // 1回分を聞き取って文字にする（Voice.listen から呼ばれる）。cancel() で途中でやめる（打つほうに切り替えたとき）
+  let cancelCur = null;
+  const cancel = () => { try { cancelCur?.(); } catch { /* 止められなくてもよい */ } };
   async function listen({ waitMs = 8000, maxMs = 15000, endMs = 700 } = {}) {
     await loadEar();
     const md = g.navigator?.mediaDevices;
@@ -245,7 +261,8 @@
       const pre = [], said = [];
       let talking = false, quiet = 0, done = false, chain = Promise.resolve();
       const t0 = Date.now();
-      const end = (err) => { if (done) return; done = true; clearTimeout(t1); clearTimeout(t2); stop(); stream.getTracks().forEach((t) => t.stop()); err ? ng(err) : ok([...pre, ...said]); };
+      const end = (err) => { if (done) return; done = true; cancelCur = null; clearTimeout(t1); clearTimeout(t2); stop(); stream.getTracks().forEach((t) => t.stop()); err ? ng(err) : ok([...pre, ...said]); };
+      cancelCur = () => end(new Error('聞き取れませんでした'));
       // 音が届かないときも止まらないように、時間でも区切る
       const t1 = setTimeout(() => { if (!talking) end(new Error('聞き取れませんでした')); }, waitMs + 500);
       const t2 = setTimeout(() => end(talking ? null : new Error('聞き取れませんでした')), maxMs + 500);
@@ -356,5 +373,5 @@
   };
   g.LocalAI = LocalAI;
   // 端末内の音声認識が無い端末では、入れた Whisper を🎤と会話モードの耳にする
-  g.Voice?.useEar?.({ ready: () => !!load().ear, listen: () => listen() });
+  g.Voice?.useEar?.({ ready: () => !!load().ear, listen: () => listen(), cancel });
 })(typeof window !== 'undefined' ? window : globalThis);
