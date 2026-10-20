@@ -1105,6 +1105,41 @@ try {
     await pg.close();
   }
 
+  // E. 人の順に開け閉めする（2026-10-20 satouさん「基本的なユースケースはテストで」。Pixel で🎤が固まった件の再発防止）：
+  //    💬で開く → 🎤で聞いている途中に Esc で閉じる（聞くのも止まる）→ Ctrl+K で開き直して打つ → 「戻す」→「終わる」で閉じる → もう一度開ける
+  {
+    const { pg, outside } = await talkPage({ heard: [] }, '人の順');
+    const isOpen = () => pg.evaluate(() => document.querySelector('#talkDlg').open);
+    await pg.click('#talkBtn');
+    await pg.waitForFunction(() => document.querySelector('#talkDlg').open, null, { timeout: 5000 }).catch(() => {});
+    check(await isOpen(), '人の順：💬で会話の欄が開く');
+    await pg.click('#talkMic');
+    await pg.waitForTimeout(150);
+    await pg.keyboard.press('Escape');
+    await pg.waitForTimeout(600);
+    const st = await pg.evaluate(() => ({ open: document.querySelector('#talkDlg').open, mic: document.querySelector('#talkMic').getAttribute('aria-pressed'), on: document.querySelector('#talkMic').classList.contains('on') }));
+    check(!st.open && st.mic === 'false' && !st.on, `人の順：🎤で聞いている途中に Esc で閉じると、聞くのも止まり🎤の印も消える（${JSON.stringify(st)}）`);
+    await pg.keyboard.press('Control+k');
+    await pg.waitForFunction(() => document.querySelector('#talkDlg').open, null, { timeout: 5000 }).catch(() => {});
+    check(await isOpen(), '人の順：閉じたあと Ctrl+K でまた開ける');
+    const before = 'next'; // 新しいページは見本（s3＝次にやる）から読む（にせの GitHub は保存した中身を返さない）
+    await pg.fill('#talkIn', '見本のカード（次にやる・毎週）をあとでへ'); await pg.press('#talkIn', 'Enter');
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'later', '人の順：開き直して打った命令');
+    check(lastCards().find((c) => c.doc_id === 's3')?.lane === 'later', '人の順：開き直したあとに打った命令が効く');
+    await pg.fill('#talkIn', '戻す'); await pg.press('#talkIn', 'Enter');
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === before, '人の順：戻す');
+    check(lastCards().find((c) => c.doc_id === 's3')?.lane === before, '人の順：「戻す」と打つと前の列に戻る');
+    await pg.click('#talkEnd');
+    await pg.waitForTimeout(300);
+    check(!(await isOpen()), '人の順：「終わる」で閉じる');
+    await pg.click('#talkBtn');
+    await pg.waitForFunction(() => document.querySelector('#talkDlg').open, null, { timeout: 5000 }).catch(() => {});
+    check(await isOpen() && await pg.isEnabled('#talkIn'), '人の順：3回目も開けて、打てる');
+    await pg.click('#talkEnd');
+    check(outside.length === 0, '人の順：自分のサイトと GitHub 以外へ通信していない');
+    await pg.close();
+  }
+
   // E. AI に任せる（2026-10-20 satouさん「AI に権限をあげるので、基本的に AI が作業をする形に」）：
   //    ポチが話し始めに自分で整理して報告する・一言で複数の命令・期限・Claude に回す・どれも「戻す」で戻せる・履歴に「ポチ」
   {
