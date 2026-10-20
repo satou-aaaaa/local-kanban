@@ -87,6 +87,7 @@
     <div class="icons" id="talkIcons"></div>
     <label>色</label><input name="color" type="color">
     <label>声（この端末の中の声だけ。ネット経由の声は出しません）</label><select name="voice"></select>
+    <div class="vtune"><label>話す速さ <input name="rate" type="range" min="0.7" max="1.5" step="0.05"></label><label>声の高さ <input name="pitch" type="range" min="0.7" max="1.5" step="0.05"></label><button type="button" id="voiceTry">試しに聞く</button></div>
     <label class="chk"><input type="checkbox" name="bargeIn"> 話の途中で割り込める（話している間だけマイクの音の大きさを端末の中で見る）</label>
     <label class="chk"><input type="checkbox" name="ai"> 端末の中の AI（Chrome の内蔵 AI か、下で入れた AI）があれば使う</label>
     <p class="help">声も会話も端末の外に出しません。AI が無い端末では、カードを1枚ずつ読み上げて「済み・あとで・保留・次」で片づけます。キャラの設定は、つないでいればデータのリポジトリにも置き、PC とスマホで同じになります。</p>
@@ -321,6 +322,7 @@
   function openTalk() {
     if (!window.Talk || !L.ready) return;
     if (talk?.on) { if (!$('#talkDlg').open) $('#talkDlg').showModal(); return; }
+    { const t = talkSettings(); try { for (const k of ['rate', 'pitch']) t[k] ? localStorage.setItem('voice.' + k, String(t[k])) : localStorage.removeItem('voice.' + k); } catch {} } // 速さ・高さはほかの端末で決めたものも使う
     drawTalkHead(); $('#talkLog').innerHTML = ''; $('#talkMode').textContent = ''; $('#talkAiGet').hidden = true;
     talk = Talk.create({
       settings: talkSettings(),
@@ -359,7 +361,7 @@
   function openTalkSet() {
     if (!window.Talk) { setStatus('会話の部品（talk.js）を読めませんでした。開き直してみてください。', 'err'); return; }
     const f = $('#talkSetForm'), t = talkSettings();
-    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.ai.checked = t.ai !== 'off';
+    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.rate.value = t.rate || 1; f.pitch.value = t.pitch || 1.05; f.ai.checked = t.ai !== 'off';
     $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{ maru: 'まる', kaku: 'しかく', shizuku: 'しずく' }[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
     const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
     f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
@@ -401,13 +403,28 @@
   $('#talkSetForm').onsubmit = e => {
     if (e.submitter?.value !== 'ok') return;
     const f = e.target;
-    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, bargeIn: f.bargeIn.checked, ai: f.ai.checked ? 'auto' : 'off' };
+    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value, bargeIn: f.bargeIn.checked, ai: f.ai.checked ? 'auto' : 'off' };
     try { localStorage.setItem('lk.talk', JSON.stringify(t)); } catch {} // localStorage へ直に書くと、PC とスマホで同じになる（shim.js が見ている）
-    try { t.voice ? localStorage.setItem('voice.name', t.voice) : localStorage.removeItem('voice.name'); } catch {}
+    voicePrefs(t);
     if (talk) talk.settings = t;
     drawTalkHead();
   };
-  $('#talkReset').onclick = () => { try { localStorage.removeItem('lk.talk'); localStorage.removeItem('voice.name'); } catch {} $('#talkSet').close(); drawTalkHead(); openTalkSet(); };
+  // 声の名前・速さ・高さは voice.js が直に読む（ほかのアプリと同じ置き場）
+  function voicePrefs(t) {
+    try {
+      t.voice ? localStorage.setItem('voice.name', t.voice) : localStorage.removeItem('voice.name');
+      for (const k of ['rate', 'pitch']) t[k] ? localStorage.setItem('voice.' + k, String(t[k])) : localStorage.removeItem('voice.' + k);
+    } catch {}
+  }
+  $('#voiceTry').onclick = () => {
+    const f = $('#talkSetForm'), keep = {};
+    try { for (const k of ['name', 'rate', 'pitch']) keep[k] = localStorage.getItem('voice.' + k); } catch {}
+    voicePrefs({ voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value });
+    window.Voice?.speak(`${f.name.value || 'ポチ'}だよ。今日もいっしょに片づけよう。この速さでいいかな？`).finally(() => {
+      try { for (const k in keep) keep[k] == null ? localStorage.removeItem('voice.' + k) : localStorage.setItem('voice.' + k, keep[k]); } catch {}
+    });
+  };
+  $('#talkReset').onclick = () => { try { for (const k of ['lk.talk', 'voice.name', 'voice.rate', 'voice.pitch']) localStorage.removeItem(k); } catch {} $('#talkSet').close(); drawTalkHead(); openTalkSet(); };
 
   // ---------- つなぐ ----------
   function idb() { return new Promise((ok, ng) => { const r = indexedDB.open('local-board', 1); r.onupgradeneeded = () => r.result.createObjectStore('h'); r.onsuccess = () => ok(r.result); r.onerror = () => ng(r.error); }); }

@@ -270,11 +270,8 @@
       let interrupted = false;
       const cut = () => { interrupted = true; g.speechSynthesis?.cancel(); };
       if (s.bargeIn && stream) stopVad = g.LocalAI?.bargeIn(stream, cut) || vad(stream, cut); // Silero VAD が入っていればそれ、無ければ音の大きさ
-      for (const part of sentences(text)) {
-        if (!on || interrupted) break;
-        const ok = await g.Voice.speak(part);
-        if (ok === false) break; // 端末の中の声が無い → 文字だけ
-      }
+      // 文をまとめて声の順番待ちに並べる（1文ずつ止めて読むとカタコトに聞こえる）。割り込まれたら cancel で全部止まる
+      if (on && !interrupted) await (g.Voice.speakAll ? g.Voice.speakAll(text) : g.Voice.speak(text));
       stopVad(); stopVad = () => {};
       speaking = false;
       return interrupted;

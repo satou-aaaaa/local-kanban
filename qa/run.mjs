@@ -453,7 +453,7 @@ try {
   const t6 = Date.now();
   while (!puts.slice(b6).some((p) => p.path === 'local-board/cards.json') && Date.now() - t6 < 12000) await mic.waitForTimeout(100);
   const spoken = await mic.evaluate(() => window.__spoken);
-  check(spoken.some((t) => /候補が.*何番/.test(t)), `🎤 候補が複数のときは読み上げて番号を聞く（${spoken[0] || 'なし'}）`);
+  check(/候補が.*何番/.test(spoken.join('')), `🎤 候補が複数のときは読み上げて番号を聞く（${spoken[0] || 'なし'}）`);
   const saved6 = JSON.parse(puts.slice(b6).find((p) => p.path === 'local-board/cards.json')?.text || '[]');
   const picked = saved6.filter((c) => c.lane === 'done' && c.moves?.at(-1)?.to === 'done' && c.moves?.at(-1)?.from !== null && c.doc_id !== 's5');
   check(picked.length === 1, `🎤「2番」で選んだカードが済みになった（${picked.map((c) => c.title).join('・') || 'なし'}）`);
@@ -461,6 +461,26 @@ try {
   check(await mic.evaluate(() => Voice.localVoice()?.name === '端末の声'), '🎤 読み上げは端末の中の声を選ぶ（ネット経由の声は使わない）');
   check(await mic.evaluate(() => { const g = speechSynthesis.getVoices; speechSynthesis.getVoices = () => [{ name: 'ネットの声', lang: 'ja-JP', localService: false }]; const n = Voice.localVoice(); speechSynthesis.getVoices = g; return n === null; }), '🎤 端末の中の声が無ければ読み上げない');
   check(await mic.evaluate(() => window.__local), '🎤 端末の中だけで聞き取る設定（processLocally = true）で聞いた');
+  // 声のなめらかさ：文ごとに止めない・読みにくい記号を除く・よい声を先に選ぶ・速さと高さ
+  const flow = await mic.evaluate(async () => {
+    const got = [], cancels = [];
+    const sp = speechSynthesis.speak, cn = speechSynthesis.cancel, gv = speechSynthesis.getVoices;
+    speechSynthesis.cancel = () => cancels.push(got.length);
+    speechSynthesis.speak = (u) => { got.push({ text: u.text, rate: u.rate, pitch: u.pitch }); setTimeout(() => u.onend && u.onend(), 5); };
+    localStorage.setItem('voice.rate', '1.2'); localStorage.setItem('voice.pitch', '0.9');
+    const r = await Voice.speakAll('はい。済みにしたよ🎉 次は「見本のカード」（今やる）だね…。期限は3〜5日。');
+    speechSynthesis.getVoices = () => [{ name: 'A', lang: 'ja-JP', localService: true }, { name: 'B (Enhanced)', lang: 'ja-JP', localService: true }, { name: 'C Natural', lang: 'ja-JP', localService: false }];
+    const best = Voice.localVoice()?.name;
+    localStorage.setItem('voice.name', 'A'); const chosen = Voice.localVoice()?.name; localStorage.removeItem('voice.name');
+    localStorage.removeItem('voice.rate'); localStorage.removeItem('voice.pitch');
+    speechSynthesis.speak = sp; speechSynthesis.cancel = cn; speechSynthesis.getVoices = gv;
+    return { r, got, cancels, best, chosen, long: Voice.chunks('あ'.repeat(70) + '。' + 'い'.repeat(70) + '。').length };
+  });
+  check(flow.r === true && flow.got.length === 1 && flow.cancels.length === 1 && flow.cancels[0] === 0, `🔊 短い文はつなげて1度に読む・止めるのは最初の1回だけ（${flow.got.length} 回・cancel ${flow.cancels.length} 回）`);
+  check(!/[🎉…〜（）]/u.test(flow.got.map((x) => x.text).join('')) && /3から5/.test(flow.got[0]?.text || ''), `🔊 絵文字・「…」・かっこを読まない・「3〜5」は「3から5」（${flow.got[0]?.text}）`);
+  check(Math.abs(flow.got[0]?.rate - 1.2) < 1e-3 && Math.abs(flow.got[0]?.pitch - 0.9) < 1e-3, '🔊 決めた速さと高さで読む');
+  check(flow.best === 'B (Enhanced)' && flow.chosen === 'A', `🔊 端末の中の声のうち、なめらかな声（Enhanced など）を先に選ぶ・選んだ声があればそれ（${flow.best}・${flow.chosen}）`);
+  check(flow.long === 2, '🔊 長い文は分けて読む（Chrome が途中で止めないように）');
   await mic.close();
 
   // ---------- 会話モード（talk.js）：耳・頭・口をにせものに差し替えて、流れと「外に出さない」を確かめる ----------
@@ -507,7 +527,7 @@ try {
     await pg.click('#talkBtn');
     await waitTalkEnd(pg);
     const spoken = await pg.evaluate(() => window.__spoken.join(''));
-    check(/見本のカード（今やる）/.test(spoken), '会話（AI なし）：最初に「今やる」の1枚目を読み上げた');
+    check(/見本のカード、?今やる/.test(spoken), '会話（AI なし）：最初に「今やる」の1枚目を読み上げた');
     check(/AI なし/.test(await pg.textContent('#talkMode')), '会話（AI なし）：内蔵 AI が無い端末では AI なしで動く');
     check(/AI を入れると/.test(await pg.textContent('#talkLog')), '会話（AI なし）：AI なしで話していることと、AI を入れられることを伝えた');
     const phr = await pg.evaluate(() => Talk.PHRASES.done);
@@ -813,6 +833,15 @@ try {
     await pg.locator('#lkMenu [data-m=aiset]').click();
     await pg.waitForSelector('#talkSet[open]', { timeout: 5000 }).catch(() => {});
     check(await pg.isVisible('#aiGet'), 'つなぐ前の画面から「⋯ → 🎤と会話・AI の設定」で「AI の部品を入れる」ボタンにたどり着ける');
+    {
+      await pg.evaluate(() => { window.__try = []; speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }]; speechSynthesis.cancel = () => {}; speechSynthesis.speak = (u) => { window.__try.push(u.rate); setTimeout(() => u.onend && u.onend(), 5); }; });
+      await pg.locator('#talkSetForm [name=rate]').fill('1.3');
+      await pg.click('#voiceTry');
+      await pg.waitForFunction(() => window.__try.length > 0, null, { timeout: 3000 }).catch(() => {});
+      await pg.waitForTimeout(100);
+      const tr = await pg.evaluate(() => ({ rates: window.__try, kept: localStorage.getItem('voice.rate') }));
+      check(Math.abs(tr.rates[0] - 1.3) < 1e-3 && tr.kept === null, `「試しに聞く」で決める前の速さを聞ける・保存はしない（${JSON.stringify(tr)}）`);
+    }
     await pg.keyboard.press('Escape');
     await pg.locator('#lkIntro [data-m=aiset]').click();
     check(await pg.isVisible('#aiGet'), 'つなぐ前の最初の画面のボタンからも AI の設定を開ける');
