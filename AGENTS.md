@@ -18,7 +18,7 @@ LK_BOARD=<board/index.html> node qa/run.mjs   # 本物のボードの写しで�
 ```
 
 - app.js が当てにするボードの部品（`move`・`remove`・`say`・`render`・`openDetail`・`cards`・`WPS`・`#micBtn`・`#voice`・`#vstatus`・`.hbtns`・`#board` の `lane-<列>`・`#jump`・`#compose-btn`・`#toast-msg`・`#toast-undo`・`#wall`・`dialog#detail`）は `qa/board.fixture.html` に同じ名前で置く。増やしたらにせものにも、データ側の `tools/local_board.py` の相性の検査にも足す。
-- アプリの部品（`#lkMenu`・`#lkIntro`・`#lkStatus`・`#talkWhy`・`#cmdIn`・`#talkBtn`・`#talkDlg`・`#talkIn`・`#talkSetForm`・`#aiGet`）を変えたら `qa/run.mjs` も合わせて直す。
+- アプリの部品（`#lkMenu`・`#lkIntro`・`#lkStatus`・`#talkWhy`・`#cmdIn`・`#talkBtn`・`#talkDlg`・`#talkIn`・`#talkSetForm`・`#aiGet`・`#talkAiGet`・`#lkPick`・`#lkUnsent`）を変えたら `qa/run.mjs` も合わせて直す。
 - ボードに壁紙が足されたら写真を `bg/`・`bg/t/` に置く（本物のボードで回す QA が、ボードの `WPS` の写真がすべてあるかを見る）。
 - 切り替えボタン（選んだものに色が付くボタン）は、見た目のクラス `.on` と `aria-pressed` を必ず一緒に変える。QA が `aria-pressed` の付いたボタンを全部押して確かめる（2026-10-19 claude.ai のボードで印が変わらない不具合があった）。
 

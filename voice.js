@@ -11,7 +11,8 @@
 //   「〇〇を済み」「〇〇終わった」「〇〇完了」                → {type:'done', query}
 //   「〇〇を<列>へ」「〇〇を<列>に移して」                    → {type:'move', query, lane}
 //   「〇〇を消して」「〇〇を削除」                            → {type:'delete', query}（実行する前に聞き返す）
-//   「<列>を読んで」「<列>は？」                              → {type:'read', lane}
+//   「<列>を読んで」「<列>は？」「今やることは？」            → {type:'read', lane}
+//   「〇〇はどうなった？」「〇〇の状況」「〇〇の進み具合」      → {type:'status', query}（列・今の段・最後の記録を答える）
 //   「戻す」「元に戻して」「取り消し」                        → {type:'undo'}
 //   「はい」「いいえ」「2番」                                 → {type:'yes'} / {type:'no'} / {type:'pick', n}
 (function (g) {
@@ -22,7 +23,7 @@
 
   // lanes: [[key, label, ...aliases]]
   function laneOf(word, lanes) {
-    const w = norm(word).replace(/(の列|列|レーン)$/, '');
+    const w = norm(word).replace(/(の列|列|レーン)$/, '').replace(/(のこと|こと|もの)$/, '');
     if (!w) return null;
     for (const [key, ...names] of lanes) if (names.some((n) => norm(n) === w)) return key;
     if (w.length >= 2) for (const [key, ...names] of lanes) if (names.some((n) => norm(n).startsWith(w))) return key;
@@ -39,6 +40,9 @@
     if (/^(戻す|戻して|元に戻(す|して)|取り消(す|し|して)|アンドゥ|undo)$/i.test(t)) return { type: 'undo' };
     m = t.match(/^(.+?)(を|の)?(読んで|読み上げて|教えて|は)$/);
     if (m && laneOf(m[1], lanes)) return { type: 'read', lane: laneOf(m[1], lanes) };
+    // 様子を聞く
+    m = t.match(/^(.+?)(は|って|の)?(どうなった|どうなってる|どうなってます|どう|状況|進み具合|進捗|様子)(は|を教えて|教えて)?$/);
+    if (m && !laneOf(m[1], lanes)) return { type: 'status', query: m[1] };
     // 追加
     m = t.match(/^(.+?)に(.+?)を(追加|足して|足す|入れて)(して|する)?$/);
     if (m && laneOf(m[1], lanes)) return { type: 'add', title: m[2], lane: laneOf(m[1], lanes) };
@@ -79,6 +83,13 @@
     if (scored.length && scored[0].s >= 3) return [scored[0].it];
     if (scored.length > 1 && scored[0].s - scored[1].s >= 0.4) return [scored[0].it];
     return scored.slice(0, 5).map((x) => x.it);
+  }
+
+  // 見つからないときの「もしかして」：似ている順に n 件（ゆるい基準）
+  function nearest(query, items, n = 3, title = (x) => x.title) {
+    const q = norm(query);
+    if (!q) return [];
+    return items.map((it) => ({ it, s: similar(q, norm(title(it))) })).filter((x) => x.s >= 0.2).sort((a, b) => b.s - a.s).slice(0, n).map((x) => x.it);
   }
 
   const SR = g.SpeechRecognition || g.webkitSpeechRecognition;
@@ -146,5 +157,5 @@
     });
   }
 
-  g.Voice = { parse, match, laneOf, listen, localStatus, install, speak, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm };
+  g.Voice = { parse, match, nearest, laneOf, listen, localStatus, install, speak, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm };
 })(typeof window !== 'undefined' ? window : globalThis);

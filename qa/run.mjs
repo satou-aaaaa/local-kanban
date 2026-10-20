@@ -286,6 +286,9 @@ try {
       await pg.evaluate(() => move('s3', 'later'));
       await pg.waitForTimeout(2000);
       check(await pg.evaluate(() => JSON.parse(localStorage.getItem('lk.pending') || 'null')?.ops?.length > 0), 'オフラインでまだ送れない変更を端末に残した');
+      await pg.waitForTimeout(1100);
+      const un = (await pg.isVisible('#lkUnsent')) ? await pg.textContent('#lkUnsent') : '';
+      check(/未送信 1件/.test(un), `まだ送れない変更の数を画面に出す（${un || 'なし'}）`);
       await pg.close();
       failPuts = false;
       const pg2 = await context.newPage();
@@ -340,12 +343,14 @@ try {
   // 声の命令の読み取り（voice.js）
   const parsed = await page.evaluate(() => {
     const L = [['now', '今やる', '今'], ['next', '次にやる', '次'], ['later', '時間があるとき', 'あとで'], ['hold', '保留'], ['agent', 'エージェント'], ['done', '済み']];
-    return ['牛乳を買うを追加', '牛乳を買うを今やるに追加', '今やるに牛乳を買うを追加', '請求書を済み', '請求書を保留へ', '今やるを読んで', '戻す', '請求書を消して', '2番', 'はい', 'ほにゃらら']
+    return ['牛乳を買うを追加', '牛乳を買うを今やるに追加', '今やるに牛乳を買うを追加', '請求書を済み', '請求書を保留へ', '今やるを読んで', '戻す', '請求書を消して', '2番', 'はい', 'ほにゃらら',
+      '今やることは', '請求書はどうなった', '請求書の状況を教えて']
       .map((t) => JSON.stringify(Voice.parse(t, L)));
   });
   const want = ['{"type":"add","title":"牛乳を買う","lane":null}', '{"type":"add","title":"牛乳を買う","lane":"now"}', '{"type":"add","title":"牛乳を買う","lane":"now"}',
     '{"type":"done","query":"請求書"}', '{"type":"move","query":"請求書","lane":"hold"}', '{"type":"read","lane":"now"}', '{"type":"undo"}',
-    '{"type":"delete","query":"請求書"}', '{"type":"pick","n":2}', '{"type":"yes"}', '{"type":"unknown","text":"ほにゃらら"}'];
+    '{"type":"delete","query":"請求書"}', '{"type":"pick","n":2}', '{"type":"yes"}', '{"type":"unknown","text":"ほにゃらら"}',
+    '{"type":"read","lane":"now"}', '{"type":"status","query":"請求書"}', '{"type":"status","query":"請求書"}'];
   parsed.forEach((p, i) => check(p === want[i], `声の文型 ${i + 1}: ${want[i]}（${p}）`));
 
   // Ctrl+K の命令欄で列を移す
@@ -366,6 +371,27 @@ try {
   await cmd('戻す');
   await waitCards((cs) => !cs.find((c) => c.doc_id === 's4')?.deleted, '「戻す」');
   check(!lastCards().find((c) => c.doc_id === 's4')?.deleted, '「戻す」で消す前に戻った');
+
+  // 様子を聞く・動かしたあとの「戻す」・見つからないときの候補（2026-10-20 音声スレッドの依頼）
+  await page.waitForTimeout(1500);
+  await cmd('見本のカード（エージェント）はどうなった');
+  await page.waitForTimeout(300);
+  const st = await page.textContent('#toast-msg');
+  check(/「見本のカード（エージェント）」はエージェント/.test(st) && /進めています/.test(st), `「〇〇はどうなった」で列と今の段を答える（${st}）`);
+  await cmd('見本のカード（次にやる・毎週）を今やるへ');
+  await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'now', '命令で今やるへ');
+  check(await page.isVisible('#toast-undo'), '命令で動かしたら「戻す」を出す');
+  await page.click('#toast-undo');
+  await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold', '「戻す」を押す');
+  check(lastCards().find((c) => c.doc_id === 's3')?.lane === 'hold', '「戻す」を押すと前の列に戻る');
+  await page.waitForTimeout(1500);
+  await cmd('見本のカアド毎週を済み');
+  await page.waitForTimeout(300);
+  const pick = await page.$$eval('#lkPick:not([hidden]) [data-pick]', (bs) => bs.map((b) => b.textContent));
+  check(pick.length >= 2 && pick.some((t) => /毎週/.test(t)), `見つからないときは近い候補を押せる形で出す（${pick.join(' / ')}）`);
+  await page.click('#lkPick [data-pick="0"]');
+  await page.waitForTimeout(300);
+  check(await page.isHidden('#lkPick') && /やめました/.test(await page.textContent('#toast-msg')), '候補の「やめる」を押すと、何もせず候補を閉じる');
 
   // URL（#add=）と共有メニュー（?title=&url=）から足す
   const viaUrl = async (u, label, test) => {
@@ -705,6 +731,28 @@ try {
     await pg.keyboard.press('Escape');
     await pg.locator('#lkIntro [data-m=aiset]').click();
     check(await pg.isVisible('#aiGet'), 'つなぐ前の最初の画面のボタンからも AI の設定を開ける');
+    await fresh.close();
+  }
+
+  // 初めての端末で cards.json を選ぶ（2026-10-20 CodeRabbit：ボードの画面が無いと、つないだことになるのにカードが出なかった）
+  {
+    const fresh = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const pg = await fresh.newPage();
+    pg.on('pageerror', (e) => errors.push(`pageerror(ファイルを選ぶ): ${e.message}`));
+    await fresh.route(/^https:\/\/(?!127\.0\.0\.1|localhost)/, (route) => route.abort());
+    await pg.goto(base);
+    await pg.waitForSelector('#lkIntro:not([hidden])', { timeout: 10000 });
+    const json = { name: 'cards.json', mimeType: 'application/json', buffer: Buffer.from(sample) };
+    await pg.setInputFiles('#fileInput', [json]);
+    await pg.waitForFunction(() => /board\/index\.html/.test(document.querySelector('#lkStatus')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+    check(/board\/index\.html も選んで/.test(await pg.textContent('#lkStatus')) && await pg.evaluate(() => !LK.ready), `ボードの画面が無い端末で cards.json だけ選ぶと、board/index.html も選ぶよう言い、つないだことにしない（${await pg.textContent('#lkStatus')}）`);
+    await pg.setInputFiles('#fileInput', [json, { name: 'index.html', mimeType: 'text/html', buffer: Buffer.from(BOARD) }]);
+    let shown = false; // ボードの画面を入れたあと、ページが開き直る
+    for (let t0 = Date.now(); !shown && Date.now() - t0 < 15000;) {
+      shown = await pg.evaluate(() => !!(window.LK?.ready && LKBoot.hasBoard && document.querySelector('#board .card'))).catch(() => false);
+      if (!shown) await pg.waitForTimeout(200);
+    }
+    check(shown, 'cards.json と board/index.html を一緒に選ぶと、ボードの画面を入れてカードを出す');
     await fresh.close();
   }
 

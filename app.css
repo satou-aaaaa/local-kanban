@@ -9,6 +9,11 @@ header:has(#lkMenu[open]){position:relative;z-index:60}
 #lkBar{margin:-4px 0 8px;font-size:.78rem;color:var(--muted)}
 #lkStatus.warn{color:var(--warn)}#lkStatus.err{color:var(--you)}#lkStatus.ok{color:var(--done)}
 #talkWhy{margin-top:2px}
+#lkUnsent{display:inline-block;margin-top:2px;padding:1px 8px;border-radius:999px;font-weight:600;background:color-mix(in srgb,#f59e0b 25%,transparent);color:var(--fg)}
+#lkUnsent[hidden]{display:none}
+#lkPick{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+#lkPick[hidden]{display:none}
+#lkPick button{min-height:44px;padding:4px 10px}
 html.wp #lkBar{background:color-mix(in srgb,var(--card) 86%,transparent);border-radius:8px;padding:2px 8px}
 .lk-intro{max-width:760px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin-bottom:12px}
 .lk-intro .choices{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}

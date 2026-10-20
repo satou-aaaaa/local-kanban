@@ -105,13 +105,15 @@
     };
   }
 
-  function fileStore(name, text) {
-    return { kind: 'file', canSave: false, label: name, async read() { return null; }, async write() {}, async loadCards() { return { text, from: name }; } };
+  // html：一緒に選んだボードの画面（board/index.html）。初めての端末はこれが無いと画面が作れない
+  function fileStore(name, text, html = null) {
+    return { kind: 'file', canSave: false, label: name, text, async read(p) { return p === BOARD_HTML ? html : null; }, async write() {}, async loadCards() { return { text, from: name }; } };
   }
 
   // ================= カード =================
   let cards = [];          // cards.json の形のまま（doc_id）
   let store = null, ready = false, dirty = false, saving = false, saveTimer = null, lastWhy = '';
+  let rev = 0;             // 変更のたびに増える（読み直しのあいだに変更があったかを見る）
   let ops = [];            // まだ保存していない変更（保存がぶつかったら、読み直した上にもう一度かける）
   const undo = [];         // 「戻す」用（変更の前のカード）
   const listeners = [], todayListeners = [];
@@ -151,7 +153,7 @@
     const before = byId(op.id);
     undo.push({ id: op.id, before: before ? copy(before) : null, t: Date.now() }); if (undo.length > 60) undo.shift();
     if (!applyOp(op)) { undo.pop(); return Promise.reject(Object.assign(new Error('カードがありません'), { code: 'not_found' })); }
-    ops.push(op); keepOps();
+    ops.push(op); rev++; keepOps();
     queueMicrotask(emit);
     persist(why || describe(op));
     return Promise.resolve();
@@ -200,10 +202,12 @@
       if (e.conflict) {
         // ほかの端末か AI が先に書いていた：読み直して、まだ保存していない変更をその上にかけ直す
         try {
-          const keep = ops.slice(); const { text } = await store.loadCards(); cards = JSON.parse(text);
-          keep.forEach(applyOp); ops = keep; emit();
+          // 読み直しを待つあいだに増えた変更もかけ直す。送った分だけを消す（あとから来た変更は残して次に送る）
+          const { text } = await store.loadCards(); cards = JSON.parse(text);
+          ops.forEach(applyOp); emit();
+          const n = ops.length;
           await store.write(LOCAL, JSON.stringify(cards, null, 2) + '\n', why + '（読み直してかけ直した）');
-          ops = []; dirty = false; keepOps(); try { await store.write(MD, boardMd(cards), why); } catch {}
+          ops = ops.slice(n); dirty = ops.length > 0; keepOps(); try { await store.write(MD, boardMd(cards), why); } catch {}
           status('ほかの端末の変更と合わせて保存しました。', 'ok');
         } catch (e2) { status('保存できませんでした（ほかの端末と同時に書いたため）。↻ で読み直してください: ' + (e2.message || e2), 'err'); }
       } else if (!navigator.onLine) status('オフラインのため、まだ保存していません。つながったら自動で保存します。', 'warn');
@@ -300,7 +304,16 @@
       if (changed) again = true;
       if (newer) saveSettings();
     } catch {}
-    if (again && !sessionStorage.getItem('lk.reloaded')) { sessionStorage.setItem('lk.reloaded', '1'); location.reload(); return; }
+    if (!again && s.kind === 'file' && window.LKBoot && !LKBoot.hasBoard) {
+      store = null; cards = [];
+      const e = new Error('この端末にはまだボードの画面がありません。cards.json と一緒に board/index.html も選んでください（Ctrl か ⌘ を押しながら2つ選ぶ）。');
+      status(e.message, 'err'); throw e;
+    }
+    if (again && !sessionStorage.getItem('lk.reloaded')) {
+      sessionStorage.setItem('lk.reloaded', '1');
+      if (s.kind === 'file') try { sessionStorage.setItem('lk.file', JSON.stringify({ name: s.label, text: s.text })); } catch {} // 開き直したあと同じファイルでつなぐ
+      location.reload(); return;
+    }
     sessionStorage.removeItem('lk.reloaded');
     try { const t = await store.read(TODAY); today = t ? JSON.parse(t) : null; } catch { today = null; }
     // 前に開いたとき保存できなかった変更をかけ直す
@@ -324,7 +337,9 @@
     if (dirty) await flush();
     if (dirty) return; // まだ送れていない（オフラインなど）。読み直すと直したものが見えなくなるので、送れてから
     lastRead = Date.now();
+    const r0 = rev;
     const { text } = await store.loadCards();
+    if (dirty || rev !== r0) return; // 読んでいるあいだに直したものがある。上書きしない（送ったあと、次の読み直しで合わせる）
     const same = text === JSON.stringify(cards, null, 2) + '\n';
     if (!same) { cards = JSON.parse(text); undo.length = 0; if (store.kind === 'github') ls.set('cache', cards); emit(); }
     if (!quiet || !same) status(`${store.label} から読み直しました・${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
@@ -368,7 +383,7 @@
 
   // ================= アプリ（app.js）から使う =================
   window.LK = {
-    LANES, SYNC_KEYS, ls, entry, ghStore, folderStore, fileStore, connect, reload, flush, undo: undoLast, writable,
+    LANES, SYNC_KEYS, ls, entry, unsent: () => (dirty ? ops.length : 0), ghStore, folderStore, fileStore, connect, reload, flush, undo: undoLast, writable,
     get store() { return store; }, get ready() { return ready; }, get dirty() { return dirty; },
     get cards() { return cards; },
     add(body) { const id = newId(); return mutate({ kind: 'set', id, body }).then(() => id); },

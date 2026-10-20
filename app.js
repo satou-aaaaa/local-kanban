@@ -29,7 +29,7 @@
       <button type="button" data-m="install" hidden>アプリとしてインストール</button>
     </div></details>`);
   document.querySelector('header').insertAdjacentHTML('afterend', `
-    <div id="lkBar"><div id="lkStatus" role="status" aria-live="polite">まだつないでいません。</div><div id="talkWhy" hidden></div></div>
+    <div id="lkBar"><div id="lkStatus" role="status" aria-live="polite">まだつないでいません。</div><div id="talkWhy" hidden></div><div id="lkUnsent" hidden></div></div>
     <section class="lk-intro" id="lkIntro">
       <p><b>Claude が使えないあいだのカンバンです。</b>中身は claude.ai のボードと同じです。データの置き場所を選んでください。</p>
       <div class="choices">
@@ -42,11 +42,11 @@
       <ol>
         <li><b>GitHub</b>：非公開リポジトリの <code>local-board/cards.json</code> を読み書きします。初回だけ鍵（トークン）を貼ります。鍵はこの端末の中にだけ保存されます。見た目とキャラの設定も同じリポジトリに置くので、PC とスマホで同じになります。</li>
         <li><b>PC のフォルダ</b>：GitHub Desktop で取ってきたデータのリポジトリのフォルダを選びます（Chrome・Edge の PC だけ）。</li>
-        <li><b>cards.json を選ぶ</b>：どのブラウザでも読めます。保存は「ダウンロードで保存」です。</li>
+        <li><b>cards.json を選ぶ</b>：どのブラウザでも読めます。初めての端末は board/index.html も一緒に選びます。保存は「ダウンロードで保存」です。</li>
       </ol>
       <p class="note">ここでは Claude に届けられないので、答え・コメント・依頼は「まだ届いていない」と残り、Claude が戻ったら届きます。使い方の全文はデータのリポジトリの <code>local-board/README.md</code>。</p>
     </section>
-    <input type="file" id="fileInput" accept=".json,application/json" hidden>`);
+    <input type="file" id="fileInput" accept=".json,application/json,.html,text/html" multiple hidden>`);
   document.body.insertAdjacentHTML('beforeend', `
 <dialog id="ghDlg" class="lk">
   <form method="dialog" id="ghForm">
@@ -139,9 +139,10 @@
   const live = () => cards.filter(c => !c.deleted);
   const laneCards = lane => live().filter(c => (c.lane || 'next') === lane && (lane !== 'done' || !c.done_at || Date.parse(c.done_at) >= Date.now() - 7 * 864e5))
     .sort((a, b) => lane === 'done' ? String(b.done_at || '').localeCompare(String(a.done_at || '')) : (a.order ?? 0) - (b.order ?? 0));
-  function reply(text, voice) {
+  // undo：声・命令で動かしたときは、数秒「戻す」を出す（聞き間違えたらすぐ戻せる）
+  function reply(text, voice, undo) {
     const vs = $('#vstatus'); if (vs && !$('#voice').hidden) vs.textContent = text;
-    if (typeof say === 'function') say(text); else setStatus(text, 'ok');
+    if (typeof say === 'function') say(text, undo || undefined); else setStatus(text, 'ok');
     if (voice && window.Voice) Voice.speak(text);
     return text;
   }
@@ -160,12 +161,48 @@
     const cmd = Voice.parse(text, WORDS);
     if (!cmd) return '';
     if (pending) {
-      const p = pending; pending = null;
+      const p = pending; pending = null; hidePick();
       if (cmd.type === 'pick' && p.choices && p.choices[cmd.n - 1]) return apply({ ...p.cmd, card: p.choices[cmd.n - 1] }, voice);
       if (cmd.type === 'yes' && p.confirm) return apply({ ...p.cmd, card: p.card, sure: true }, voice);
       if (cmd.type === 'no' || cmd.type === 'yes' || cmd.type === 'pick') return reply('やめました。', voice);
     }
     return apply(cmd, voice);
+  }
+  // 題の一部からカードを探す。1枚に決まれば { card }、決まらなければ聞き返して { say }
+  function findCard(cmd, pool, voice) {
+    const hits = Voice.match(cmd.query, pool);
+    if (hits.length === 1) return { card: hits[0] };
+    if (hits.length > 1) { pending = { cmd, choices: hits }; showPick(hits); return { say: reply('候補が' + hits.length + 'つあります。' + hits.map((h, i) => `${i + 1}番、${h.title}`).join('。') + '。何番ですか？', voice) }; }
+    const near = Voice.nearest ? Voice.nearest(cmd.query, pool) : [];
+    if (!near.length) return { say: reply(`「${cmd.query}」に合うカードが見つかりません。`, voice) };
+    pending = { cmd, choices: near }; showPick(near);
+    return { say: reply(`「${cmd.query}」は見つかりません。近いのは、` + near.map((h, i) => `${i + 1}番、${h.title}`).join('。') + '。どれですか？ 違えば「いいえ」。', voice) };
+  }
+  // 候補を押して選べるようにする（声で「2番」と言っても、押してもよい）
+  function showPick(list) {
+    let box = $('#lkPick');
+    if (!box) { box = document.createElement('div'); box.id = 'lkPick'; box.setAttribute('role', 'group'); box.setAttribute('aria-label', '候補'); }
+    // 開いている命令欄・会話の中に出す（外に出すと、開いた画面の後ろで押せない）
+    (document.querySelector('#cmdDlg[open] form, #talkDlg[open]') || $('#lkBar')).appendChild(box);
+    box.innerHTML = list.map((c, i) => `<button type="button" data-pick="${i + 1}">${i + 1}. ${esc(c.title)}</button>`).join('') + '<button type="button" data-pick="0">やめる</button>';
+    box.hidden = false;
+  }
+  const hidePick = () => { const b = $('#lkPick'); if (b) b.hidden = true; };
+  document.addEventListener('click', e => {
+    const b = e.target.closest?.('#lkPick [data-pick]'); if (!b) return;
+    e.preventDefault(); hidePick();
+    const t = b.dataset.pick === '0' ? 'いいえ' : b.dataset.pick;
+    if (talk?.on && $('#talkDlg').open) talk.hear(t); else runCommand(t);
+    if (!pending && $('#cmdDlg').open) $('#cmdDlg').close();
+  });
+  // カードの様子：列・担当の今の段（progress か live_line）・最後の記録
+  function statusOf(c) {
+    const ago = t => { const m = Math.round((Date.now() - Date.parse(t)) / 6e4); return isNaN(m) ? '' : m < 60 ? `${Math.max(1, m)}分前` : m < 1440 ? `${Math.round(m / 60)}時間前` : `${Math.round(m / 1440)}日前`; };
+    const now = c.live_line || c.progress || '';
+    const last = (c.history || []).slice(-1)[0];
+    return `「${c.title}」は${LANE_LABEL[c.lane] || c.lane}。` + (now ? `いまは「${String(now).slice(0, 60)}」。` : '')
+      + (last?.text && last.text !== now ? `最後の記録は${last.at ? ago(last.at) + 'の' : ''}「${String(last.text).slice(0, 60)}」。` : '')
+      + (c.due ? `期限は${+c.due.slice(5, 7)}月${+c.due.slice(8, 10)}日。` : '');
   }
   function apply(cmd, voice) {
     switch (cmd.type) {
@@ -173,7 +210,7 @@
         if (!L.writable()) return reply('いまは保存できないので足せません。', voice);
         const lane = cmd.lane || 'next';
         L.add(newBody({ title: cmd.title, lane }, '声・命令で足した')).catch(() => {});
-        return reply(`「${cmd.title}」を${LANE_LABEL[lane]}に足しました。`, voice);
+        return reply(`「${cmd.title}」を${LANE_LABEL[lane]}に足しました。`, voice, () => L.undo());
       }
       case 'read': {
         const l = laneCards(cmd.lane);
@@ -187,20 +224,23 @@
         let c = cmd.card;
         if (!c) {
           const pool = cmd.type === 'done' ? live().filter(x => x.lane !== 'done') : live();
-          const hits = Voice.match(cmd.query, pool);
-          if (!hits.length) return reply(`「${cmd.query}」に合うカードが見つかりません。`, voice);
-          if (hits.length > 1) { pending = { cmd, choices: hits }; return reply('候補が' + hits.length + 'つあります。' + hits.map((h, i) => `${i + 1}番、${h.title}`).join('。') + '。何番ですか？', voice); }
-          c = hits[0];
+          const r = findCard(cmd, pool, voice); if (!r.card) return r.say;
+          c = r.card;
         }
         if (cmd.type === 'delete') {
           if (!cmd.sure) { pending = { cmd, card: c, confirm: true }; return reply(`「${c.title}」を消しますか？ はい か いいえ で答えてください。`, voice); }
           remove(c.id);
-          return reply(`「${c.title}」を消しました。戻すときは「戻す」。`, voice);
+          return reply(`「${c.title}」を消しました。戻すときは「戻す」。`, voice, () => L.undo());
         }
         const lane = cmd.type === 'done' ? 'done' : cmd.lane;
         if (c.lane === lane) return reply(`「${c.title}」はもう${LANE_LABEL[lane]}です。`, voice);
         move(c.id, lane);
-        return reply(`「${c.title}」を${LANE_LABEL[lane]}にしました。`, voice);
+        return reply(`「${c.title}」を${LANE_LABEL[lane]}にしました。`, voice, () => L.undo());
+      }
+      case 'status': {
+        let c = cmd.card;
+        if (!c) { const r = findCard(cmd, live(), voice); if (!r.card) return r.say; c = r.card; }
+        return reply(statusOf(c), voice);
       }
       case 'pick': case 'yes': case 'no': return reply('いまは聞き返していません。', voice);
       default: return reply(`「${cmd.text}」は分かりませんでした。例：〇〇を追加、〇〇を済み、今やるを読んで。`, voice);
@@ -288,6 +328,8 @@
     $('#talkSet').showModal();
   }
   $('#talkSetBtn').onclick = openTalkSet;
+  // まだ送っていない変更の数（オフラインなど）。送れたら消える
+  setInterval(() => { const n = L.unsent ? L.unsent() : 0, el = $('#lkUnsent'); if (!el) return; el.hidden = !n; if (n) el.textContent = `未送信 ${n}件（つながったら自動で送ります）`; }, 1000);
   $('#talkAiGet').onclick = () => { openTalkSet(); $('#aiBox')?.scrollIntoView({ block: 'center' }); $('#aiGet')?.focus(); };
   function drawAi() {
     const A = window.LocalAI; if (!A) { $('#aiBox').hidden = true; return; }
@@ -401,8 +443,9 @@
   $('#reopenBtn').onclick = async () => { const h = await loadHandle(); if (h) { try { await useFolder(h); } catch { setStatus('前回のフォルダを開けませんでした。「PC のフォルダを開く」から選び直してください。', 'err'); } } };
   $('#reloadBtn').onclick = () => L.reload().catch(e => setStatus('読めませんでした: ' + e.message, 'err'));
   $('#fileInput').onchange = async e => {
-    const f = e.target.files[0]; if (!f) return;
-    try { ls.set('mode', null); await L.connect(L.fileStore(f.name, await f.text())); setStatus(`読みました: ${f.name}（このやり方では自動で保存しません。「⋯ → ダウンロードで保存」を使います）`, 'warn'); }
+    const fs = [...e.target.files], f = fs.find(x => !/\.html?$/i.test(x.name)), h = fs.find(x => /\.html?$/i.test(x.name));
+    if (!f) { if (fs.length) setStatus('cards.json も一緒に選んでください。', 'err'); e.target.value = ''; return; }
+    try { ls.set('mode', null); await L.connect(L.fileStore(f.name, await f.text(), h ? await h.text() : null)); setStatus(`読みました: ${f.name}（このやり方では自動で保存しません。「⋯ → ダウンロードで保存」を使います）`, 'warn'); }
     catch (err) { setStatus('読めませんでした: ' + err.message, 'err'); }
     e.target.value = '';
   };
@@ -484,6 +527,9 @@
       if (old.owner === r.owner && old.repo === r.repo && old.token) { ls.set('mode', 'github'); return L.connect(L.ghStore(old)).catch(() => {}); }
       ls.set('gh', r); openGithub(); return;
     }
+    // ボードの画面を入れて開き直した直後は、選んだ cards.json でもう一度つなぐ
+    let picked = null; try { picked = JSON.parse(sessionStorage.getItem('lk.file') || 'null'); sessionStorage.removeItem('lk.file'); } catch {}
+    if (picked?.text) return L.connect(L.fileStore(picked.name, picked.text)).catch(() => {});
     const mode = ls.get('mode'), gh = ls.get('gh');
     if (mode === 'github' && gh?.token) return L.connect(L.ghStore(gh)).catch(() => {});
     const h = window.showDirectoryPicker ? await loadHandle() : null;
