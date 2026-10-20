@@ -156,6 +156,22 @@ let conflictOnce = false;
 let failPuts = false; // true のあいだ保存は失敗する（GitHub に届かない） // true にすると、次の cards.json の保存を 1 回だけ「ほかの端末が先に書いた」にする
 
 const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {});
+// 本物の SpeechRecognition.available()・install() は、CI の headless Chrome では音声の部品が無くタブごと落ちる
+// （Target crashed。2026-10-20 に2回）。どのコンテキストでも「端末の中では日本語を聞けない端末」のふりにしておく。
+// 各検査が自分のにせもの（addInitScript）を入れれば、あとから入るそちらが勝つ。
+{
+  const open = browser.newContext.bind(browser);
+  browser.newContext = async (o) => {
+    const c = await open(o);
+    await c.addInitScript(() => {
+      for (const k of ['SpeechRecognition', 'webkitSpeechRecognition']) {
+        const C = window[k];
+        if (C) { C.available = async () => 'unavailable'; C.install = async () => false; }
+      }
+    });
+    return c;
+  };
+}
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 context.on('request', (r) => {
   const auth = r.headers().authorization || '';
