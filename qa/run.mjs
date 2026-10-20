@@ -301,10 +301,15 @@ try {
 
     // 知らせ（通知）：確認が来た・satouさんの番に戻った・今日が期限。アプリの中で作り、外へは送らない
     {
-      await context.grantPermissions(['notifications'], { origin: base.replace(/\/$/, '') });
       const pg = await context.newPage();
       pg.on('pageerror', (e) => errors.push(`pageerror(知らせ): ${e.message}`));
-      await pg.addInitScript(() => { window.__notes = []; ServiceWorkerRegistration.prototype.showNotification = function (t, o) { window.__notes.push(t + '｜' + o.body); return Promise.resolve(); }; });
+      // 通知はにせものに差し替える（CI のヘッドレスのブラウザは通知を許可できないため。見るのは「いつ・何を知らせるか」）
+      await pg.addInitScript(() => {
+        window.__notes = [];
+        const push = (t, o) => window.__notes.push(t + '｜' + o.body);
+        ServiceWorkerRegistration.prototype.showNotification = function (t, o) { push(t, o); return Promise.resolve(); };
+        window.Notification = class { static permission = 'default'; static requestPermission() { this.permission = 'granted'; return Promise.resolve('granted'); } constructor(t, o) { push(t, o); } };
+      });
       await pg.goto(base); await ready(pg);
       await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=notify]');
       check(await pg.evaluate(() => JSON.parse(localStorage.getItem('lk.notify'))) === true && /止める/.test(await pg.textContent('#lkMenu [data-m=notify]')), '「🔔 知らせを受け取る」で通知を許可して入にした');
