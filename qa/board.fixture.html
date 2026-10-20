@@ -1,0 +1,80 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>にせもののボード</title>
+<!--
+  QA だけで使う、claude.ai のボードのにせもの（本物はこの公開リポジトリに置かない）。
+  アプリ（boot.js・shim.js・app.js）が当てにするところだけを、本物と同じ名前で持つ：
+    要素  header .hbtns・#status・#micBtn・#voice・#vstatus・#wall・#jump・#board の section#lane-<列>・#compose-btn・#toast（#toast-msg・#toast-undo）・dialog#detail・#lookBtn
+    関数  move(id,lane)・remove(id)・say(msg,undo)・render()・openDetail(id)・let cards（{id,...}）
+    データ claude.use("db") の collection("cards").onSnapshot・doc(id).set/update・doc("meta/today").onSnapshot、claude.use("comments")
+    見た目 localStorage の kanban-wp・kanban-pal → html.wp と #wall の背景 bg/<名前>.jpg
+  本物のボードがこれらを変えたら、データのリポジトリの tools/local_board.py check（ボードとの相性）が止める。
+-->
+<style>
+:root{--bg:#f3f4f1;--lane:#e8eae4;--card:#fff;--fg:#22261f;--muted:#62695d;--line:#d3d7cd;--you:#b5462f;--agent:#2f6b8a;--done:#5b7a3a;--warn:#a36a00}
+body{background:var(--bg);color:var(--fg);font-family:sans-serif;margin:0;padding:12px 16px}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.hbtns{margin-left:auto;display:flex;gap:6px}
+button{font:inherit;min-height:44px;min-width:44px}
+#wall{display:none;position:fixed;inset:0;z-index:-1;background-size:cover}
+html.wp{background:var(--bg)} html.wp body{background:transparent} html.wp #wall{display:block}
+#board{display:grid;gap:8px}.lane{background:var(--lane);padding:8px;border-radius:8px;min-height:60vh}.card{background:var(--card);padding:6px;margin:4px 0;border-radius:6px}
+.toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 12px;display:flex;gap:12px}.toast[hidden]{display:none}
+[hidden]{display:none!important}
+</style></head><body>
+<div id="wall" aria-hidden="true"></div>
+<header><h1>ボード</h1><span id="status"></span>
+  <span class="hbtns"><button type="button" id="lookBtn" aria-label="見た目">🎨</button><button type="button" id="micBtn" aria-label="声">🎤</button><button type="button" id="compose-btn">＋ 頼む・足す</button></span></header>
+<section id="voice" hidden><p id="vstatus"></p></section>
+<div id="look" hidden><button type="button" data-wp="lake" aria-pressed="false">湖</button><button type="button" data-wp="canyon" aria-pressed="false">谷</button><button type="button" data-wp="none" aria-pressed="false">なし</button></div>
+<section id="compose" hidden><input id="ask" aria-label="題"><button type="button" id="add">足す</button></section>
+<nav id="jump"></nav>
+<main id="board"></main>
+<div id="agenda"></div>
+<div class="toast" id="toast" hidden><span id="toast-msg"></span><button type="button" id="toast-undo" hidden>戻す</button></div>
+<dialog id="detail"><form method="dialog"><p id="dTitle"></p><input name="title" aria-label="題"><button value="ok">保存</button></form></dialog>
+<script>
+const LANES=[{id:"now",name:"今やる"},{id:"next",name:"次にやる"},{id:"wait",name:"予定待ち"},{id:"later",name:"時間があるとき"},{id:"hold",name:"保留"},{id:"agent",name:"エージェントが進行中"},{id:"done",name:"済み"}];
+const board=document.getElementById("board"),statusEl=document.getElementById("status");
+let db=null, cards=[], comments=null, agenda=null;
+const WPS=[["lake","湖"],["canyon","谷"]];
+const LS=(k,d)=>{try{return localStorage.getItem(k)??d}catch(_){return d}};
+let wp=LS("kanban-wp","lake");
+function applyLook(){const u=wp==="none"?"":"bg/"+wp+".jpg";document.documentElement.classList.toggle("wp",!!u);document.getElementById("wall").style.backgroundImage=u?`url("${u}")`:"";
+  document.querySelectorAll("#look [data-wp]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.wp===wp)))}
+applyLook();
+document.getElementById("lookBtn").addEventListener("click",()=>{const l=document.getElementById("look");l.hidden=!l.hidden});
+document.querySelectorAll("#look [data-wp]").forEach(b=>b.addEventListener("click",()=>{wp=b.dataset.wp;localStorage.setItem("kanban-wp",wp);applyLook()}));
+const composeBtn=document.getElementById("compose-btn"),composeEl=document.getElementById("compose");
+composeBtn.addEventListener("click",()=>{composeEl.hidden=!composeEl.hidden});
+document.getElementById("add").addEventListener("click",()=>{const t=document.getElementById("ask").value.trim();if(!t)return;const now=new Date().toISOString();
+  db.collection("cards").doc().set({title:t,owner:"you",lane:"next",order:Date.now()/1e6,created:now,updated:now,moves:[{at:now,to:"next"}]});document.getElementById("ask").value=""});
+const toastEl=document.getElementById("toast"),toastMsg=document.getElementById("toast-msg"),toastUndo=document.getElementById("toast-undo");let undoFn=null,toastTimer=0;
+function say(msg,undo){toastMsg.textContent=msg;undoFn=undo||null;toastUndo.hidden=!undo;toastEl.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{toastEl.hidden=true;undoFn=null},undo?8000:4000)}
+toastUndo.addEventListener("click",()=>{const f=undoFn;undoFn=null;toastEl.hidden=true;if(f)f()});
+function write(fn,msg,undo){fn().then(()=>say(msg,undo)).catch(e=>{statusEl.textContent="書けませんでした（"+(e&&e.code||"error")+"）"})}
+function move(id,lane){const c=cards.find(x=>x.id===id);if(!c||c.lane===lane)return;const from=c.lane||"next",now=new Date().toISOString();
+  const patch={lane,updated:now,order:Date.now()/1e6,moves:[...(c.moves||[]),{at:now,from,to:lane}]};if(!c.started_at&&(lane==="now"||lane==="agent"||lane==="done"))patch.started_at=now;patch.done_at=lane==="done"?now:null;
+  write(()=>db.collection("cards").doc(id).update(patch),"「"+c.title+"」を移しました",()=>db.collection("cards").doc(id).update({lane:from,done_at:null}))}
+function remove(id){const c=cards.find(x=>x.id===id);write(()=>db.collection("cards").doc(id).update({deleted:true,deleted_at:new Date().toISOString()}),"「"+((c&&c.title)||"")+"」を消しました",()=>db.collection("cards").doc(id).update({deleted:false}))}
+async function answer(id,i){const c=cards.find(x=>x.id===id),o=c.decision.options[i],now=new Date().toISOString();
+  let r={ok:false};try{if(comments&&await comments.canSendToClaude()==="available"){await comments.sendToClaude("答え");r={ok:true}}}catch(e){r={ok:false,err:String(e&&e.message)}}
+  write(()=>db.collection("cards").doc(id).update({answer:o.label,answer_status:r.ok?"sent":"new",lane:"agent",owner:"agent",started_at:c.started_at||now,moves:[...(c.moves||[]),{at:now,from:c.lane,to:"agent"}],updated:now}),"答えました")}
+function openDetail(id){const c=cards.find(x=>x.id===id);const d=document.getElementById("detail");d.querySelector("#dTitle").textContent=c.title;d.querySelector("[name=title]").value=c.title;d.showModal()}
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function render(){
+  document.getElementById("jump").innerHTML=LANES.map(l=>`<a href="#lane-${l.id}">${l.name}</a>`).join(" ");
+  board.innerHTML=LANES.map(lane=>`<section class="lane" id="${"lane-"+lane.id}" data-lane="${lane.id}"><h2>${lane.name}</h2>`+cards.filter(c=>!c.deleted&&(c.lane||"next")===lane.id).map(c=>
+    `<div class="card" data-id="${esc(c.id)}"><span class="t">${esc(c.title)}</span> <button type="button" data-a="done">済み</button> <button type="button" data-a="open">開く</button>`+
+    (c.decision&&!c.answer?c.decision.options.map((o,i)=>`<button type="button" data-a="ans" data-i="${i}">${esc(o.label)}</button>`).join(""):"")+`</div>`).join("")+`</section>`).join("");
+  document.getElementById("agenda").textContent=agenda?("今日の予定 "+(agenda.items||[]).length+" 件"):"";
+}
+board.addEventListener("click",e=>{const b=e.target.closest("button[data-a]");if(!b)return;const id=b.closest(".card").dataset.id;
+  if(b.dataset.a==="done")move(id,"done");else if(b.dataset.a==="open")openDetail(id);else answer(id,+b.dataset.i)});
+document.getElementById("micBtn").addEventListener("click",()=>{document.getElementById("vstatus").textContent="ボードの🎤（使われないはず）";window.__boardMic=true});
+(async()=>{
+  statusEl.textContent="読み込み中…";
+  db=await claude.use("db");
+  try{comments=await claude.use("comments")}catch(_){}
+  db.collection("cards").onSnapshot(snap=>{cards=snap.docs.map(d=>({id:d.id,...d.data()}));statusEl.textContent="最新";render()});
+  try{db.doc("meta/today").onSnapshot(d=>{agenda=d&&d.exists?d.data():null;render()},()=>{})}catch(_){}
+})();
+</script>
+</body></html>
