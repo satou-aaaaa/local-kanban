@@ -508,6 +508,28 @@ try {
   mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: resolve(OUT, 'pc.png'), fullPage: true });
 
+  // つなぐ前（初めて開いたスマホ）でも、AI の部品のボタンにたどり着けること
+  // （2026-10-20 「AI の部品を入れる」が💬→⚙の奥にしかなく、つなぐ前は見つけられなかった）
+  {
+    const fresh = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const pg = await fresh.newPage();
+    pg.on('pageerror', (e) => errors.push(`pageerror(つなぐ前): ${e.message}`));
+    await fresh.route(/^https:\/\/(?!127\.0\.0\.1|localhost)/, (route) => route.abort());
+    await pg.goto(base);
+    await pg.waitForSelector('#intro:not([hidden])', { timeout: 10000 });
+    check(await pg.isHidden('#talkBtn'), 'つなぐ前は💬を出さない');
+    const why = (await pg.isVisible('#talkWhy')) ? await pg.textContent('#talkWhy') : '';
+    check(/つないだあと/.test(why) && /AI の設定/.test(why), `つなぐ前は💬・🎤が出ない理由と AI の設定の場所を一言出す（${why || 'なし'}）`);
+    await pg.click('#menu summary');
+    await pg.locator('#menu [data-m=aiset]').click();
+    await pg.waitForSelector('#talkSet[open]', { timeout: 5000 }).catch(() => {});
+    check(await pg.isVisible('#aiGet'), 'つなぐ前の画面から「⋯ → 🎤と会話・AI の設定」で「AI の部品を入れる」ボタンにたどり着ける');
+    await pg.keyboard.press('Escape');
+    await pg.locator('#intro [data-m=aiset]').click();
+    check(await pg.isVisible('#aiGet'), 'つなぐ前の最初の画面のボタンからも AI の設定を開ける');
+    await fresh.close();
+  }
+
   // スマホ幅：列はタブで1つずつ
   const phone = await context.newPage();
   phone.on('pageerror', (e) => errors.push(`pageerror(スマホ): ${e.message}`));

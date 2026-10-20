@@ -28,6 +28,7 @@ header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px
 .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 header h1{font-size:16px;margin:0 8px 0 0}
 #status{color:var(--muted);font-size:12px;margin-top:4px}
+#talkWhy{color:var(--muted);font-size:12px;margin-top:2px}
 #status.warn{color:var(--warn)}#status.err{color:var(--danger)}#status.ok{color:var(--ok)}
 button,select,input,textarea{font:inherit;color:inherit}
 button{background:var(--chip);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer;min-height:36px}
@@ -132,6 +133,7 @@ a{color:var(--accent)}
         <button data-m="folder">PC のフォルダを開く</button>
         <button data-m="file">cards.json を選ぶ</button>
         <button data-m="cmd" disabled>命令を打つ（Ctrl+K）</button>
+        <button data-m="aiset">🎤と会話・AI の設定</button>
         <button data-m="phone" hidden>スマホでも開く（QR）</button>
         <button data-m="download" disabled>ダウンロードで保存</button>
         <button data-m="install" hidden>アプリとしてインストール</button>
@@ -139,6 +141,7 @@ a{color:var(--accent)}
     </details>
   </div>
   <div id="status" role="status" aria-live="polite">まだつないでいません。</div>
+  <div id="talkWhy" hidden></div>
   <div id="said" hidden></div>
   <nav id="tabs"></nav>
   <input type="file" id="fileInput" accept=".json,application/json" hidden>
@@ -160,6 +163,7 @@ a{color:var(--accent)}
       <button data-m="folder" id="folderChoice">PC のフォルダを開く</button>
       <button id="reopenBtn" hidden>前回のフォルダを開く</button>
       <button data-m="file">cards.json を選ぶ</button>
+      <button data-m="aiset">🎤と会話・AI の設定</button>
     </div>
     <ol>
       <li><b>GitHub</b>：非公開リポジトリの <code>local-board/cards.json</code> を読み書きします。初回だけ鍵（トークン）を貼ります。鍵はこの端末の中にだけ保存されます。</li>
@@ -396,7 +400,19 @@ function showBoard(){
   // 🎤は、声を端末の中だけで聞き取れる音声認識（processLocally）があるときだけ出す。サーバーへ送る音声認識は使わない。
   // 使えるかどうか（available）は押したときに確かめる（開いたときには音声の部品に触らない）
   $('#micBtn').hidden = !window.Voice?.supported; $('#voiceHint').hidden = !!window.Voice?.supported;
+  drawWhy();
   render();
+}
+// 💬・🎤が出ていないときは、その理由を一言出す（出ないと、AI の設定がどこにあるか分からなくなる）
+function drawWhy(){
+  const set = '「⋯ → 🎤と会話・AI の設定」';
+  let t = '';
+  if (!store) t = `💬（会話）と🎤（話して操作）は、つないだあとに出ます。AI の部品は${set}から先に入れられます。`;
+  else if (!window.Talk) t = '💬が出ません：会話の部品（talk.js）を読めませんでした。↻ か開き直しを試してね。';
+  else if (!window.Voice?.supported) t = window.LocalAI && !window.LocalAI.status().ear
+    ? `🎤が出ません：この端末には端末の中だけで聞き取る仕組みがありません。${set}で AI の部品を入れると、🎤と声の会話が使えます（💬は打って話せます）。`
+    : '🎤が出ません：この端末では声を端末の中だけで聞き取れません（💬は打って話せます）。';
+  $('#talkWhy').textContent = t; $('#talkWhy').hidden = !t;
 }
 
 // 変更のたびに呼ぶ。続けて押しても1回にまとめて保存する（GitHub の書き込み回数を減らす）
@@ -695,7 +711,7 @@ async function listenOnce(){
     runCommand(text, true);
   } catch (e) {
     setStatus(e.message, 'warn');
-    if (/端末の中だけで聞き取れません/.test(e.message)) { $('#micBtn').hidden = true; $('#voiceHint').hidden = false; }
+    if (/端末の中だけで聞き取れません/.test(e.message)) { $('#micBtn').hidden = true; $('#voiceHint').hidden = false; drawWhy(); }
   }
   finally { listening = false; $('#micBtn').classList.remove('on'); }
   // 聞き返したときは、読み上げが終わってから続けて聞く
@@ -777,6 +793,7 @@ $('#talkEnd').onclick = () => { talk?.stop(); if ($('#talkDlg').open) $('#talkDl
 $('#talkDlg').addEventListener('cancel', () => talk?.stop());
 $('#talkForm').onsubmit = e => { e.preventDefault(); const t = $('#talkIn').value; $('#talkIn').value = ''; talk?.hear(t); };
 function openTalkSet(){
+  if (!window.Talk) { setStatus('会話の部品（talk.js）を読めませんでした。開き直してみてください。','err'); return; }
   const f = $('#talkSetForm'), t = talkSettings();
   f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.ai.checked = t.ai !== 'off';
   $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{maru:'まる',kaku:'しかく',shizuku:'しずく'}[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
@@ -807,13 +824,13 @@ $('#aiGet').onclick = async () => {
   } catch (e) { $('#aiMsg').textContent = '入れられませんでした：' + (e?.message || e); }
   finally {
     aiBusy = false; $('#aiGet').disabled = false; $('#aiProg').hidden = true; drawAi();
-    $('#micBtn').hidden = !window.Voice?.supported || !store; $('#voiceHint').hidden = !!window.Voice?.supported;
+    $('#micBtn').hidden = !window.Voice?.supported || !store; $('#voiceHint').hidden = !!window.Voice?.supported; drawWhy();
   }
 };
 $('#aiDel').onclick = async () => {
   if (aiBusy || !window.LocalAI) return;
   await LocalAI.remove(); $('#aiMsg').textContent = 'この端末から消しました。'; drawAi();
-  $('#micBtn').hidden = !window.Voice?.supported || !store; $('#voiceHint').hidden = !!window.Voice?.supported;
+  $('#micBtn').hidden = !window.Voice?.supported || !store; $('#voiceHint').hidden = !!window.Voice?.supported; drawWhy();
 };
 $('#talkSetForm').onsubmit = e => {
   if (e.submitter?.value !== 'ok') return;
@@ -912,7 +929,7 @@ document.addEventListener('keydown', e => {
   else if (e.key === 't' || e.key === 'T') { e.preventDefault(); openTalk(); }
 });
 
-const actions = { github: openGithub, phone: showPhoneQr, cmd: openCmd, folder: openFolder, file: () => $('#fileInput').click(), download,
+const actions = { aiset: openTalkSet, github: openGithub, phone: showPhoneQr, cmd: openCmd, folder: openFolder, file: () => $('#fileInput').click(), download,
   install: async () => { if (installEvt) { installEvt.prompt(); installEvt = null; $('[data-m=install]').hidden = true; } } };
 document.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { $('#menu').open = false; actions[b.dataset.m](); });
 
@@ -948,6 +965,7 @@ document.addEventListener('click', e => { if (!$('#menu').contains(e.target)) $(
 
 laneOptions($('#addForm').lane); laneOptions($('#editForm').lane);
 if (!window.showDirectoryPicker) $('#folderChoice').hidden = true;
+drawWhy();
 
 // PWA（https か localhost で開いたときだけ。ダブルクリックで開いたときは使わない）
 if (location.protocol !== 'file:' && 'serviceWorker' in navigator) {
