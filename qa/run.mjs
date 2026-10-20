@@ -156,6 +156,22 @@ let conflictOnce = false;
 let failPuts = false; // true のあいだ保存は失敗する（GitHub に届かない） // true にすると、次の cards.json の保存を 1 回だけ「ほかの端末が先に書いた」にする
 
 const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {});
+// 本物の SpeechRecognition.available()・install() は、CI の headless Chrome では音声の部品が無くタブごと落ちる
+// （Target crashed。2026-10-20 に2回）。どのコンテキストでも「端末の中では日本語を聞けない端末」のふりにしておく。
+// 各検査が自分のにせもの（addInitScript）を入れれば、あとから入るそちらが勝つ。
+{
+  const open = browser.newContext.bind(browser);
+  browser.newContext = async (o) => {
+    const c = await open(o);
+    await c.addInitScript(() => {
+      for (const k of ['SpeechRecognition', 'webkitSpeechRecognition']) {
+        const C = window[k];
+        if (C) { C.available = async () => 'unavailable'; C.install = async () => false; }
+      }
+    });
+    return c;
+  };
+}
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 context.on('request', (r) => {
   const auth = r.headers().authorization || '';
@@ -838,8 +854,10 @@ try {
     await pg.route(/^https:\/\/([a-z0-9-]+\.)*(huggingface\.co|hf\.co)\//, (route) => route.fulfill({ json: {} }));
     await pg.addInitScript(() => {
       window.__heard = []; window.__spoken = []; window.__llmReq = []; window.__llmReplies = []; window.__asrCalls = []; window.__tried = [];
-      // 本物の音声認識は使わない（CI の Chrome が落ちた）。耳はにせものの Whisper
-      delete window.webkitSpeechRecognition; delete window.SpeechRecognition; delete window.LanguageModel;
+      // 本物の音声認識は使わない（CI の Chrome が落ちた）。Pixel のように、端末の中で聞く関数はあるが日本語は 'unavailable' と答えるにせもの
+      delete window.webkitSpeechRecognition; delete window.LanguageModel;
+      window.__srState = 'unavailable';
+      window.SpeechRecognition = class { static async available() { return window.__srState; } static async install() { if (window.__srInstallOk) window.__srState = 'available'; return !!window.__srInstallOk; } start() { this.onerror?.({ error: 'not-allowed' }); } stop() {} abort() {} };
       navigator.mediaDevices.getUserMedia = async () => { const ac = new AudioContext(); const o = ac.createOscillator(); const d = ac.createMediaStreamDestination(); o.connect(d); o.start(); return d.stream; };
       Object.defineProperty(navigator, 'gpu', { configurable: true, value: { requestAdapter: async (o) => { window.__tried.push(JSON.stringify(o || {})); return null; } } });
       window.speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }];
@@ -850,6 +868,15 @@ try {
     await ready(pg);
     await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
     await pg.waitForFunction(() => /CPU で動く AI/.test(document.querySelector('#aiStat').textContent), null, { timeout: 5000 }).catch(() => {});
+    check(/耳 Whisper/.test(await pg.textContent('#aiStat')) && /約 0\.5GB/.test(await pg.textContent('#aiGet')), `CPU 版の AI：端末の中で聞く関数があっても日本語が使えなければ、耳（Whisper）も入れると出す（${await pg.textContent('#aiGet')}）`);
+    const earQ = await pg.evaluate(async () => {
+      const out = {};
+      window.__srState = 'available'; out.available = await LocalAI.earNeeded({ tryInstall: true });
+      window.__srState = 'downloadable'; window.__srInstallOk = true; out.downloadable = await LocalAI.earNeeded({ tryInstall: true });
+      window.__srState = 'unavailable'; window.__srInstallOk = false; out.unavailable = await LocalAI.earNeeded({ tryInstall: true });
+      return out;
+    });
+    check(earQ.available === false && earQ.downloadable === false && earQ.unavailable === true, `耳が要るかは、端末の音声認識の実際の答えで決める（使える→不要・入れて使えた→不要・使えない→要る：${JSON.stringify(earQ)}）`);
     check(/WebGPU が使えないので、CPU で動く AI/.test(await pg.textContent('#aiStat')), `CPU 版の AI：WebGPU が使えない端末では、入れる前に CPU 版になる・ゆっくりと出す（${await pg.textContent('#aiStat')}）`);
     const tried = await pg.evaluate(() => window.__tried);
     check(tried.some((t) => /compatibility/.test(t)) && tried.some((t) => /low-power/.test(t)), `CPU 版の AI：あきらめる前に WebGPU を別の指定（互換モード・電力）でも探した（${tried.join(' ')}）`);
@@ -864,6 +891,7 @@ try {
     check(/Qwen2\.5-0\.5B-Instruct-GGUF\/resolve\/[0-9a-f]{40}\/qwen2\.5-0\.5b-instruct-q4_0\.gguf$/.test(cpu.url || '') && cpu.gpuLayers === 0 && /vendor\/wllama-[\d.]+\/wllama\.wasm$/.test(cpu.wasm || ''), `CPU 版の AI：Qwen 公式の GGUF（コミットで固定）を GPU なしで、同梱の wasm で動かす（${cpu.url}）`);
     check(net.length > 0 && net.every((x) => isModelHost(x.host) && x.method === 'GET'), `CPU 版の AI：取りに行ったのはモデルの置き場だけで、GET だけ（${[...new Set(net.map((x) => x.method + ' ' + x.host))].join(', ')}）`);
     check(/CPU で動かしています/.test(await pg.textContent('#aiStat')), 'CPU 版の AI：入れたあと、CPU で動かしていることを設定画面に出す');
+    check(await pg.evaluate(() => LocalAI.status().ear && !!window.__asr), 'CPU 版の AI：日本語を端末の中で聞けない端末には耳（Whisper）も入れた');
     await pg.click('#talkSetForm button[value=cancel]');
     net.length = 0;
     await pg.evaluate(() => {
@@ -882,6 +910,16 @@ try {
     await pg.click('#aiDel');
     await pg.waitForFunction(() => /消しました/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 10000 }).catch(() => {});
     check(await pg.evaluate(() => !localStorage.getItem('lk.ai') && window.__cpuCleared === true), 'CPU 版の AI：「入れた AI を消す」でモデル（wllama の保存）と印を消した');
+    await pg.click('#talkSetForm button[value=cancel]');
+    // 頭だけ入れてある端末（耳を入れる前の版で入れた）：「耳だけ足す」で Whisper だけ取る
+    await pg.evaluate(() => { localStorage.setItem('lk.ai', JSON.stringify({ llm: LocalAI.CPU.label, engine: 'cpu', at: '2026-10-20', from: ['huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF'] })); window.__cpu = null; window.__asr = null; });
+    await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
+    await pg.waitForFunction(() => /耳.*だけ足す/.test(document.querySelector('#aiGet').textContent), null, { timeout: 5000 }).catch(() => {});
+    check(/耳（声の聞き取り）だけ足す/.test(await pg.textContent('#aiGet')), `頭だけ入れた端末では「耳だけ足す」を出す（${await pg.textContent('#aiGet')}）`);
+    await pg.click('#aiGet');
+    await pg.waitForFunction(() => /入りました|入れられません/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 15000 }).catch(() => {});
+    const earOnly = await pg.evaluate(() => ({ ear: LocalAI.status().ear, llm: LocalAI.status().llm, asr: !!window.__asr, cpu: !!window.__cpu }));
+    check(earOnly.ear && earOnly.asr && !earOnly.cpu && !!earOnly.llm, `「耳だけ足す」で Whisper だけ取り、頭は取り直さない（${JSON.stringify(earOnly)}）`);
     await pg.click('#talkSetForm button[value=cancel]');
     await pg.evaluate(() => caches.delete('kanban-vendor'));
     fakeVendor = false;

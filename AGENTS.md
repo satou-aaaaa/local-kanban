@@ -17,6 +17,7 @@ node qa/run.mjs        # にせもののボード（qa/board.fixture.html）と�
 LK_BOARD=<board/index.html> node qa/run.mjs   # 本物のボードの写しで（写しはこのリポジトリに入れない）
 ```
 
+- CI は Playwright の headless shell で回る（本物の Chrome より部品が少なく、本物の音声認識を呼ぶとタブごと落ちる）。CI だけ「Target crashed」で落ちたら、`PW_CHROMIUM` に headless shell（`chromium_headless_shell-*/…/headless_shell`）を指して再現する。端末の機能はにせものに替えて調べる（`qa/run.mjs` の先頭で全コンテキストに入れている）。
 - app.js が当てにするボードの部品（`move`・`remove`・`say`・`render`・`openDetail`・`cards`・`WPS`・`#micBtn`・`#voice`・`#vstatus`・`.hbtns`・`#board` の `lane-<列>`・`#jump`・`#compose-btn`・`#toast-msg`・`#toast-undo`・`#wall`・`dialog#detail`）は `qa/board.fixture.html` に同じ名前で置く。増やしたらにせものにも、データ側の `tools/local_board.py` の相性の検査にも足す。
 - アプリの部品（`#voiceTry`・`#lkMenu`・`#lkIntro`・`#lkStatus`・`#talkWhy`・`#cmdIn`・`#talkBtn`・`#talkDlg`・`#talkIn`・`#talkSetForm`・`#aiGet`・`#talkAiGet`・`#lkPick`・`#lkUnsent`・`#memList`・`#memAll`・`#voiceTry`・`#koeGet`・`#koeBox`）を変えたら `qa/run.mjs` も合わせて直す。
 - ボードに壁紙が足されたら写真を `bg/`・`bg/t/` に置く（本物のボードで回す QA が、ボードの `WPS` の写真がすべてあるかを見る）。

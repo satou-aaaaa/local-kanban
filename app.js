@@ -401,11 +401,21 @@
       : `まだ入っていません。入れると、Chrome の内蔵 AI が無い端末（スマホなど）でも AI と話せます（頭 ${p.model}${p.ear ? '・耳 ' + A.EAR.label : ''}）。`;
     $('#aiGet').textContent = st.llm ? '入れ直す' : `AI の部品を入れる（約 ${p.gb}GB）`;
     $('#aiDel').hidden = !st.llm;
-    // WebGPU が使えない端末では、入れる前に CPU 版になることを出す
-    if (!st.llm) A.gpu().then(a => {
-      if (a || A.status().llm) return;
-      $('#aiStat').textContent = `まだ入っていません。この端末の Chrome は WebGPU が使えないので、CPU で動く AI（頭 ${A.CPU.label}${p.ear ? '・耳 ' + A.EAR.label : ''}）を入れます。返事はゆっくりです。`;
-      $('#aiGet').textContent = `AI の部品を入れる（約 ${Math.round((A.CPU.gb + (p.ear ? A.EAR.gb : 0)) * 10) / 10}GB）`;
+    // 頭は入っているが耳が無く、端末の音声認識でも日本語を聞き取れない端末は、耳（Whisper）だけ足せる
+    $('#aiGet').dataset.earOnly = '';
+    if (st.llm && !st.ear) A.earNeeded().then(need => {
+      if (!need || A.status().ear || aiBusy) return;
+      $('#aiGet').textContent = `耳（声の聞き取り）だけ足す（約 ${A.EAR.gb}GB）`; $('#aiGet').dataset.earOnly = '1';
+      $('#aiStat').textContent += ' この端末の Chrome は日本語を端末の中で聞き取れないので、🎤には耳（Whisper）が要ります。';
+    });
+    // 入れる前：WebGPU が使えなければ CPU 版、端末の音声認識で日本語を聞き取れなければ耳も入れる、と目安を直す
+    else if (!st.llm) Promise.all([A.gpu(), A.earNeeded()]).then(([a, need]) => {
+      if (A.status().llm || aiBusy) return;
+      const head = a ? p.model : A.CPU.label, gb = (a ? A.MODELS[p.model === A.MODELS.large.label ? 'large' : 'small'].gb : A.CPU.gb) + (need ? A.EAR.gb : 0);
+      $('#aiStat').textContent = a
+        ? `まだ入っていません。入れると、Chrome の内蔵 AI が無い端末（スマホなど）でも AI と話せます（頭 ${head}${need ? '・耳 ' + A.EAR.label : ''}）。`
+        : `まだ入っていません。この端末の Chrome は WebGPU が使えないので、CPU で動く AI（頭 ${head}${need ? '・耳 ' + A.EAR.label : ''}）を入れます。返事はゆっくりです。`;
+      $('#aiGet').textContent = `AI の部品を入れる（約 ${Math.round(gb * 10) / 10}GB）`;
     });
   }
   // 気持ちで話し分ける声（koe.js）
@@ -450,7 +460,7 @@
   $('#aiGet').onclick = async () => {
     if (aiBusy || !window.LocalAI) return;
     aiBusy = true; $('#aiGet').disabled = true; $('#aiProg').hidden = false; $('#aiProg').value = 0; $('#aiMsg').textContent = '取ってきています…（画面を閉じずに待ってね）';
-    try { await LocalAI.install((v, what) => { $('#aiProg').value = v; if (what) $('#aiMsg').textContent = String(what).slice(0, 120); }); $('#aiMsg').textContent = '入りました。会話モードと🎤で使えます。'; }
+    try { await LocalAI.install((v, what) => { $('#aiProg').value = v; if (what) $('#aiMsg').textContent = String(what).slice(0, 120); }, { earOnly: $('#aiGet').dataset.earOnly === '1' }); $('#aiMsg').textContent = '入りました。会話モードと🎤で使えます。'; }
     catch (e) { $('#aiMsg').textContent = '入れられませんでした：' + (e?.message || e); }
     finally { aiBusy = false; $('#aiGet').disabled = false; $('#aiProg').hidden = true; drawAi(); drawWhy(); }
   };
