@@ -500,7 +500,8 @@ try {
       } else delete window.webkitSpeechRecognition;
       delete window.SpeechRecognition;
       window.speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }];
-      window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => u.onend && u.onend(), 5); };
+      window.__boundaries = [];
+      window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => { u.onboundary?.({ charIndex: 2 }); u.onend?.(); }, 5); };
       window.speechSynthesis.cancel = () => {};
       navigator.mediaDevices.getUserMedia = () => Promise.reject(new Error('検査ではマイクを使わない'));
       if (replies) {
@@ -521,6 +522,7 @@ try {
     const { pg, outside } = await talkPage({ heard: ['済み', 'あとで', '終わり'] }, '会話 AI なし');
     await pg.evaluate(() => {
       window.__moods = []; window.__confetti = 0;
+      addEventListener('voice:boundary', (e) => window.__boundaries.push(e.detail?.at));
       new MutationObserver(() => window.__moods.push(document.querySelector('#talkDlg').dataset.mood)).observe(document.querySelector('#talkDlg'), { attributes: true, attributeFilter: ['data-mood'] });
       new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => { if (n.classList?.contains('confetti')) window.__confetti++; }))).observe(document.querySelector('#talkAva'), { childList: true });
     });
@@ -534,6 +536,7 @@ try {
     check(phr.some((p) => spoken.includes(p)), '会話（AI なし）：「済み」でほめた');
     const moods = await pg.evaluate(() => ({ m: window.__moods, c: window.__confetti }));
     check(moods.m.includes('happy') && moods.m.includes('listen') && moods.c > 0, `キャラの見た目：聞くときは耳を動かし、済みにしたら笑顔と紙吹雪（${[...new Set(moods.m)].join(',')}・紙吹雪 ${moods.c}）`);
+    check(await pg.evaluate(() => document.querySelector('#talkDlg').dataset.sync === '1' && window.__boundaries.includes(2)), '会話：読み上げの言葉の区切りで口を合わせた');
     await waitCards((cs) => cs.find((c) => c.doc_id === 's1')?.lane === 'done' && cs.find((c) => c.doc_id === 's2')?.lane === 'later', '会話（AI なし）の「済み」「あとで」');
     check(!(await pg.evaluate(() => document.querySelector('#talkDlg').open)), '会話（AI なし）：「終わり」で閉じた');
     check(outside.length === 0, `会話（AI なし）：自分のサイトと GitHub 以外へ通信していない${outside.length ? '（' + outside.join(', ') + '）' : ''}`);
