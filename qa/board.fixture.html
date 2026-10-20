@@ -59,6 +59,9 @@ async function answer(id,i){const c=cards.find(x=>x.id===id),o=c.decision.option
   write(()=>db.collection("cards").doc(id).update({answer:o.label,answer_status:r.ok?"sent":"new",lane:"agent",owner:"agent",started_at:c.started_at||now,moves:[...(c.moves||[]),{at:now,from:c.lane,to:"agent"}],updated:now}),"答えました")}
 function openDetail(id){const c=cards.find(x=>x.id===id);const d=document.getElementById("detail");d.querySelector("#dTitle").textContent=c.title;d.querySelector("[name=title]").value=c.title;d.showModal()}
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// ボード版44の「返事が来た」（satouさんのコメントのあとに Claude の返事があり、まだ開いていない・7日以内）。アプリのアイコンの数に使う
+function repliedToYou(c){if(c.deleted||c.lane==="done")return "";const h=c.history||[];let i=-1;for(let j=h.length-1;j>=0;j--)if(h[j].who==="you"){i=j;break}if(i<0)return "";
+  let t="";for(const e of h.slice(i+1))if(e.who==="claude"&&String(e.at)>t)t=String(e.at);if(!t||Date.now()-Date.parse(t)>7*864e5)return "";return t>(c.reply_seen_at||"")?t:""}
 function render(){
   document.getElementById("jump").innerHTML=LANES.map(l=>`<a href="#lane-${l.id}">${l.name}</a>`).join(" ");
   board.innerHTML=LANES.map(lane=>`<section class="lane" id="${"lane-"+lane.id}" data-lane="${lane.id}"><h2>${lane.name}</h2>`+cards.filter(c=>!c.deleted&&(c.lane||"next")===lane.id).map(c=>
