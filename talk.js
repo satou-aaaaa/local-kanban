@@ -441,14 +441,19 @@
   function fixTitles(text, titles) {
     let t = String(text || '');
     for (const title of [...new Set(titles || [])].filter((x) => x && x.length >= 4 && x.length <= 30).sort((a, b) => b.length - a.length)) {
-      if (t.includes(title)) continue;
+      // 題の最後の送り仮名は活用で変わる（「本を返す」→「本を返した」）。語幹があれば直さない。直すときも語幹に寄せ、後ろの活用を残す
+      const stem = /[ぁ-ん]$/.test(title) ? title.slice(0, -1) : title;
+      if (t.includes(title) || t.includes(stem)) continue;
       const L = title.length, max = Math.floor(L / 4);
       let best = null;
-      for (let len = L - 1; len <= L + 1; len++) for (let i = 0; i + len <= t.length; i++) {
-        const d = lev(t.slice(i, i + len), title);
-        if (d <= max && (!best || d < best.d)) best = { i, len, d };
+      for (const want of new Set([title, stem])) {
+        const W = want.length;
+        for (let len = W - 1; len <= W + 1; len++) for (let i = 0; i + len <= t.length; i++) {
+          const d = lev(t.slice(i, i + len), want);
+          if (d <= max && (!best || d < best.d || (d === best.d && want.length < best.want.length))) best = { i, len, d, want };
+        }
       }
-      if (best && best.d > 0) t = t.slice(0, best.i) + title + t.slice(best.i + best.len);
+      if (best && best.d > 0) t = t.slice(0, best.i) + best.want + t.slice(best.i + best.len);
     }
     return t;
   }
@@ -934,7 +939,7 @@
         // 言いかけ（〜て・〜けど・えっと）なら、答えずにもう一度聞いてつなげる（1回まで。何も来なければそのまま答える）
         if (s.waitMore !== false && unfinished(text, isCommand)) {
           log('sys', `「${text}」…続けてどうぞ`);
-          try { const more = (await g.Voice.listen({ waitMs: 3000 })).text; if (more) text = joinHeard(text, more); } catch { /* 続きが無ければそのまま */ }
+          try { const more = (await g.Voice.listen({ waitMs: 3000, endMs: s.endWait === 'slow' ? 1200 : 700, phrases: hints() })).text; if (more) text = joinHeard(text, more); } catch { /* 続きが無ければそのまま */ }
           if (!on || my !== gen) break;
         }
         cue('end');
