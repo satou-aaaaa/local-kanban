@@ -1,5 +1,6 @@
 // 端末の中で動く AI の部品。Chrome の内蔵 AI や端末内の音声認識が無い端末（スマホなど）でも、会話モードで AI と話せるようにする。
 //   頭       … WebLLM（WebGPU で小さな言葉のモデル Qwen2.5 を動かす）。返事の形は talk.js の Prompt API と同じ（session.prompt）
+//              WebGPU が使えない端末（Chrome の対象外の GPU など）は wllama（llama.cpp の wasm。CPU で動く。GGUF）で同じモデルを動かす。遅いが動く
 //   耳       … Whisper（transformers.js。声→文字）。端末内の音声認識が使えない端末だけで使う
 //   割り込み … Silero VAD（transformers.js。声が始まったかを見る）。入っていなければ talk.js の音の大きさの VAD を使う
 // 部品の JS と wasm は vendor/ に同梱（版を固定）。モデル本体は「AI の部品を入れる」を押したときだけ、
@@ -11,6 +12,13 @@
     llm: 'vendor/web-llm-0.2.85/index.js',
     tf: 'vendor/transformers-4.3.0/transformers.js',
     ort: 'vendor/onnxruntime-web-1.31.0-dev.20260914-8d85527a0/ort-wasm-simd-threaded.asyncify',
+    cpu: 'vendor/wllama-3.8.1/index.js',
+    cpuWasm: 'vendor/wllama-3.8.1/wllama.wasm',
+  };
+  // CPU 版の頭（wllama）のモデル。Qwen 公式の GGUF（Apache-2.0）。Q4_0 は ARM の CPU で速い。コミットで固定
+  const CPU = {
+    label: 'Qwen2.5 0.5B（CPU）', gb: 0.4,
+    url: 'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_0.gguf',
   };
   // 言葉のモデル（日本語が通じる小さなもの）。端末のメモリで選び、WebGPU が16ビットの計算をできなければ f32 版にする
   const MODELS = {
@@ -30,12 +38,19 @@
   const needEar = () => !g.Voice?.localApi;
   // 入れる前に見せる大きさ（目安）。GPU にはまだ触らない（押したときに調べる）
   function plan() {
-    const m = pickModel();
+    const m = g.navigator?.gpu ? pickModel() : CPU;
     return { model: m.label, ear: needEar(), gb: Math.round((m.gb + (needEar() ? EAR.gb : 0)) * 10) / 10 };
   }
+  // WebGPU の GPU を探す。既定で見つからなければ、電力の指定違い・互換モード（featureLevel: compatibility）でも探す。
+  // 端末の GPU が Chrome の対象外（blocklist）だと全部 null になる（https://developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips）
+  const TRIES = [['default'], ['high', { powerPreference: 'high-performance' }], ['low', { powerPreference: 'low-power' }], ['compat', { featureLevel: 'compatibility' }]];
   async function gpu() {
-    if (!g.navigator?.gpu) return null;
-    try { const a = await g.navigator.gpu.requestAdapter(); return a ? { f16: a.features.has('shader-f16') } : null; } catch { return null; }
+    const n = g.navigator?.gpu;
+    if (!n) return null;
+    for (const [mode, opt] of TRIES) {
+      try { const a = await n.requestAdapter(opt); if (a) return { f16: a.features.has('shader-f16'), mode }; } catch { /* 次の指定で探す */ }
+    }
+    return null;
   }
 
   // ---------- 頭（WebLLM） ----------
@@ -48,6 +63,34 @@
     engineId = id;
     return engine;
   }
+  // ---------- 頭（wllama・CPU） ----------
+  let cpuLib = null, cpuEngine = null;
+  async function cpuEngineFor(onProgress) {
+    if (cpuEngine) return cpuEngine;
+    cpuLib = cpuLib || await import(here(VENDOR.cpu));
+    const w = new cpuLib.Wllama({ default: here(VENDOR.cpuWasm) }, { allowOffline: true, suppressNativeLog: true });
+    // WebGPU は使わない（使えない端末のための頭）。スレッドは COOP/COEP が無い GitHub Pages では1本になる
+    await w.loadModelFromUrl(CPU.url, { n_gpu_layers: 0, n_ctx: 2048, progressCallback: ({ loaded, total }) => onProgress?.(total ? loaded / total : 0, 'qwen2.5-0.5b-instruct-q4_0.gguf') });
+    // WebLLM と同じ形（chat.completions.create）にそろえる
+    cpuEngine = {
+      chat: { completions: { create: (req) => w.createChatCompletion(cpuReq(req)) } },
+      unload: () => w.exit(),
+      clear: () => w.cacheManager.clear(),
+    };
+    return cpuEngine;
+  }
+  // WebLLM の形の頼み方を wllama の形に直す（名前の違う項目と、JSON の形の指定）
+  function cpuReq({ messages: m, temperature, top_p, repetition_penalty, max_tokens, response_format: rf }) {
+    let schema = null;
+    try { schema = rf?.schema ? JSON.parse(rf.schema) : null; } catch { schema = null; }
+    return {
+      messages: m, max_tokens, temp: temperature, top_p, penalty_repeat: repetition_penalty,
+      ...(schema ? { response_format: { type: 'json_schema', json_schema: { name: 'reply', schema } } } : rf ? { response_format: { type: 'json_object' } } : {}),
+    };
+  }
+  // 入れた頭を返す（WebLLM か wllama）
+  const brain = () => (load().engine === 'cpu' ? cpuEngineFor() : engineFor(load().llm));
+
   // 返事の出し方。Qwen2.5 の公式の既定（generation_config.json：temperature 0.7・top_p 0.8・repetition_penalty 1.1）に合わせる。
   // 0.5 だと毎回同じような返事になり、定型文に聞こえた
   const SAMPLING = { temperature: 0.7, top_p: 0.8, repetition_penalty: 1.1 };
@@ -65,7 +108,7 @@
   async function session(system, examples = []) {
     const id = load().llm;
     if (!id) return null;
-    const e = await engineFor(id);
+    const e = await brain();
     const past = [];
     let summary = '', busy = Promise.resolve();
     // 古いやりとりを1〜2文にまとめる（返事のあとに回すので、待たせない）
@@ -114,7 +157,7 @@
     if (asr) return Promise.resolve();
     return earLoading || (earLoading = (async () => {
       const m = await transformers();
-      const webgpu = !!(await gpu());
+      const webgpu = (await gpu())?.mode === 'default'; // 互換モードでしか見つからない GPU では wasm（CPU）で聞く
       const progress_callback = (p) => { if (p?.status === 'progress' && onProgress) onProgress((p.progress || 0) / 100, p.file || ''); };
       asr = await m.pipeline('automatic-speech-recognition', EAR.id, { device: webgpu ? 'webgpu' : 'wasm', dtype: webgpu ? { encoder_model: 'fp32', decoder_model_merged: 'q4' } : 'q8', progress_callback });
       try { vadModel = await m.AutoModel.from_pretrained(VAD.id, { config: { model_type: 'custom' }, dtype: 'fp32', progress_callback }); } catch { vadModel = null; }
@@ -221,19 +264,32 @@
   // ---------- 入れる・消す ----------
   function status() {
     const s = load();
-    return { llm: s.llm || '', ear: !!s.ear, at: s.at || '', from: s.from || [] };
+    return { llm: s.llm || '', cpu: s.engine === 'cpu', ear: !!s.ear, at: s.at || '', from: s.from || [] };
   }
   // 「AI の部品を入れる」を押したとき。onProgress(0〜1, 何を取っているか)
+  // WebGPU が使えない・WebLLM が動かない端末は、CPU で動く頭（wllama）を入れる
+  const CPU_NOTE = 'この端末の Chrome は WebGPU が使えないので、CPU で動く AI を入れます（返事はゆっくり）。';
   async function install(onProgress) {
     const a = await gpu();
-    if (!a) throw new Error('この端末のブラウザは WebGPU が使えないため、AI を入れられません（Android は Chrome 121 以降、iPhone は iOS 26 以降）。');
-    const m = pickModel();
-    const id = a.f16 ? m.f16 : m.f32;
     const ear = needEar();
     const step = (base, part) => (p, what) => onProgress?.(base + part * Math.max(0, Math.min(1, p || 0)), what);
-    await engineFor(id, step(0, ear ? 0.8 : 1));
-    const from = [`huggingface.co/mlc-ai/${id}`, 'raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs'];
-    save({ llm: id });
+    let id = '', from = [], why = '';
+    if (a) {
+      const m = pickModel();
+      id = a.f16 ? m.f16 : m.f32;
+      try {
+        await engineFor(id, step(0, ear ? 0.8 : 1));
+        from = [`huggingface.co/mlc-ai/${id}`, 'raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs'];
+        save({ llm: id, engine: 'webllm' });
+      } catch (e) { why = String(e?.message || e); id = ''; engine = null; engineId = ''; }
+    }
+    if (!id) {
+      onProgress?.(0, why ? 'この端末では WebGPU の AI が動かなかったので、CPU で動く AI を入れます（返事はゆっくり）。' : CPU_NOTE);
+      await cpuEngineFor(step(0, ear ? 0.8 : 1));
+      id = CPU.label;
+      from = ['huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF'];
+      save({ llm: id, engine: 'cpu' });
+    }
     if (ear) {
       await loadEar(step(0.8, 0.2));
       from.push(`huggingface.co/${EAR.id}`);
@@ -248,14 +304,16 @@
   async function remove() {
     const s = load();
     try { engine?.unload?.(); } catch { /* なくてよい */ }
-    engine = null; engineId = ''; asr = null; vadModel = null; earLoading = null;
-    try { if (s.llm) await (await webllm()).deleteModelAllInfoInCache?.(s.llm); } catch { /* 消せなくても印は消す */ }
+    try { await cpuEngine?.unload(); } catch { /* なくてよい */ }
+    try { if (s.engine === 'cpu') { cpuLib = cpuLib || await import(here(VENDOR.cpu)); await new cpuLib.CacheManager().clear(); } } catch { /* 消せなくても印は消す */ }
+    engine = null; engineId = ''; cpuEngine = null; asr = null; vadModel = null; earLoading = null;
+    try { if (s.llm && s.engine !== 'cpu') await (await webllm()).deleteModelAllInfoInCache?.(s.llm); } catch { /* 消せなくても印は消す */ }
     try { for (const k of await g.caches.keys()) if (/^transformers-cache/.test(k)) await g.caches.delete(k); } catch { /* なくてよい */ }
     try { g.localStorage.removeItem(KEY); } catch { /* なくてよい */ }
   }
 
   const LocalAI = {
-    MODELS, EAR, VAD, VENDOR, SAMPLING, KEEP, messages, plan, status, install, remove, session, listen, bargeIn,
+    MODELS, CPU, EAR, VAD, VENDOR, TRIES, gpu, SAMPLING, KEEP, messages, plan, status, install, remove, session, listen, bargeIn,
     llmReady: () => !!load().llm,
     earReady: () => !!load().ear,
     prepareEar: () => (load().ear ? loadEar().catch(() => {}) : Promise.resolve()),

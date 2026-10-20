@@ -355,11 +355,11 @@
       onMood: m => setMood(m),
       onMode: (m, brain, why) => {
         $('#talkMode').textContent = m === 'ai'
-          ? '🧠 AI と話しています（' + (brain === 'webllm' ? '入れた WebLLM' : 'Chrome の内蔵 AI') + '・端末の中だけ）'
+          ? '🧠 AI と話しています（' + (brain === 'cpu' ? '入れた AI・CPU で動かしています（ゆっくり）' : brain === 'webllm' ? '入れた WebLLM' : 'Chrome の内蔵 AI') + '・端末の中だけ）'
           : why === 'off' ? '📋 AI なし：設定で切っています（決まった返事で1枚ずつ聞きます）' : '📋 AI なし：決まった返事で1枚ずつ聞きます';
         $('#talkMode').dataset.ai = m === 'ai' ? 'on' : 'off';
         // AI なしで、入れれば使える端末（WebGPU がある）なら、入れる場所への近道を出す
-        $('#talkAiGet').hidden = m === 'ai' || why === 'off' || !window.LocalAI || !navigator.gpu || LocalAI.llmReady();
+        $('#talkAiGet').hidden = m === 'ai' || why === 'off' || !window.LocalAI || LocalAI.llmReady(); // WebGPU が無くても CPU 版を入れられる
       },
     });
     $('#talkDlg').showModal();
@@ -397,10 +397,16 @@
     const A = window.LocalAI; if (!A) { $('#aiBox').hidden = true; return; }
     const st = A.status(), p = A.plan();
     $('#aiStat').textContent = st.llm
-      ? `入っています：頭 ${st.llm}${st.ear ? '・耳 ' + A.EAR.label : ''}（${st.at} に ${[...new Set(st.from.map(f => f.split('/')[0]))].join('・')} から取得）`
+      ? `入っています：頭 ${st.llm}${st.cpu ? '（CPU で動かしています。返事はゆっくり）' : ''}${st.ear ? '・耳 ' + A.EAR.label : ''}（${st.at} に ${[...new Set(st.from.map(f => f.split('/')[0]))].join('・')} から取得）`
       : `まだ入っていません。入れると、Chrome の内蔵 AI が無い端末（スマホなど）でも AI と話せます（頭 ${p.model}${p.ear ? '・耳 ' + A.EAR.label : ''}）。`;
     $('#aiGet').textContent = st.llm ? '入れ直す' : `AI の部品を入れる（約 ${p.gb}GB）`;
     $('#aiDel').hidden = !st.llm;
+    // WebGPU が使えない端末では、入れる前に CPU 版になることを出す
+    if (!st.llm) A.gpu().then(a => {
+      if (a || A.status().llm) return;
+      $('#aiStat').textContent = `まだ入っていません。この端末の Chrome は WebGPU が使えないので、CPU で動く AI（頭 ${A.CPU.label}${p.ear ? '・耳 ' + A.EAR.label : ''}）を入れます。返事はゆっくりです。`;
+      $('#aiGet').textContent = `AI の部品を入れる（約 ${Math.round((A.CPU.gb + (p.ear ? A.EAR.gb : 0)) * 10) / 10}GB）`;
+    });
   }
   // 気持ちで話し分ける声（koe.js）
   let koeBusy = false;
@@ -415,6 +421,8 @@
     $('#koeStat').textContent = !st.gpu ? 'この端末のブラウザは WebGPU が使えないので、端末の声で話します。'
       : st.installed ? `入っています：${K.VOICES[st.installed].label}` : 'まだ入っていません（端末の声で話しています）。';
     $('#koeGet').disabled = koeBusy || !st.gpu;
+    // GPU が Chrome の対象外の端末（navigator.gpu はあるが使えない）も、押す前に理由を出す
+    if (st.gpu && !st.installed) K.adapterOk().then(ok => { if (!ok) { $('#koeStat').textContent = 'この端末の Chrome は WebGPU が使えないので、気持ちの声は入れられません。端末の日本語の声で話します。'; $('#koeGet').disabled = true; } });
   }
   $('#koeGet').onclick = async () => {
     if (koeBusy || !window.Koe) return;
