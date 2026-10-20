@@ -104,18 +104,23 @@ export class Wllama {
   async createChatCompletion(req) { window.__llmReq.push(req); return { choices: [{ message: { content: JSON.stringify(window.__llmReplies.shift() || { say: 'うん', action: null }) } }] }; }
   async exit() {}
 }`,
-  tf: `export const env = { backends: { onnx: { wasm: {} } } };
+  // 耳は ear-worker.js（Worker）の中で動くので、にせものは画面の検査用の値（__asr・__heard など）を画面とやりとりして読み書きする
+  tf: `const inPage = typeof window !== 'undefined';
+let seq = 0; const waits = new Map();
+if (!inPage) self.addEventListener('message', (e) => { const d = e.data; if (d && d.__qaRe) { waits.get(d.__qaRe)?.(d.v); waits.delete(d.__qaRe); } });
+const qa = (kind, v) => (inPage ? Promise.resolve(window.__qaEar(kind, v)) : new Promise((ok) => { const id = ++seq; waits.set(id, ok); self.postMessage({ __qa: id, kind, v }); }));
+export const env = { backends: { onnx: { wasm: {} } } };
 export class Tensor { constructor(type, data, dims) { Object.assign(this, { type, data, dims }); } }
 export async function pipeline(task, model, opts) {
-  window.__asr = { task, model, device: opts.device, revision: opts.revision };
+  await qa('asr-init', { task, model, device: opts.device, revision: opts.revision });
   opts.progress_callback?.({ status: 'progress', progress: 50, file: 'encoder_model.onnx' });
   await fetch('https://huggingface.co/' + model + '/resolve/main/config.json');
-  return async (audio, o) => { window.__asrCalls.push({ n: audio.length, lang: o.language }); return { text: window.__heard.shift() || '' }; };
+  return async (audio, o) => ({ text: await qa('asr', { n: audio.length, lang: o.language }) });
 }
 let n = 0;
 export const AutoModel = { from_pretrained: async (id) => {
   await fetch('https://huggingface.co/' + id + '/resolve/main/onnx/model.onnx');
-  return async ({ state }) => { n++; window.__vadCalls = n; return { output: { data: [n % 40 < 10 ? 0.9 : 0.05] }, stateN: state }; };
+  return async ({ state }) => { n++; qa('vad', n); return { output: { data: [n % 40 < 10 ? 0.9 : 0.05] }, stateN: state }; };
 } };`,
 };
 const server = createServer((req, res) => {
@@ -169,6 +174,20 @@ const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath
         const C = window[k];
         if (C) { C.available = async () => 'unavailable'; C.install = async () => false; }
       }
+      // 耳のにせもの（Worker の中）が、画面の検査用の値を読み書きできるようにする（本物の耳は使わない）
+      window.__qaEar = (kind, v) => {
+        if (kind === 'asr-init') { window.__asr = v; return null; }
+        if (kind === 'asr') { (window.__asrCalls ||= []).push(v); return window.__heard?.shift() || ''; }
+        if (kind === 'vad') { window.__vadCalls = v; return null; }
+        return null;
+      };
+      const W = window.Worker;
+      if (W) window.Worker = class extends W {
+        constructor(u, o) {
+          super(u, o);
+          this.addEventListener('message', (e) => { const d = e.data; if (d && d.__qa) { e.stopImmediatePropagation(); this.postMessage({ __qaRe: d.__qa, v: window.__qaEar(d.kind, d.v) }); } });
+        }
+      };
       // 検査のブラウザは保存できる量（quota）が小さいので、空きのある端末のふりにする（空きが足りない場合は G の検査が自分で替える）
       try { navigator.storage.estimate = async () => ({ quota: 5e10, usage: 1e9 }); } catch { /* なくてよい */ }
     });
@@ -1199,21 +1218,29 @@ try {
   check(coi.iso && coi.sab && coi.cards > 0 && coi.ok, `開き直したら、ほかのサイトから切り離した状態（crossOriginIsolated）になり、GitHub につないだボードもそのまま出る（${JSON.stringify(coi)}）`);
   // 切り離した画面でも、耳（Whisper）の部品 ONNX Runtime が本物の wasm でスレッドを使って動く（2026-10-20 Pixel で🎤が黙って止まった：
   // スレッドの worker（vendor の .mjs）に COEP が無く止められ、初期化が戻らなかった。耳をにせもので調べていたので見逃した）
+  // 耳の計算は画面とは別の作業場（ear-worker.js）でする。遅いスマホ（CPU を 6 倍遅くしたまね）でも、その間に画面が 500ms 以上止まらない
+  // （2026-10-20 Pixel 6a で🎤を使うと画面が固まった：耳が画面と同じところで動いていた）
   {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
     const ort = await page.evaluate(async () => {
+      const lt = [];
+      const po = new PerformanceObserver((l) => lt.push(...l.getEntries().map((e) => e.duration)));
+      po.observe({ type: 'longtask' });
+      let gap = 0, last = performance.now(), run = true;
+      const tick = () => { const n = performance.now(); gap = Math.max(gap, n - last); last = n; if (run) setTimeout(tick, 16); };
+      tick();
       const t0 = Date.now();
       try {
-        const m = await import(new URL('vendor/transformers-4.3.0/transformers.js', document.baseURI).href);
-        m.env.useWasmCache = false; // localai.js と同じ
-        const w = m.env.backends?.onnx?.wasm;
-        const base = new URL('vendor/onnxruntime-web-1.31.0-dev.20260914-8d85527a0/ort-wasm-simd-threaded.asyncify', document.baseURI).href;
-        if (w) w.wasmPaths = { mjs: base + '.mjs', wasm: base + '.wasm' };
-        const a = new m.Tensor('float32', Float32Array.from([1, 2, 3, 4]), [2, 2]);
-        const r = await Promise.race([m.matmul(a, a), new Promise((_, ng) => setTimeout(() => ng(new Error('30秒たっても戻らない')), 30000))]);
-        return { ok: Array.from(r.data).join(',') === '7,10,15,22', threads: w?.numThreads ?? null, s: (Date.now() - t0) / 1000 };
+        const r = await Promise.race([LocalAI.earSelfTest({ size: 384, n: 12 }), new Promise((_, ng) => setTimeout(() => ng(new Error('60秒たっても戻らない')), 60000))]);
+        await new Promise((ok) => setTimeout(ok, 200)); // 最後の長い処理も数える
+        return { ok: !!r.ok && r.sum > 0, threads: r.threads, s: (Date.now() - t0) / 1000, longMax: Math.round(Math.max(0, ...lt)), gap: Math.round(gap) };
       } catch (e) { return { ok: false, err: String(e?.message || e), s: (Date.now() - t0) / 1000 }; }
+      finally { run = false; po.disconnect(); }
     });
-    check(ort.ok, `切り離した画面でも、耳の部品（ONNX Runtime・本物の wasm）がスレッドを使って動く（${JSON.stringify(ort)}）`);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    check(ort.ok && ort.threads >= 1, `切り離した画面でも、耳の部品（ONNX Runtime・本物の wasm）が別の作業場でスレッドを使って動く（${JSON.stringify(ort)}）`);
+    check(ort.ok && ort.longMax < 500 && ort.gap < 500, `遅いスマホのまね（CPU 6倍遅く）でも、耳の計算の間に画面が 500ms 以上止まらない（最長 ${ort.longMax}ms・間 ${ort.gap}ms）`);
   }
   {
     const sw = readFileSync(resolve(root, 'sw.js'), 'utf8');
