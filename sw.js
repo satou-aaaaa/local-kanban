@@ -2,7 +2,7 @@
 // カードのデータ（api.github.com など他のサイト）と AI のモデル（Hugging Face など）には触らない（モデルは localai.js の部品が自分で保存する）。
 // 先にネットを見て、つながらないときだけ保存したものを使う（更新はすぐ届く）。
 // vendor/（同梱の AI 部品。数十MB）と bg/（壁紙の写真）は、一度取ったら保存したものを使う（中身は変わらない。スマホの通信量のため。見た目で選んだ写真だけ取る）。
-const CACHE = 'kanban-v23';
+const CACHE = 'kanban-v24';
 const VENDOR_CACHE = 'kanban-vendor';
 // vendor/ の今の版（localai.js の VENDOR と koe.js と同じフォルダ）。これ以外の版を保存していたら消す（版を上げたあと、古い数十MB が端末に残らないように）
 const VENDOR_NOW = ['web-llm-0.2.85', 'transformers-4.3.0', 'onnxruntime-web-1.31.0-dev.20260914-8d85527a0', 'wllama-3.8.1', 'karume-models-0.14.0'];
@@ -54,17 +54,21 @@ self.addEventListener('fetch', e => {
     return;
   }
   if (url.pathname.includes('/vendor/') || url.pathname.includes('/bg/')) {
+    // 部品にも COEP を付ける。切り離した画面から部品の .mjs を worker（ONNX Runtime のスレッド）として読むとき、
+    // COEP の無い応答は止められ、耳（Whisper）の準備が永久に終わらなかった（2026-10-20 Pixel で🎤が黙って止まった）
     e.respondWith(caches.open(VENDOR_CACHE).then(c => c.match(e.request).then(hit => hit || fetch(e.request).then(res => {
       if (res.ok) c.put(e.request, res.clone());
       return res;
-    }))));
+    }))).then(isolate));
     return;
   }
+  // worker として読むもの（自分のサイトの .js）にも COEP を付ける（上と同じ理由。画面そのものではないので、メモ（notes/）の画面は切り離さない）
+  const asWorker = /worker$/.test(e.request.destination);
   e.respondWith(
     fetch(e.request).then(res => {
       if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); }
-      return res;
+      return asWorker ? isolate(res) : res;
     // 共有メニューや #add で開いたとき（?title=… 付き）も、オフラインなら保存した画面を出す
-    }).catch(() => caches.match(e.request, { ignoreSearch: e.request.mode === 'navigate' }).then(r => r || caches.match('./index.html')))
+    }).catch(() => caches.match(e.request, { ignoreSearch: e.request.mode === 'navigate' }).then(r => r || caches.match('./index.html')).then(r => (asWorker ? isolate(r) : r)))
   );
 });

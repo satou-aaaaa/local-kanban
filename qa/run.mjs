@@ -1197,6 +1197,24 @@ try {
   await ready(page);
   const coi = await page.evaluate(() => ({ iso: crossOriginIsolated, sab: typeof SharedArrayBuffer === 'function', cards: document.querySelectorAll('#board .card').length, ok: !!window.LK?.ready }));
   check(coi.iso && coi.sab && coi.cards > 0 && coi.ok, `開き直したら、ほかのサイトから切り離した状態（crossOriginIsolated）になり、GitHub につないだボードもそのまま出る（${JSON.stringify(coi)}）`);
+  // 切り離した画面でも、耳（Whisper）の部品 ONNX Runtime が本物の wasm でスレッドを使って動く（2026-10-20 Pixel で🎤が黙って止まった：
+  // スレッドの worker（vendor の .mjs）に COEP が無く止められ、初期化が戻らなかった。耳をにせもので調べていたので見逃した）
+  {
+    const ort = await page.evaluate(async () => {
+      const t0 = Date.now();
+      try {
+        const m = await import(new URL('vendor/transformers-4.3.0/transformers.js', document.baseURI).href);
+        m.env.useWasmCache = false; // localai.js と同じ
+        const w = m.env.backends?.onnx?.wasm;
+        const base = new URL('vendor/onnxruntime-web-1.31.0-dev.20260914-8d85527a0/ort-wasm-simd-threaded.asyncify', document.baseURI).href;
+        if (w) w.wasmPaths = { mjs: base + '.mjs', wasm: base + '.wasm' };
+        const a = new m.Tensor('float32', Float32Array.from([1, 2, 3, 4]), [2, 2]);
+        const r = await Promise.race([m.matmul(a, a), new Promise((_, ng) => setTimeout(() => ng(new Error('30秒たっても戻らない')), 30000))]);
+        return { ok: Array.from(r.data).join(',') === '7,10,15,22', threads: w?.numThreads ?? null, s: (Date.now() - t0) / 1000 };
+      } catch (e) { return { ok: false, err: String(e?.message || e), s: (Date.now() - t0) / 1000 }; }
+    });
+    check(ort.ok, `切り離した画面でも、耳の部品（ONNX Runtime・本物の wasm）がスレッドを使って動く（${JSON.stringify(ort)}）`);
+  }
   {
     const sw = readFileSync(resolve(root, 'sw.js'), 'utf8');
     const now = JSON.parse((sw.match(/VENDOR_NOW = (\[[^\]]*\])/) || [, '[]'])[1].replace(/'/g, '"'));
