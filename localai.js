@@ -48,24 +48,53 @@
     engineId = id;
     return engine;
   }
-  // Prompt API の session と同じ形（prompt(文, { responseConstraint })）で返す。直近のやりとりだけ覚える
-  async function session(system) {
+  // 返事の出し方。Qwen2.5 の公式の既定（generation_config.json：temperature 0.7・top_p 0.8・repetition_penalty 1.1）に合わせる。
+  // 0.5 だと毎回同じような返事になり、定型文に聞こえた
+  const SAMPLING = { temperature: 0.7, top_p: 0.8, repetition_penalty: 1.1 };
+  const KEEP = 12; // 覚えておくやりとり（往復）。超えた古い分は端末の中で短くまとめて指示に足す
+  // AI に渡す messages を組み立てる（検査からも呼ぶ）。ボードの一覧は毎回の発言にだけ入れ、覚える方には入れない
+  function messages({ system, examples = [], summary = '', past = [], text }) {
+    return [
+      { role: 'system', content: system + (summary ? `\nこれまでの話のまとめ: ${summary}` : '') },
+      ...examples.flatMap(([u, a]) => [{ role: 'user', content: u }, { role: 'assistant', content: a }]),
+      ...past.slice(-KEEP * 2),
+      { role: 'user', content: text },
+    ];
+  }
+  // Prompt API の session と同じ形（prompt(文, { responseConstraint })）で返す
+  async function session(system, examples = []) {
     const id = load().llm;
     if (!id) return null;
     const e = await engineFor(id);
     const past = [];
+    let summary = '', busy = Promise.resolve();
+    // 古いやりとりを1〜2文にまとめる（返事のあとに回すので、待たせない）
+    const squeeze = () => {
+      if (past.length <= KEEP * 2) return;
+      const old = past.splice(0, past.length - KEEP * 2);
+      const talk = old.map((m) => `${m.role === 'user' ? 'ユーザー' : 'あなた'}: ${m.role === 'user' ? m.content : (() => { try { return JSON.parse(m.content).say; } catch { return m.content; } })()}`).join('\n');
+      busy = busy.then(async () => {
+        const r = await e.chat.completions.create({
+          messages: [{ role: 'system', content: '会話のまとめ役。ユーザーの好み・気持ち・決めたことを中心に、日本語で2文以内にまとめる。' }, { role: 'user', content: `${summary ? `前のまとめ: ${summary}\n` : ''}${talk}` }],
+          temperature: 0.3, max_tokens: 120,
+        });
+        summary = String(r?.choices?.[0]?.message?.content || summary).trim().slice(0, 300);
+      }).catch(() => { /* まとめられなくても会話は続ける */ });
+    };
     return {
       async prompt(text, { responseConstraint } = {}) {
-        const messages = [{ role: 'system', content: system }, ...past.slice(-4), { role: 'user', content: text }];
+        await busy;
         const r = await e.chat.completions.create({
-          messages, temperature: 0.5, max_tokens: 256,
+          messages: messages({ system, examples, summary, past, text }), ...SAMPLING, max_tokens: 256,
           ...(responseConstraint ? { response_format: { type: 'json_object', schema: JSON.stringify(responseConstraint) } } : {}),
         });
         const out = r?.choices?.[0]?.message?.content || '';
         past.push({ role: 'user', content: text.replace(/^[\s\S]*\nユーザー: /, '') }, { role: 'assistant', content: out }); // ボードの一覧は覚えない（毎回渡す）
+        squeeze();
         return out;
       },
-      destroy() { past.length = 0; },
+      get summary() { return summary; },
+      destroy() { past.length = 0; summary = ''; },
     };
   }
 
@@ -226,7 +255,7 @@
   }
 
   const LocalAI = {
-    MODELS, EAR, VAD, VENDOR, plan, status, install, remove, session, listen, bargeIn,
+    MODELS, EAR, VAD, VENDOR, SAMPLING, KEEP, messages, plan, status, install, remove, session, listen, bargeIn,
     llmReady: () => !!load().llm,
     earReady: () => !!load().ear,
     prepareEar: () => (load().ear ? loadEar().catch(() => {}) : Promise.resolve()),

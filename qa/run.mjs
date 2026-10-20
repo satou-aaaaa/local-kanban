@@ -477,6 +477,9 @@ try {
     const spoken = await pg.evaluate(() => window.__spoken.join(''));
     check(/見本のカード（今やる）/.test(spoken), '会話（AI なし）：最初に「今やる」の1枚目を読み上げた');
     check(/AI なし/.test(await pg.textContent('#talkMode')), '会話（AI なし）：内蔵 AI が無い端末では AI なしで動く');
+    check(/AI を入れると/.test(await pg.textContent('#talkLog')), '会話（AI なし）：AI なしで話していることと、AI を入れられることを伝えた');
+    const phr = await pg.evaluate(() => Talk.PHRASES.done);
+    check(phr.some((p) => spoken.includes(p)), '会話（AI なし）：「済み」でほめた');
     await waitCards((cs) => cs.find((c) => c.doc_id === 's1')?.lane === 'done' && cs.find((c) => c.doc_id === 's2')?.lane === 'later', '会話（AI なし）の「済み」「あとで」');
     check(!(await pg.evaluate(() => document.querySelector('#talkDlg').open)), '会話（AI なし）：「終わり」で閉じた');
     check(outside.length === 0, `会話（AI なし）：自分のサイトと GitHub 以外へ通信していない${outside.length ? '（' + outside.join(', ') + '）' : ''}`);
@@ -494,7 +497,7 @@ try {
     }, '会話 AI');
     await pg.click('#talkBtn');
     await waitTalkEnd(pg);
-    check(/端末の中の AI/.test(await pg.textContent('#talkMode')), '会話（AI）：内蔵 AI があれば使う');
+    check(/内蔵 AI/.test(await pg.textContent('#talkMode')), '会話（AI）：内蔵 AI があれば使う');
     await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold' && cs.find((c) => c.doc_id === 's4')?.deleted === true, '会話（AI）の「保留」と「消す（はい）」');
     const spoken = await pg.evaluate(() => window.__spoken.join(''));
     check(/消しますか/.test(spoken), '会話（AI）：AI が消すと言っても、すぐ消さずに聞き返した');
@@ -503,7 +506,36 @@ try {
     check(!prompts.includes('はい'), '会話（AI）：消す確認への「はい」は AI ではなくアプリが受け取る');
     const sys = await pg.evaluate(() => window.__system);
     check(/ポチ/.test(sys) && /タメ口/.test(sys), '会話（AI）：キャラの名前と性格を AI への指示に入れた');
+    check(/"role":"assistant"/.test(sys) && /話し言葉/.test(sys), '会話（AI）：指示に話し方と返事の見本（few-shot）を入れた');
+    check(/🧠/.test(await pg.textContent('#talkMode')) && await pg.isHidden('#talkAiGet'), '会話（AI）：AI と話していることを会話の画面に出す');
     check(outside.length === 0, `会話（AI）：自分のサイトと GitHub 以外へ通信していない${outside.length ? '（' + outside.join(', ') + '）' : ''}`);
+    await pg.close();
+  }
+
+  // 会話の言い回し：同じ文を続けて言わない・時間帯・期限の言い方・古い会話のまとめ
+  {
+    const pg = await context.newPage();
+    await pg.goto(base);
+    await ready(pg);
+    const r = await pg.evaluate(() => {
+      const pick = Talk.picker();
+      const seq = Array.from({ length: 40 }, () => pick('again', Talk.PHRASES.again));
+      const kinds = Object.entries(Talk.PHRASES).filter(([k, v]) => Array.isArray(v) && v.length < 2).map(([k]) => k);
+      const greet = Object.values(Talk.PHRASES.greet).filter((v) => v.length < 2).length;
+      const t = new Date(2026, 9, 20);
+      const msgs = LocalAI.messages({ system: 'S', examples: [['u', 'a']], summary: 'まとめ', past: Array.from({ length: 40 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: String(i) })), text: 'いま' });
+      return {
+        repeat: seq.some((x, i) => i && x === seq[i - 1]), distinct: new Set(seq).size, kinds, greet,
+        day: [3, 7, 13, 19, 23].map((h) => Talk.partOfDay(h)).join(','),
+        due: [Talk.dueWords('2026-10-19', t), Talk.dueWords('2026-10-20', t), Talk.dueWords('2026-10-21', t), Talk.dueWords('2026-11-02', t)].join('|'),
+        sys: msgs[0].content, n: msgs.length, first: msgs[3]?.content, last: msgs.at(-1).content, keep: LocalAI.KEEP,
+      };
+    });
+    check(!r.repeat && r.distinct >= 2, '会話（AI なし）：同じ言い回しを続けて言わない');
+    check(r.kinds.length === 0 && r.greet === 0, `会話（AI なし）：どの返事にも言い回しが2つ以上ある${r.kinds.length ? '（' + r.kinds.join(',') + '）' : ''}`);
+    check(r.day === 'night,morning,day,evening,night', `会話：時間帯であいさつを変える（${r.day}）`);
+    check(r.due === '期限すぎてるよ。|今日が期限だよ。|明日が期限。|期限は11月2日。', `会話：期限の言い方（${r.due}）`);
+    check(/まとめ/.test(r.sys) && r.n === 1 + 2 + r.keep * 2 + 1 && r.first === String(40 - r.keep * 2) && r.last === 'いま', `会話（入れた AI）：覚えるのは直近 ${r.keep} 往復で、古い分はまとめにして渡す`);
     await pg.close();
   }
 
@@ -591,8 +623,8 @@ try {
     await pg.click('#talkSetForm button[value=cancel]');
     net.length = 0;
     await pg.evaluate(() => {
-      window.__heard.push('毎週のやつ今やるにして', '終わり');
-      window.__llmReplies.push({ say: 'オッケー、今やるに入れたよ', action: { type: 'move', query: '見本のカード（次にやる・毎週）', lane: 'now' } });
+      window.__heard.push('毎週のやつ今やるにして', 'ありがとう', '終わり');
+      window.__llmReplies.push({ say: 'オッケー、今やるに入れたよ', action: { type: 'move', query: '見本のカード（次にやる・毎週）', lane: 'now' } }, { say: 'どういたしまして！', action: null });
     });
     await pg.click('#talkBtn');
     const t0 = Date.now();
@@ -607,6 +639,11 @@ try {
     const sent = JSON.stringify(req);
     check(req.length >= 1 && req[0].response_format?.type === 'json_object' && req[0].messages[0].content.includes(charName), '会話（入れた AI）：キャラの指示と JSON の形を WebLLM に渡した');
     check(sent.includes('見本のカード（次にやる・毎週）') && !sent.includes('見本の補足'), '会話（入れた AI）：AI に渡すのは題・列・期限だけ（補足は渡さない）');
+    const m0 = req[0]?.messages || [], m1 = req.find((r, i) => i > 0 && r.response_format)?.messages || [];
+    check(m0.some((m) => m.role === 'assistant') && m0.filter((m) => m.role === 'user').length >= 2, '会話（入れた AI）：返事の見本（few-shot）を渡した');
+    check(m1.some((m) => m.role === 'user' && m.content === '毎週のやつ今やるにして') && m1.some((m) => m.role === 'assistant' && /今やるに入れたよ/.test(m.content)), '会話（入れた AI）：2回目には前のやりとりを覚えて渡した');
+    check(m1.filter((m) => m.role === 'user' && /見本のカード/.test(m.content)).length === 1, '会話（入れた AI）：ボードの一覧は今回の発言にだけ入れ、前の分は覚えない');
+    check(req[0]?.temperature === 0.7 && req[0]?.top_p === 0.8 && req[0]?.repetition_penalty === 1.1, `会話（入れた AI）：返事の出し方は Qwen2.5 の公式の既定（${req[0]?.temperature}/${req[0]?.top_p}/${req[0]?.repetition_penalty}）`);
     check(net.length === 0, `会話（入れた AI）：会話中は外へ通信していない${net.length ? '（' + net.map((x) => x.url).join(', ') + '）' : ''}`);
     await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
     await pg.click('#aiDel');
