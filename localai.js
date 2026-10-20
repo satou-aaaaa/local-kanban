@@ -204,24 +204,53 @@
     };
   }
 
+  // 画面が止まった時間（50ms 以上の長い処理）。診断に出す（会話の中身は入れない）
+  const blocked = { max: 0, total: 0 };
+  let lastListen = null;
+  try {
+    new g.PerformanceObserver((l) => { for (const e of l.getEntries()) { blocked.max = Math.max(blocked.max, e.duration); blocked.total += e.duration; } })
+      .observe({ type: 'longtask', buffered: true });
+  } catch { /* 数えられない端末では出さない */ }
+
   // ---------- 耳（Whisper）と割り込み（Silero VAD） ----------
-  let tfLib = null, asr = null, vadModel = null, earLoading = null, earState = '';
+  // 計算は ear-worker.js（画面とは別の作業場）でする。画面と同じところで動かすと、遅いスマホでは聞き取りの間に画面が固まった（2026-10-20 Pixel 6a）
+  let ear = null, earVad = false, earThreads = null, earLoading = null, earState = '', seq = 0;
+  const waits = new Map();
   // 耳の準備の時間切れ。過ぎたら止め、次に開いたときはスレッド1本で読む（スレッドの準備で止まる端末があったため。2026-10-20 Pixel）
   const EAR_LIMIT = 60000;
   const ONE_KEY = 'lk.ort1';
-  async function transformers() {
-    if (tfLib) return tfLib;
-    const m = await import(here(VENDOR.tf));
-    m.env.allowLocalModels = false;
-    m.env.useWasmCache = false;
-    const w = m.env.backends?.onnx?.wasm;
-    if (w) w.wasmPaths = { mjs: here(VENDOR.ort + '.mjs'), wasm: here(VENDOR.ort + '.wasm') }; // CDN（jsdelivr）から読まない
-    try { if (w && g.localStorage.getItem(ONE_KEY)) w.numThreads = 1; } catch { /* 読めなければふつうに */ }
-    tfLib = m;
-    return m;
+  const libPaths = () => {
+    let one = false;
+    try { one = !!g.localStorage.getItem(ONE_KEY); } catch { /* 読めなければふつうに */ }
+    return { tfUrl: here(VENDOR.tf), mjs: here(VENDOR.ort + '.mjs'), wasm: here(VENDOR.ort + '.wasm'), one };
+  };
+  function earWorker() {
+    if (ear) return ear;
+    ear = new g.Worker(here('ear-worker.js'), { type: 'module' });
+    ear.onmessage = ({ data: d }) => {
+      const w = waits.get(d?.re);
+      if (!w) return;
+      if ('progress' in d) { w.onProgress?.(d.progress, d.file); return; }
+      waits.delete(d.re);
+      d.err ? w.ng(new Error(d.err)) : w.ok(d);
+    };
+    ear.onerror = (e) => { e.preventDefault?.(); stopEar(new Error('耳（声の聞き取り）の部品が読めませんでした（' + (e.message || 'worker') + '）')); };
+    return ear;
   }
+  // 耳を止めて放す（メモリを返す）。待っているものはエラーで返す
+  function stopEar(err) {
+    try { ear?.terminate(); } catch { /* 止められなくてもよい */ }
+    ear = null; earVad = false; earThreads = null; earLoading = null;
+    for (const w of waits.values()) w.ng(err || new Error('聞き取れませんでした'));
+    waits.clear();
+  }
+  const call = (type, v = {}, transfer = [], onProgress) => new Promise((ok, ng) => {
+    const id = ++seq;
+    waits.set(id, { ok, ng, onProgress });
+    earWorker().postMessage({ id, type, ...v }, transfer);
+  });
   function loadEar(onProgress) {
-    if (asr) return Promise.resolve();
+    if (earState === 'ok' && ear) return Promise.resolve();
     if (earLoading) return earLoading;
     earState = 'pending';
     // 何も進まないまま EAR_LIMIT たったら時間切れ（取ってきている間は進むたびに数え直す。初めて入れるときの大きい取得で切らない）
@@ -233,30 +262,25 @@
     }, EAR_LIMIT); };
     poke();
     const work = (async () => {
-      const m = await transformers();
       // 版を固定する前に入れた端末は、取り直さないよう前と同じ（main）を使う
       const pin = load().pinned !== false;
       const webgpu = (await gpu())?.mode === 'default'; // 互換モードでしか見つからない GPU では wasm（CPU）で聞く
-      const progress_callback = (p) => { poke(); if (p?.status === 'progress' && onProgress) onProgress((p.progress || 0) / 100, p.file || ''); };
-      asr = await m.pipeline('automatic-speech-recognition', EAR.id, { revision: pin ? EAR.revision : 'main', device: webgpu ? 'webgpu' : 'wasm', dtype: webgpu ? { encoder_model: 'fp32', decoder_model_merged: 'q4' } : 'q8', progress_callback });
-      try { vadModel = await m.AutoModel.from_pretrained(VAD.id, { revision: pin ? VAD.revision : 'main', config: { model_type: 'custom' }, dtype: 'fp32', progress_callback }); } catch { vadModel = null; }
+      const r = await call('load', { ...libPaths(), webgpu, ear: { id: EAR.id, revision: pin ? EAR.revision : 'main' }, vad: { id: VAD.id, revision: pin ? VAD.revision : 'main' } }, [],
+        (p, file) => { poke(); if (p != null && onProgress) onProgress(p, file || ''); });
+      earVad = !!r.vad; earThreads = r.threads ?? null;
     })();
     return (earLoading = Promise.race([work, late])
-      .then(() => { earState = 'ok'; })
-      .catch((e) => { earState = 'error'; earLoading = null; throw e; })
+      .then(() => { earState = 'ok'; earLoading = null; })
+      .catch((e) => { earState = 'error'; stopEar(e); throw e; })
       .finally(() => clearTimeout(timer)));
   }
 
-  // Silero VAD を1つ作る（それぞれ自分の状態を持つ）。512 サンプル（16kHz で 32ms）ごとに「声らしさ」0〜1 を返す
+  // Silero VAD を1つ作る（それぞれ自分の状態を持つ）。512 サンプル（16kHz で 32ms）ごとに「声らしさ」0〜1 を返す。end() で片づける
   function sileroProb() {
-    const { Tensor } = tfLib;
-    let state = new Tensor('float32', new Float32Array(2 * 128), [2, 1, 128]);
-    const sr = new Tensor('int64', BigInt64Array.from([16000n]), []);
-    return async (frame) => {
-      const out = await vadModel({ input: new Tensor('float32', frame, [1, frame.length]), sr, state });
-      state = out.stateN;
-      return out.output.data[0];
-    };
+    const key = ++seq;
+    const f = async (frame) => (await call('vad', { key, frame })).p;
+    f.end = () => { try { ear?.postMessage({ type: 'vad-end', key }); } catch { /* なくてよい */ } };
+    return f;
   }
   // Silero が無いときの代わり：音の大きさ（まわりの音に合わせて基準を動かす）
   function loudnessProb() {
@@ -303,48 +327,49 @@
     let stream;
     try { stream = await md.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
     catch { throw new Error('マイクが許可されていません'); }
-    const prob = vadModel ? sileroProb() : loudnessProb();
-    const audio = await new Promise((ok, ng) => {
-      const pre = [], said = [];
-      let talking = false, quiet = 0, done = false, chain = Promise.resolve();
-      const t0 = Date.now();
-      const end = (err) => { if (done) return; done = true; cancelCur = null; clearTimeout(t1); clearTimeout(t2); stop(); stream.getTracks().forEach((t) => t.stop()); err ? ng(err) : ok([...pre, ...said]); };
-      cancelCur = () => end(new Error('聞き取れませんでした'));
-      // 音が届かないときも止まらないように、時間でも区切る
-      const t1 = setTimeout(() => { if (!talking) end(new Error('聞き取れませんでした')); }, waitMs + 500);
-      const t2 = setTimeout(() => end(talking ? null : new Error('聞き取れませんでした')), maxMs + 500);
-      const stop = capture(stream, (f) => {
-        chain = chain.then(async () => {
-          if (done) return;
-          const p = await prob(f);
-          if (p > 0.5) { talking = true; quiet = 0; } else if (talking) quiet += 32;
-          if (talking) said.push(f); else { pre.push(f); if (pre.length > 10) pre.shift(); } // 話し始めの手前 0.3 秒も残す
-          if ((talking && quiet >= endMs) || Date.now() - t0 > maxMs) end();
-          else if (!talking && Date.now() - t0 > waitMs) end(new Error('聞き取れませんでした'));
-        }).catch((e) => end(e));
+    const prob = earVad ? sileroProb() : loudnessProb();
+    const t0 = Date.now(), block0 = blocked.total;
+    try {
+      const audio = await new Promise((ok, ng) => {
+        const pre = [], said = [];
+        let talking = false, quiet = 0, done = false, chain = Promise.resolve();
+        const end = (err) => { if (done) return; done = true; cancelCur = null; clearTimeout(t1); clearTimeout(t2); stop(); stream.getTracks().forEach((t) => t.stop()); err ? ng(err) : ok([...pre, ...said]); };
+        cancelCur = () => end(new Error('聞き取れませんでした'));
+        // 音が届かないときも止まらないように、時間でも区切る
+        const t1 = setTimeout(() => { if (!talking) end(new Error('聞き取れませんでした')); }, waitMs + 500);
+        const t2 = setTimeout(() => end(talking ? null : new Error('聞き取れませんでした')), maxMs + 500);
+        const stop = capture(stream, (f) => {
+          chain = chain.then(async () => {
+            if (done) return;
+            const p = await prob(f);
+            if (p > 0.5) { talking = true; quiet = 0; } else if (talking) quiet += 32;
+            if (talking) said.push(f); else { pre.push(f); if (pre.length > 10) pre.shift(); } // 話し始めの手前 0.3 秒も残す
+            if ((talking && quiet >= endMs) || Date.now() - t0 > maxMs) end();
+            else if (!talking && Date.now() - t0 > waitMs) end(new Error('聞き取れませんでした'));
+          }).catch((e) => end(e));
+        });
       });
-    });
-    const all = new Float32Array(audio.length * 512);
-    audio.forEach((f, i) => all.set(f, i * 512));
-    const r = await asr(all, { language: 'japanese', task: 'transcribe' });
-    const text = String(r?.text || '').trim();
-    if (!text) throw new Error('聞き取れませんでした');
-    return { text };
+      const all = new Float32Array(audio.length * 512);
+      audio.forEach((f, i) => all.set(f, i * 512));
+      const { text } = await call('asr', { audio: all }, [all.buffer]);
+      if (!text) throw new Error('聞き取れませんでした');
+      return { text };
+    } finally { prob.end?.(); lastListen = { ms: Date.now() - t0, blockedMs: Math.round(blocked.total - block0) }; }
   }
 
   // 話している途中の割り込み（Silero）。入っていなければ null（talk.js が音の大きさの VAD を使う）
   function bargeIn(stream, onVoice) {
-    if (!vadModel || !stream) return null;
+    if (!earVad || !ear || !stream) return null;
     const prob = sileroProb();
     let n = 0, stopped = false, chain = Promise.resolve();
     const stop = capture(stream, (f) => {
       chain = chain.then(async () => {
         if (stopped) return;
         n = (await prob(f)) > 0.6 ? n + 1 : 0;
-        if (n >= 4) { stopped = true; stop(); onVoice(); } // 約 0.13 秒続いたら声
+        if (n >= 4) { stopped = true; stop(); prob.end(); onVoice(); } // 約 0.13 秒続いたら声
       }).catch(() => {});
     });
-    return () => { stopped = true; stop(); };
+    return () => { stopped = true; stop(); prob.end(); };
   }
 
   // ---------- 入れる・消す ----------
@@ -363,7 +388,7 @@
     if (earOnly && load().llm) {
       if (ear) {
         await loadEar(step(0, 1));
-        save({ ear: true, earCache: await hasTfCache(), from: [...new Set([...(load().from || []), `huggingface.co/${EAR.id}`, ...(vadModel ? [`huggingface.co/${VAD.id}`] : [])])] });
+        save({ ear: true, earCache: await hasTfCache(), from: [...new Set([...(load().from || []), `huggingface.co/${EAR.id}`, ...(earVad ? [`huggingface.co/${VAD.id}`] : [])])] });
       }
       onProgress?.(1, '');
       return status();
@@ -403,7 +428,7 @@
     if (ear) {
       await loadEar(step(0.8, 0.2));
       from.push(`huggingface.co/${EAR.id}`);
-      if (vadModel) from.push(`huggingface.co/${VAD.id}`);
+      if (earVad) from.push(`huggingface.co/${VAD.id}`);
       save({ ear: true });
     }
     save({ at: new Date().toISOString().slice(0, 10), from, earCache: await hasTfCache() });
@@ -457,14 +482,15 @@
     const st = status();
     return { webgpu: a ? a.mode + (a.f16 ? '・f16' : '') : 'なし', isolated: !!g.crossOriginIsolated, threads: g.navigator?.hardwareConcurrency || 0, memoryGB: g.navigator?.deviceMemory || 0,
       freeGB: await room().then((f) => (f == null ? null : Math.round(f * 10) / 10)), ai: st.llm ? st.llm + (st.cpu ? '（CPU）' : '') : 'なし', ear: st.ear ? EAR.label : 'なし',
-      earState: earState || 'まだ', ortThreads: tfLib?.env?.backends?.onnx?.wasm?.numThreads ?? null, ortOne: (() => { try { return !!g.localStorage.getItem(ONE_KEY); } catch { return false; } })() };
+      earState: earState || 'まだ', ortThreads: earThreads, earWorker: !!ear,
+      blockedMaxMs: Math.round(blocked.max), blockedTotalMs: Math.round(blocked.total), lastListen, ortOne: (() => { try { return !!g.localStorage.getItem(ONE_KEY); } catch { return false; } })() };
   }
   async function remove() {
     const s = load();
     try { engine?.unload?.(); } catch { /* なくてよい */ }
     try { await cpuEngine?.unload(); } catch { /* なくてよい */ }
     try { if (s.engine === 'cpu') { cpuLib = cpuLib || await import(here(VENDOR.cpu)); await new cpuLib.CacheManager().clear(); } } catch { /* 消せなくても印は消す */ }
-    engine = null; engineId = ''; cpuEngine = null; cpuKey = ''; asr = null; vadModel = null; earLoading = null;
+    engine = null; engineId = ''; cpuEngine = null; cpuKey = ''; stopEar(); earState = '';
     try { if (s.llm && s.engine !== 'cpu') await (await webllm()).deleteModelAllInfoInCache?.(s.llm); } catch { /* 消せなくても印は消す */ }
     try { for (const k of await g.caches.keys()) if (/^transformers-cache/.test(k)) await g.caches.delete(k); } catch { /* なくてよい */ }
     try { g.localStorage.removeItem(KEY); } catch { /* なくてよい */ }
@@ -474,6 +500,8 @@
     EAR_LIMIT, MODELS, CPU, JA, CPU_MODELS, brainPick, setBrain, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, safeInstall, present, info, friendly, SAMPLING, KEEP, CTX, BUDGET, recent, userPart, messages, plan, status, install, remove, session, listen, bargeIn,
     llmReady: () => !!load().llm,
     earReady: () => !!load().ear,
+    // 耳の部品（ONNX Runtime）が作業場で本物の wasm で動くか（モデルは使わない。検査と診断用）
+    earSelfTest: (o = {}) => call('selftest', { ...libPaths(), ...o }),
     prepareEar: () => (load().ear ? loadEar().catch(() => {}) : Promise.resolve()),
   };
   g.LocalAI = LocalAI;
