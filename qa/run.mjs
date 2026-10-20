@@ -188,6 +188,9 @@ const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath
           this.addEventListener('message', (e) => { const d = e.data; if (d && d.__qa) { e.stopImmediatePropagation(); this.postMessage({ __qaRe: d.__qa, v: window.__qaEar(d.kind, d.v) }); } });
         }
       };
+      // アプリのアイコンの数（Badging API）を覚えておく
+      navigator.setAppBadge = async (n) => { window.__badge = n; };
+      navigator.clearAppBadge = async () => { window.__badge = 0; };
       // 検査のブラウザは保存できる量（quota）が小さいので、空きのある端末のふりにする（空きが足りない場合は G の検査が自分で替える）
       try { navigator.storage.estimate = async () => ({ quota: 5e10, usage: 1e9 }); } catch { /* なくてよい */ }
     });
@@ -1247,6 +1250,20 @@ try {
     const now = JSON.parse((sw.match(/VENDOR_NOW = (\[[^\]]*\])/) || [, '[]'])[1].replace(/'/g, '"'));
     const dirs = readdirSync(resolve(root, 'vendor'), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
     check(JSON.stringify([...now].sort()) === JSON.stringify(dirs), `sw.js の VENDOR_NOW（残す部品の版）が vendor/ のフォルダと同じ（古い版を端末から消すため。${now.join(',')}）`);
+  }
+  // インストールしたアプリのアイコンに、コメントに返事が来てまだ開いていないカードの枚数を出す（ボード版44の repliedToYou を使う。2026-10-20）
+  if (await page.evaluate(() => typeof repliedToYou === 'function')) {
+    const b0 = await page.evaluate(() => cards.filter((c) => repliedToYou(c)).length);
+    const id = await page.evaluate(async () => {
+      const c = cards.find((x) => !x.deleted && x.lane !== 'done');
+      const now = new Date().toISOString(), db = await window.claude.use('db');
+      await db.collection('cards').doc(c.id).update({ history: [...(c.history || []), { at: now, who: 'you', text: '見本のコメント' }, { at: now, who: 'claude', text: '見本の返事' }] });
+      return c.id;
+    });
+    const up = await page.waitForFunction((n) => window.__badge === n, b0 + 1, { timeout: 5000 }).then(() => true, () => false);
+    await page.evaluate(async (id) => { await (await window.claude.use('db')).collection('cards').doc(id).update({ reply_seen_at: new Date(Date.now() + 1000).toISOString() }); }, id);
+    const down = await page.waitForFunction((n) => (window.__badge || 0) === n, b0, { timeout: 5000 }).then(() => true, () => false);
+    check(up && down, `アプリのアイコンに「返事が来た」カードの枚数を出し、開いたら（reply_seen_at）減らす（${b0}→${b0 + 1}→${b0}、いま ${await page.evaluate(() => window.__badge)}）`);
   }
   mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: resolve(OUT, 'pc.png'), fullPage: true });

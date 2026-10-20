@@ -746,8 +746,11 @@
     drawNotify();
     window.claude.use('db').then(db => { let first = true; db.collection('cards').onSnapshot(() => {
       scanNotify(L.cards, first && !ls.get('notified')); first = false;
-      // インストールしたアプリのアイコンに「今やる」の枚数（Windows・Mac）
-      const n = L.cards.filter(c => !c.deleted && c.lane === 'now').length;
+      // インストールしたアプリのアイコンに数を出す（Badging API。対応していない端末では何もしない）。
+      // ボードに「返事が来た」の印（repliedToYou・ボード版44）があれば、返事が来てまだ開いていないカードの枚数。無い古いボードでは「今やる」の枚数
+      const n = typeof window.repliedToYou === 'function'
+        ? L.cards.filter(c => { try { return !!window.repliedToYou({ ...c, id: c.id || c.doc_id }); } catch { return false; } }).length
+        : L.cards.filter(c => !c.deleted && c.lane === 'now').length;
       try { if (navigator.setAppBadge) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); } catch {}
     }); });
   });
