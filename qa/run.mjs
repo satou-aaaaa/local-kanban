@@ -838,7 +838,9 @@ try {
     await pg.route(/^https:\/\/([a-z0-9-]+\.)*(huggingface\.co|hf\.co)\//, (route) => route.fulfill({ json: {} }));
     await pg.addInitScript(() => {
       window.__heard = []; window.__spoken = []; window.__llmReq = []; window.__llmReplies = []; window.__asrCalls = []; window.__tried = [];
-      delete window.LanguageModel;
+      // 本物の音声認識は使わない（CI の Chrome が落ちた）。耳はにせものの Whisper
+      delete window.webkitSpeechRecognition; delete window.SpeechRecognition; delete window.LanguageModel;
+      navigator.mediaDevices.getUserMedia = async () => { const ac = new AudioContext(); const o = ac.createOscillator(); const d = ac.createMediaStreamDestination(); o.connect(d); o.start(); return d.stream; };
       Object.defineProperty(navigator, 'gpu', { configurable: true, value: { requestAdapter: async (o) => { window.__tried.push(JSON.stringify(o || {})); return null; } } });
       window.speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }];
       window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => u.onend && u.onend(), 5); };
@@ -869,16 +871,13 @@ try {
       window.__llmReplies.push({ say: 'オッケー、今やるに入れたよ', action: { type: 'move', query: '見本のカード（次にやる・毎週）', lane: 'now' } });
     });
     await pg.click('#talkBtn');
-    await pg.waitForFunction(() => /AI と話して/.test(document.querySelector('#talkMode')?.textContent || ''), null, { timeout: 10000 }).catch(() => {});
-    check(/CPU で動かしています（ゆっくり）/.test(await pg.textContent('#talkMode')), `会話（CPU 版の AI）：CPU で動かしている（ゆっくり）と出す（${await pg.textContent('#talkMode')}）`);
-    await pg.fill('#talkIn', '毎週のやつ今やるにして').catch(() => {});
-    await pg.press('#talkIn', 'Enter').catch(() => {});
     const t0 = Date.now();
-    while (Date.now() - t0 < 10000 && !(await pg.evaluate(() => window.__llmReq.length))) await pg.waitForTimeout(200);
+    while (Date.now() - t0 < 30000 && (await pg.evaluate(() => document.querySelector('#talkDlg').open))) await pg.waitForTimeout(200);
+    check(/CPU で動かしています（ゆっくり）/.test(await pg.textContent('#talkMode')), `会話（CPU 版の AI）：CPU で動かしている（ゆっくり）と出す（${await pg.textContent('#talkMode')}）`);
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'now', '会話（CPU 版の AI）の「今やるに」');
     const req = await pg.evaluate(() => window.__llmReq);
     check(req.length >= 1 && req[0].response_format?.type === 'json_schema' && req[0].response_format.json_schema?.schema?.required?.includes('say') && req[0].temp === 0.7 && req[0].penalty_repeat === 1.1, `会話（CPU 版の AI）：JSON の形と返事の出し方を wllama の形で渡した（${JSON.stringify(req[0]?.response_format)?.slice(0, 80)}）`);
     check(net.length === 0, `会話（CPU 版の AI）：会話中は外へ通信していない${net.length ? '（' + net.map((x) => x.url).join(', ') + '）' : ''}`);
-    await pg.evaluate(() => document.querySelector('#talkDlg')?.open && document.querySelector('#talkDlg').close());
     await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
     await pg.click('#aiDel');
     await pg.waitForFunction(() => /消しました/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 10000 }).catch(() => {});
