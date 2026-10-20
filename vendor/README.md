@@ -7,6 +7,7 @@
 |---|---|---|---|
 | `web-llm-0.2.85/` | `index.js`（WebGPU で言葉のモデルを動かす。`lib/index.js` から sourceMappingURL の行だけ削除） | `@mlc-ai/web-llm@0.2.85`（integrity `sha512-CwUiSAvDCYnmAZlpPMkurPHDfBLq6fvdRB3vRgoA894hRG/V/BSeY9bmMm6iIIU5VpjJxfb/dLPpJX2at0L9rw==`） | Apache-2.0（`LICENSE`） |
 | `transformers-4.3.0/` | `transformers.js`（Whisper と Silero VAD を動かす。`dist/transformers.js` から sourceMappingURL の行を削除し、1か所だけ `"Mistral3ForConditionalGeneration"` を `"Mistral3For" + "ConditionalGeneration"` に分けた（同じ文字列。モデル名が GitHub の秘密の検査で Mistral の API キーと誤判定され push できないため。縮めた版 `transformers.min.js` も同じ理由で使わない） | `@huggingface/transformers@4.3.0`（integrity `sha512-fL1A/WUZwouPrOlYxU5dzIwD2T5J781JiB2jDR8bFe5DwCj0Gfudq+NEXCMno49kQgajHA7xQkrRLJlqG1veEA==`） | Apache-2.0（`LICENSE`） |
+| `karume-models-0.14.0/` | `sbv2.js`（気持ちで話し分ける声。`koe.js` が使う。下の5つを esbuild で1つにまとめたもの：`npx esbuild entry.js --bundle --format=esm --platform=browser --target=es2022 --legal-comments=eof`、entry は `@karume/models/sbv2` の `Sbv2Pipeline`・`toSbv2Utterance`・`SBV2_SOURCES` と `@hdae/yomi` の `analyzeWithWords`・`@hdae/yomi/loader` の `getDictionary`） | JSR（npm.jsr.io）：`@karume/models@0.14.0`・`@karume/runtime@0.14.0`・`@karume/hub@0.14.0`・`@hdae/yomi@0.4.2`・`@hdae/fetch-cache@0.3.1` | MIT（`LICENSE` に5つ分。`THIRD_PARTY_NOTICES.md` は @karume/models のもの） |
 | `onnxruntime-web-1.31.0-dev.20260914-8d85527a0/` | `ort-wasm-simd-threaded.asyncify.mjs`・`.wasm`（transformers.js が使う ONNX Runtime の本体。transformers.js 4.3.0 が指定する版と同じ） | `onnxruntime-web@1.31.0-dev.20260914-8d85527a0`（integrity `sha512-Iy7rtadoBgxS/LLvDr3QW38DB1PNXRnr0GJMcL0TAt7c9qjgVQl83UlGCVyeAnK2InpmW8Uc3PL8XIuqtDeF6g==`） | MIT（`LICENSE`。npm の包みに LICENSE ファイルが無いため MIT の全文を置いた） |
 
 モデル本体（数百MB〜1GB）はここに置かない（GitHub Pages の1ファイル 100MB の制限とリポジトリの重さのため）。
@@ -16,6 +17,7 @@
 - 言葉のモデル用の wasm: `raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs`（WebLLM の既定の置き場）
 - 声→文字: `huggingface.co/onnx-community/whisper-base`
 - 割り込み: `huggingface.co/onnx-community/silero-vad`
+- 気持ちで話し分ける声: `huggingface.co/hdae/karume-sbv2-jvnv`（コミットは `SBV2_SOURCES` で固定）と辞書 `huggingface.co/datasets/hdae/yomi-dict`（CC BY-SA 4.0・BSD 3-Clause。クレジットは README）
 
 ## 版を上げるとき
 

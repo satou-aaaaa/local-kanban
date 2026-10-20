@@ -97,6 +97,17 @@
       <ul id="memList"></ul>
       <div class="lk-actions"><button type="button" id="memAll" hidden>全部忘れる</button></div>
     </fieldset>
+    <fieldset id="koeBox">
+      <legend>気持ちで話し分ける声（端末の中で動かす）</legend>
+      <p id="koeStat" class="help"></p>
+      <label>声の人</label><select id="koeModel"></select>
+      <progress id="koeProg" max="1" value="0" hidden></progress>
+      <p id="koeMsg" class="help" aria-live="polite"></p>
+      <div class="lk-actions"><button type="button" id="koeGet"></button><button type="button" id="koeTry" hidden>試しに聞く</button><button type="button" id="koeDel" hidden>入れた声を消す</button></div>
+      <label class="chk"><input type="checkbox" id="koeOn"> この声で話す（外すと端末の声）</label>
+      <p class="help">ポチの表情に合わせて、ふつう・うれしい・悲しい・驚き など7つの気持ちで話します。押したときだけ Hugging Face（huggingface.co）から声のモデル（1人 約250MB）と読みの辞書（約19MB）を1回取ってきて、この端末のブラウザに保存します。話す文は外に出しません。WebGPU が使える端末だけです。PC ではブラウザの保存場所（ふつうは C ドライブ）に入るので、空きが少ないときは入れないでください。</p>
+      <details><summary>クレジット</summary><p id="koeCredit" class="help"></p></details>
+    </fieldset>
     <fieldset id="aiBox">
       <legend>スマホでも AI と話す（端末の中の AI）</legend>
       <p id="aiStat" class="help"></p>
@@ -296,9 +307,9 @@
   function setMood(m, hold = 2500) {
     const d = $('#talkDlg'); if (!d) return;
     if (!hold && moodTimer) return; // うれしい・驚いたを見せているあいだは、聞く・考える で消さない
-    d.dataset.mood = m;
+    d.dataset.mood = m; if (window.Voice) Voice.mood = m; // 話す声の気持ちも表情に合わせる（koe.js）
     clearTimeout(moodTimer); moodTimer = 0;
-    if (hold) moodTimer = setTimeout(() => { moodTimer = 0; d.dataset.mood = d.dataset.state === 'listening' ? 'listen' : d.dataset.state === 'thinking' ? 'think' : 'normal'; }, hold);
+    if (hold) moodTimer = setTimeout(() => { moodTimer = 0; d.dataset.mood = d.dataset.state === 'listening' ? 'listen' : d.dataset.state === 'thinking' ? 'think' : 'normal'; if (window.Voice) Voice.mood = 'normal'; }, hold);
     if (m === 'happy' && !matchMedia('(prefers-reduced-motion: reduce)').matches) confetti();
   }
   function confetti() {
@@ -365,7 +376,7 @@
     $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{ maru: 'まる', kaku: 'しかく', shizuku: 'しずく' }[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
     const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
     f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
-    drawAi(); drawMem();
+    drawAi(); drawMem(); drawKoe();
     $('#talkSet').showModal();
   }
   $('#talkSetBtn').onclick = openTalkSet;
@@ -391,6 +402,41 @@
     $('#aiGet').textContent = st.llm ? '入れ直す' : `AI の部品を入れる（約 ${p.gb}GB）`;
     $('#aiDel').hidden = !st.llm;
   }
+  // 気持ちで話し分ける声（koe.js）
+  let koeBusy = false;
+  async function drawKoe() {
+    const K = window.Koe; if (!K) { $('#koeBox').hidden = true; return; }
+    const st = K.status();
+    $('#koeModel').innerHTML = Object.entries(K.VOICES).map(([k, v]) => `<option value="${k}" ${k === (st.installed || 'F1') ? 'selected' : ''}>${esc(v.label)}</option>`).join('');
+    $('#koeCredit').textContent = K.CREDIT;
+    $('#koeOn').checked = st.on; $('#koeOn').disabled = !st.installed;
+    $('#koeDel').hidden = $('#koeTry').hidden = !st.installed;
+    $('#koeGet').textContent = st.installed ? '入れ直す・声の人を変える' : `声を入れる（約 ${K.VOICES.F1.size + 19}MB）`;
+    $('#koeStat').textContent = !st.gpu ? 'この端末のブラウザは WebGPU が使えないので、端末の声で話します。'
+      : st.installed ? `入っています：${K.VOICES[st.installed].label}` : 'まだ入っていません（端末の声で話しています）。';
+    $('#koeGet').disabled = koeBusy || !st.gpu;
+  }
+  $('#koeGet').onclick = async () => {
+    if (koeBusy || !window.Koe) return;
+    koeBusy = true; drawKoe(); $('#koeProg').hidden = false; $('#koeProg').value = 0; $('#koeMsg').textContent = '取ってきています…（画面を閉じずに待ってね）';
+    try {
+      await Koe.install($('#koeModel').value, p => { if (p.part === 'model' && p.total) $('#koeProg').value = p.loaded / p.total; });
+      $('#koeMsg').textContent = '入りました。これからはこの声で話します。';
+    } catch (e) { $('#koeMsg').textContent = '入れられませんでした：' + (e.message || e); }
+    finally { koeBusy = false; $('#koeProg').hidden = true; drawKoe(); }
+  };
+  $('#koeTry').onclick = async () => {
+    if (!window.Koe?.ready()) return;
+    $('#koeMsg').textContent = '作っています…';
+    const keep = Voice.mood;
+    try {
+      for (const [m, t] of [['normal', 'ポチだよ。'], ['happy', 'やったね、済みにできたよ！'], ['sad', 'ちょっと疲れちゃったね。'], ['surprise', 'えっ、それ本当？']]) { Voice.mood = m; await Voice.speak(t); }
+      $('#koeMsg').textContent = '';
+    } catch (e) { $('#koeMsg').textContent = '話せませんでした：' + (e.message || e); }
+    finally { Voice.mood = keep; }
+  };
+  $('#koeDel').onclick = async () => { if (koeBusy || !window.Koe) return; await Koe.remove(); $('#koeMsg').textContent = 'この端末から消しました。'; drawKoe(); };
+  $('#koeOn').onchange = e => { window.Koe?.setOn(e.target.checked); drawKoe(); };
   let aiBusy = false;
   $('#aiGet').onclick = async () => {
     if (aiBusy || !window.LocalAI) return;

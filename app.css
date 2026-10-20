@@ -102,3 +102,4 @@ button,select,summary,a{touch-action:manipulation}
 #memList{list-style:none;padding:0;margin:4px 0;display:flex;flex-direction:column;gap:4px}
 #memList li{display:flex;justify-content:space-between;align-items:center;gap:8px}
 #memList button{min-height:44px}
+#koeBox select{max-width:100%}#koeProg{width:100%}#koeGet,#koeTry,#koeDel{min-height:44px}
