@@ -82,6 +82,7 @@
     <label>声（この端末の中の声だけ。ネット経由の声は出しません）</label><select name="voice"></select>
     <div class="vtune"><label>話す速さ <input name="rate" type="range" min="0.7" max="1.5" step="0.05"></label><label>声の高さ <input name="pitch" type="range" min="0.7" max="1.5" step="0.05"></label><button type="button" id="voiceTry">試しに聞く</button></div>
     <label>返事のしかた</label><select name="reply"><option value="match">声で話したら声で、打ったら文字で（おすすめ）</option><option value="voice">打っても声で返す</option><option value="text">いつも文字だけ（声を出さない）</option></select>
+    <label class="chk"><input type="checkbox" name="tidy"> 話し始めたら、ポチがボードを自分で整理して報告する（期限すぎを今やるへ・今やるは3枚まで・Claude ができそうなものは Claude へ。「戻す」で戻せる）</label>
     <label class="chk"><input type="checkbox" name="bargeIn"> 話の途中で割り込める（話している間だけマイクの音の大きさを端末の中で見る）</label>
     <label class="chk"><input type="checkbox" name="ai"> 端末の中の AI（Chrome の内蔵 AI か、下で入れた AI）があれば使う</label>
     <p class="help">声も会話も端末の外に出しません。AI が無い端末では、カードを1枚ずつ読み上げて「済み・あとで・保留・次」で片づけます。キャラの設定は、つないでいればデータのリポジトリにも置き、PC とスマホで同じになります。</p>
@@ -169,6 +170,53 @@
     if (note) b.note = String(note).slice(0, 2000);
     return b;
   }
+  // Claude に回すときの書きかえ（ボードと同じ形：owner agent・lane agent・列の移動の記録）
+  function toAgent(c) {
+    const t = now();
+    return { owner: 'agent', lane: 'agent', updated: t, order: Date.now() / 1e6, moves: [...(c.moves || []), { at: t, from: c.lane || 'next', to: 'agent' }].slice(-50), ...(c.started_at ? {} : { started_at: t }) };
+  }
+  // ---------- ポチの整理：会話を始めたとき、ボードを見て自分で直し、やったことを一言で返す（どれも「戻す」で戻せる） ----------
+  // ・期限が今日まで・すぎたカード（次にやる・時間があるとき）を今やるへ上げる。予定待ち・保留・Claude の列はさわらない
+  // ・今やるは3枚まで（カンバンの WIP 制限。Kanban Guide）。あふれた分は、期限の遠いものから次にやるへ
+  // ・調べもの・下書き・コードなど Claude ができそうなカードを Claude に回す（1回に2枚まで。メールのカードは回さない）
+  // ・今やるで1週間動いていないカードを1日1回だけ知らせる
+  // ポチが一度整理で動かしたカード（端末に id を覚える。履歴に「ポチ」があるものも）は二度と動かさない（本人が戻したら、それが答え）
+  const WIP = 3;
+  const CLAUDE_CAN = /(調べ|調査|リサーチ|比較|下書き|文案|要約|まとめ|翻訳|コード|プログラム|スクリプト|バグ|レビュー|検索)/;
+  const ymd = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  function tidyPlan(list = live(), today = ymd(), at = Date.now(), done = new Set(L.ls.get('tidied') || [])) {
+    const mine = c => !done.has(c.id) && !(c.history || []).some(h => h.who === 'ポチ') && c.owner !== 'agent';
+    const key = c => (c.due || '9999') + String(1e9 + (c.order || 0));
+    const up = list.filter(c => mine(c) && ['next', 'later'].includes(c.lane) && c.due && c.due <= today);
+    const nowAll = list.filter(c => c.lane === 'now').concat(up).sort((a, b) => key(a).localeCompare(key(b)));
+    const over = nowAll.slice(WIP);
+    const down = over.filter(c => c.lane === 'now' && mine(c));
+    const upKeep = up.filter(c => !over.includes(c));
+    const busy = new Set([...upKeep, ...down]);
+    const agent = list.filter(c => mine(c) && !busy.has(c) && ['next', 'later'].includes(c.lane) && c.type !== 'mail' && CLAUDE_CAN.test(c.title || '')).slice(0, 2);
+    const last = c => Math.max(Date.parse(c.updated || c.created || 0) || 0, ...(c.moves || []).map(m => Date.parse(m.at) || 0));
+    const stale = list.find(c => c.lane === 'now' && !down.includes(c) && last(c) > 0 && at - last(c) > 7 * 864e5) || null;
+    return { up: upKeep, down, agent, stale };
+  }
+  function tidyUp() {
+    if (!L.writable()) return null;
+    const p = tidyPlan();
+    let stale = p.stale;
+    if (stale) { const k = ymd() + ':' + stale.id; if (L.ls.get('tidyStale') === k) stale = null; else L.ls.set('tidyStale', k); }
+    if (!p.up.length && !p.down.length && !p.agent.length) return stale ? { text: `「${stale.title}」がしばらく止まってるね。どうする？`, changed: false } : null;
+    L.ls.set('tidied', [...(L.ls.get('tidied') || []), ...p.up, ...p.down, ...p.agent].map(c => c.id ?? c).slice(-300));
+    L.as('ポチ', () => {
+      for (const c of p.up) move(c.id, 'now', true);
+      for (const c of p.down) move(c.id, 'next', true);
+      for (const c of p.agent) L.update(c.id, toAgent(c)).catch(() => {});
+    });
+    const q = l => l.map(c => `「${c.title}」`).join('と');
+    const parts = [];
+    if (p.up.length) parts.push(`期限の${q(p.up)}を今やるに上げた`);
+    if (p.down.length) parts.push(`今やるが多かったから${q(p.down)}は次にやるに回した`);
+    if (p.agent.length) parts.push(`${q(p.agent)}は Claude に回しといた`);
+    return { text: 'ちょっと整理したよ。' + parts.join('。') + '。' + (stale ? `あと「${stale.title}」がしばらく止まってるね。` : '') + '戻すなら「戻して」って言ってね。', changed: true, undo: () => L.undo() };
+  }
   function runCommand(text, voice = false) {
     if (!L.ready) return reply('まだつないでいません。', voice);
     if (!window.Voice) return reply('声の部品（voice.js）を読めませんでした。', voice);
@@ -232,18 +280,30 @@
         return reply(`${LANE_LABEL[cmd.lane]}は${l.length}枚。` + l.slice(0, 5).map((c, i) => `${i + 1}、${c.title}`).join('。') + (l.length > 5 ? `。ほか${l.length - 5}枚。` : '。'), voice);
       }
       case 'undo': return reply(L.undo() ? 'ひとつ前に戻しました。' : '戻せるものがありません。', voice);
-      case 'done': case 'move': case 'delete': {
+      case 'done': case 'move': case 'delete': case 'agent': case 'due': {
         if (!L.writable()) return reply('いまは保存できないので動かせません。', voice);
         let c = cmd.card;
         if (!c) {
-          const pool = cmd.type === 'done' ? live().filter(x => x.lane !== 'done') : live();
+          const pool = cmd.type === 'done' || cmd.type === 'agent' ? live().filter(x => x.lane !== 'done') : live();
           const r = findCard(cmd, pool, voice); if (!r.card) return r.say;
           c = r.card;
         }
+        // 消すのも聞き返さずにすぐやる（消したカードは行が残り「戻す」で戻せる。確認より取り消し：Raskin「Never Use a Warning When You Mean Undo」）
         if (cmd.type === 'delete') {
-          if (!cmd.sure) { pending = { cmd, card: c, confirm: true }; return reply(`「${c.title}」を消しますか？ はい か いいえ で答えてください。`, voice); }
           remove(c.id);
           return reply(`「${c.title}」を消しました。戻すときは「戻す」。`, voice, () => L.undo());
+        }
+        // Claude に回す：Claude が進める列へ（ボードの見回りが拾って進める）。回すのはカードだけ（会話の文は渡さない）
+        if (cmd.type === 'agent') {
+          if (c.lane === 'agent' && c.owner === 'agent') return reply(`「${c.title}」はもう Claude が進めています。`, voice);
+          L.update(c.id, toAgent(c)).catch(() => {});
+          return reply(`「${c.title}」を Claude に回しました。`, voice, () => L.undo());
+        }
+        if (cmd.type === 'due') {
+          const due = cmd.due || (Voice.dueDate ? Voice.dueDate(cmd.when) : '');
+          if (!due) return reply('いつにするか分かりませんでした。', voice);
+          L.update(c.id, { due, updated: now() }).catch(() => {});
+          return reply(`「${c.title}」の期限を${+due.slice(5, 7)}月${+due.slice(8, 10)}日にしました。`, voice, () => L.undo());
         }
         const lane = cmd.type === 'done' ? 'done' : cmd.lane;
         if (c.lane === lane) return reply(`「${c.title}」はもう${LANE_LABEL[lane]}です。`, voice);
@@ -342,8 +402,10 @@
       board: () => live().filter(c => c.lane !== 'done').sort((a, b) => order(a.lane) - order(b.lane) || (a.order || 0) - (b.order || 0)).map(c => ({ title: c.title, lane: c.lane, due: c.due || '' })),
       queue: () => ['now', 'next'].flatMap(laneCards),
       memory: L.memory,
-      run: t => runCommand(t),
-      act: cmd => apply(cmd, false),
+      // 会話で動かしたものは、履歴に「ポチ」と残す
+      run: t => L.as('ポチ', () => runCommand(t)),
+      act: cmd => L.as('ポチ', () => apply(cmd, false)),
+      tidy: () => tidyUp(),
       pending: () => !!pending,
       onLine: talkLine,
       onState: st => {
@@ -375,7 +437,7 @@
   function openTalkSet() {
     if (!window.Talk) { setStatus('会話の部品（talk.js）を読めませんでした。開き直してみてください。', 'err'); return; }
     const f = $('#talkSetForm'), t = talkSettings();
-    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.rate.value = t.rate || 1; f.pitch.value = t.pitch || 1.05; f.ai.checked = t.ai !== 'off'; f.reply.value = t.reply || 'match';
+    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.rate.value = t.rate || 1; f.pitch.value = t.pitch || 1.05; f.ai.checked = t.ai !== 'off'; f.reply.value = t.reply || 'match'; f.tidy.checked = t.tidy !== false;
     $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{ maru: 'まる', kaku: 'しかく', shizuku: 'しずく' }[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
     const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
     f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
@@ -471,7 +533,7 @@
   $('#talkSetForm').onsubmit = e => {
     if (e.submitter?.value !== 'ok') return;
     const f = e.target;
-    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value, bargeIn: f.bargeIn.checked, reply: f.reply.value, ai: f.ai.checked ? 'auto' : 'off' };
+    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value, bargeIn: f.bargeIn.checked, reply: f.reply.value, tidy: f.tidy.checked, ai: f.ai.checked ? 'auto' : 'off' };
     try { localStorage.setItem('lk.talk', JSON.stringify(t)); } catch {} // localStorage へ直に書くと、PC とスマホで同じになる（shim.js が見ている）
     voicePrefs(t);
     if (talk) talk.settings = t;
