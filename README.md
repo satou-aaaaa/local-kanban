@@ -26,7 +26,7 @@ Claude には届けられないので、答え・依頼は「まだ届いてい�
 | --- | --- | --- |
 | GitHub | PC・スマホ（Chrome・Edge・Safari） | 非公開リポジトリの `local-board/cards.json` を、端末に貼った鍵（fine-grained トークン）で GitHub の API から読み書きする |
 | PC のフォルダ | PC の Chrome・Edge | GitHub Desktop などで取ってきたフォルダを File System Access API で読み書きする |
-| cards.json を選ぶ | どれでも | 読むだけ。保存はダウンロード |
+| cards.json を選ぶ | どれでも | 読むだけ。保存はダウンロード。初めての端末は board/index.html も一緒に選ぶ |
 
 読むのは `local-board/cards.json`（無ければ `board/cards.json`）・`local-board/settings.json`・`board/index.html`・`board/today.json`、書くのは `local-board/cards.json`・`local-board/BOARD.md`・`local-board/settings.json` だけ。
 

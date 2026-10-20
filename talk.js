@@ -124,7 +124,7 @@
         anyOf: [{ type: 'null' }, {
           type: 'object', required: ['type'],
           properties: {
-            type: { enum: ['add', 'done', 'move', 'delete', 'read', 'undo'] },
+            type: { enum: ['add', 'done', 'move', 'delete', 'read', 'undo', 'status'] },
             title: { type: 'string' }, query: { type: 'string' },
             lane: { enum: ['now', 'next', 'wait', 'later', 'hold', 'agent', 'done'] },
           },
@@ -140,7 +140,7 @@
       '雑談や気持ちの話（疲れた・眠い・うれしい）にも短く付き合い、無理のない範囲で次のカードに戻す。済みにしたらほめる。',
       'ボードの中身（今やるの枚数・期限が近いカード）に触れてよい。ボードに無いカードや知らないことは作らない。分からなければ聞き返す。',
       `列は ${Object.entries(lanes).map(([k, v]) => `${k}=${v}`).join('、')}。`,
-      'カードを動かすときだけ action を入れる。add は title、done・move・delete・read は query（カードの題の一部）、move・add・read は lane。消すときは delete（アプリが確認する）。何もしないときは action は null。',
+      'カードを動かすときだけ action を入れる。add は title、done・move・delete・read・status は query（カードの題の一部）、move・add・read は lane。消すときは delete（アプリが確認する）。「〇〇はどうなった？」と様子を聞かれたら status（アプリが列・今の段・最後の記録を答える）。何もしないときは action は null。',
       '出力は JSON {"say": 文, "action": null または {"type", "title", "query", "lane"}} だけ。',
     ].join('\n');
   }
@@ -238,15 +238,16 @@
       }
       const a = out && out.action;
       let r = '';
-      if (a && typeof a === 'object' && ['add', 'done', 'move', 'delete', 'read', 'undo'].includes(a.type)) {
+      if (a && typeof a === 'object' && ['add', 'done', 'move', 'delete', 'read', 'undo', 'status'].includes(a.type)) {
         const cmd = { type: a.type };
         if (a.type === 'add') { if (!a.title) return out.say || 'なんて題にする？'; cmd.title = String(a.title).slice(0, 200); cmd.lane = host.lanes[a.lane] ? a.lane : null; }
-        if (['done', 'move', 'delete', 'read'].includes(a.type)) { cmd.query = String(a.query || a.title || ''); if (a.type !== 'read' && !cmd.query) return out.say || 'どのカード？'; }
+        if (['done', 'move', 'delete', 'read', 'status'].includes(a.type)) { cmd.query = String(a.query || a.title || ''); if (a.type !== 'read' && !cmd.query) return out.say || 'どのカード？'; }
         if (a.type === 'move' || a.type === 'read') { if (!host.lanes[a.lane]) return out.say || 'どの列にする？'; cmd.lane = a.lane; }
         r = host.act(cmd);
         if (a.type === 'done' && !trouble(r)) doneCount++;
       }
       // 動かせた・読めたときは AI の返事、聞き返し（消す確認・候補）や見つからないときはアプリの文を優先
+      if (r && a?.type === 'status') return r; // 様子はアプリがカードから答える（AI に作らせない）
       if (r && (host.pending() || /見つかりません|保存できない|分かりません|空です|枚。/.test(r))) return host.pending() || /枚。|空です/.test(r) ? r : (out.say ? out.say + ' ' : '') + r;
       return String(out?.say || r || 'うん。');
     }
