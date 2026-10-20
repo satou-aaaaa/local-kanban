@@ -267,7 +267,7 @@ a{color:var(--accent)}
 <script src="talk.js"></script>
 <script>
 'use strict';
-const LANES = [['now','今やる'],['next','次にやる'],['later','時間があるとき'],['hold','保留'],['agent','エージェントが進行中'],['done','済み']];
+const LANES = [['now','今やる'],['next','次にやる'],['wait','予定待ち'],['later','時間があるとき'],['hold','保留'],['agent','エージェントが進行中'],['done','済み']];
 const LANE_LABEL = Object.fromEntries(LANES);
 const PRIO = {high:'高',mid:'中',low:'低'};
 const DONE_DAYS = 7;
@@ -500,16 +500,26 @@ function render(){
   }
 }
 
+function eventWhen(c){
+  const t = Date.parse(c.event_start || c.wait_until || '');
+  if (!t) return '';
+  const d = new Date(t), p = n => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 function cardEl(c){
   const el = document.createElement('article');
   el.className = 'card' + (c.decision && !c.answer ? ' ask' : '');
   el.draggable = !matchMedia('(max-width:760px)').matches;
   el.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', c.doc_id));
-  const late = c.due && c.lane !== 'done' && c.due < new Date().toISOString().slice(0,10);
+  // 予定待ち（wait）は期限切れに数えない。予定の日時（event_start か wait_until）を「10/20 14:30」の形で出す
+  const late = c.due && c.lane !== 'done' && c.lane !== 'wait' && c.due < new Date().toISOString().slice(0,10);
+  const when = eventWhen(c);
   const chips = [
     c.no ? `<span class="chip">${esc(c.no)}</span>` : '',
     `<span class="chip ${c.owner==='you'?'you':''}">${c.owner==='you'?'自分':'エージェント'}</span>`,
     c.due ? `<span class="chip ${late?'late':''}">期限 ${esc(c.due)}</span>` : '',
+    when ? `<span class="chip">🗓 ${esc(when)}</span>` : '',
     c.priority ? `<span class="chip ${c.priority==='high'?'high':''}">優先 ${PRIO[c.priority]||esc(c.priority)}</span>` : '',
     c.category ? `<span class="chip">プロジェクト ${esc(c.category)}</span>` : '',
     c.type === 'mail' ? '<span class="chip">メール</span>' : '',
@@ -571,6 +581,8 @@ function moveTo(c, lane){
 function answer(c, i){
   const o = c.decision.options[i];
   c.answer = o.label; c.answered_at = now(); c.answer_status = 'local';
+  // claude.ai のボード（v30）と同じ：答えたカードはエージェントの番にする（済みのカードは動かさない）
+  if (c.lane !== 'done') { setLane(c, 'agent'); c.owner = 'agent'; c.started_at = c.answered_at; }
   touch(c, `答え: ${o.label}`);
   persist(`「${c.title}」に「${o.label}」と答えた`);
 }
@@ -597,7 +609,7 @@ function addCard(f){
 
 // ================= 声・命令欄・URL で操作 =================
 // 文の読み取りは voice.js の Voice.parse（claude.ai のボードと同じ文型）。ここでは命令をカードに当てはめるだけ
-const LANE_WORDS = [['now','今やる','いまやる','今','いま'],['next','次にやる','つぎにやる','次','つぎ'],['later','時間があるとき','あとで','後で','いつか'],['hold','保留','ほりゅう'],['agent','エージェントが進行中','エージェント'],['done','済み','すみ','完了','終わった']];
+const LANE_WORDS = [['now','今やる','いまやる','今','いま'],['next','次にやる','つぎにやる','次','つぎ'],['wait','予定待ち','よていまち'],['later','時間があるとき','あとで','後で','いつか'],['hold','保留','ほりゅう'],['agent','エージェントが進行中','エージェント'],['done','済み','すみ','完了','終わった']];
 let pending = null;            // 聞き返し中（候補えらび・消す確認）
 const undoStack = [];          // 「戻す」用（命令の前の状態）
 const live = () => cards.filter(c => !c.deleted);

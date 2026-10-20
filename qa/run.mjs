@@ -195,6 +195,12 @@ try {
   await waitCards((cs) => cs.some((c) => c.doc_id === 's2' && c.answer), '確認への答え');
   const c2 = lastCards().find((c) => c.doc_id === 's2');
   check(c2?.answer === 'はい' && c2?.answer_status === 'local', '答え（answer・answer_status）が保存された');
+  check(c2?.lane === 'agent' && c2?.owner === 'agent' && !!c2?.started_at && c2?.moves?.at(-1)?.to === 'agent', '答えたカードはエージェントの番（lane・owner agent、started_at・moves 付き。claude.ai のボードと同じ）');
+  // 予定待ち（wait）：列があり、予定の日時を出し、期限切れの印を付けない
+  const w = page.locator('#board .lane[data-lane=wait] .card', { hasText: '見本のカード（予定待ち）' });
+  check(await w.count() === 1, '予定待ちの列（wait）にカードが出る');
+  check(/🗓 1\/5 \d\d:30/.test(await w.textContent()), '予定待ちのカードに予定の日時（🗓 1/5 ◯◯:30）を出す');
+  check(await w.locator('.chip.late').count() === 0, '予定待ちのカードは期限切れに数えない');
 
   // カードを足す
   await page.click('#addBtn');
@@ -509,7 +515,7 @@ try {
   await phone.goto(base);
   await phone.waitForSelector('#board .card', { timeout: 10000 });
   const tabs = await phone.$$eval('#tabs button', (e) => e.filter((b) => b.offsetParent !== null).length);
-  check(tabs === 6, `スマホ幅で列のタブが 6 つ出た（${tabs}）`);
+  check(tabs === 7, `スマホ幅で列のタブが 7 つ出た（${tabs}）`);
   const visibleLanes = await phone.$$eval('#board .lane', (e) => e.filter((s) => getComputedStyle(s).display !== 'none').length);
   check(visibleLanes === 1, `スマホ幅で見える列は 1 つ（${visibleLanes}）`);
   const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
