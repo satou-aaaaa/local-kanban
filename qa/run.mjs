@@ -325,6 +325,20 @@ try {
     await page.evaluate(() => move('s3', 'next'));
     await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'next', '元に戻す');
 
+    // 保存に失敗した変更の理由は、次に保存できたときの題（コミット）に残す（失敗した分の理由を先に消していた）
+    {
+      failPuts = true;
+      await page.evaluate(() => move('s3', 'hold'));
+      await page.waitForTimeout(1500);
+      await page.evaluate(() => move('s3', 'later'));
+      failPuts = false;
+      await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'later', '失敗のあとの保存');
+      const m = [...puts].reverse().find((p) => p.path === 'local-board/cards.json')?.body.message || '';
+      check(/保留.*ほか 1 件/.test(m), `保存に失敗した変更も、次の保存の題に数える（${m}）`);
+      await page.evaluate(() => move('s3', 'next'));
+      await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'next', '元に戻す');
+    }
+
     // 今日の予定（board/today.json）がボードに渡る
     check(/予定 1 件/.test(await page.textContent('#agenda')), '今日の予定（board/today.json）をボードに渡した');
 
@@ -1187,19 +1201,21 @@ try {
       return p.up.length;
     });
     check(cap === 0, `任せる：動かせない今やるで3枚埋まっているときは、期限すぎを上げない（上げた ${cap} 枚）`);
-    // 今やるが多くても、急ぎ・大事なもの（期限が近い・優先度高・メール・下書き・答える確認）は下ろさない。下ろすのは1日1回・2枚まで
+    // 今やるが多くても、急ぎ・大事なもの（期限が近い・優先度高・メール・下書き・答える確認）は下ろさない。下ろすのは1日2枚まで
     // （2026-10-20 ポチが今やるの8枚を一度に次にやるへ回した）
     const many = await pg.evaluate(() => {
       const c = (id, extra = {}) => ({ id, title: id, lane: 'now', owner: 'you', order: 1, priority: 'mid', ...extra });
       const list = [c('mail', { type: 'mail' }), c('high', { priority: 'high' }), c('soon', { due: '2026-10-21' }), c('draft', { draft: { body: 'x' } }), c('ask', { decision: { question: '?' } }), c('low1', { priority: 'low' }), c('low2', { priority: 'low' }), c('mid1'), c('mid2'), c('mid3'), c('mid4'), c('mid5')];
-      const keepDay = LK.ls.get('tidyDownDay'); LK.ls.set('tidyDownDay', null);
       const p = LK.tidyPlan(list, '2026-10-20', Date.now(), new Set()).down.map((x) => x.id);
-      LK.ls.set('tidyDownDay', '2026-10-20');
-      const again = LK.tidyPlan(list, '2026-10-20', Date.now(), new Set()).down.length;
-      LK.ls.set('tidyDownDay', keepDay);
-      return { p, again };
+      // ほかの端末で今日もう下ろした分は、カードの履歴から数える（PC とスマホで合わせて2枚）
+      const at = new Date(2026, 9, 20, 9).toISOString();
+      const other = (n) => Array.from({ length: n }, (_, i) => ({ id: 'o' + i, title: 'o' + i, lane: 'next', owner: 'you', history: [{ at, who: 'ポチ', text: '次にやるへ' }] }));
+      const again = LK.tidyPlan([...list, ...other(2)], '2026-10-20', Date.now(), new Set()).down.length;
+      const one = LK.tidyPlan([...list, ...other(1)], '2026-10-20', Date.now(), new Set()).down.length;
+      const nextDay = LK.tidyPlan([...list, ...other(2)], '2026-10-21', Date.now(), new Set()).down.length;
+      return { p, again, one, nextDay };
     });
-    check(many.p.length <= 2 && many.p.every((id) => /^(low|mid)/.test(id)) && many.again === 0, `任せる：今やるが12枚でも下ろすのは急ぎでない2枚まで・1日1回（下ろした ${many.p.join(',') || 'なし'}、同じ日の2回目 ${many.again} 枚）`);
+    check(many.p.length <= 2 && many.p.every((id) => /^(low|mid)/.test(id)) && many.again === 0 && many.one === 1 && many.nextDay >= 1, `任せる：今やるが12枚でも下ろすのは急ぎでない2枚まで・ほかの端末と合わせて1日2枚（下ろした ${many.p.join(',') || 'なし'}、ほかの端末で2枚済み ${many.again}・1枚済み ${many.one}・次の日 ${many.nextDay}）`);
     const msg = puts.find((p) => p.path === 'local-board/cards.json' && /ポチ：.*ほか \d+ 件/.test(p.body.message))?.body.message || [...puts].reverse().find((p) => /ポチ：/.test(p.body.message))?.body.message || '';
     check(/ポチ：/.test(msg) && /ほか \d+ 件/.test(msg), `保存の題（コミット）に、ポチが動かしたことと、まとめて何件かが出る（${msg}）`);
     const agent = await pg.evaluate(() => LK.cards.find((c) => c.title === '見本の調べもの'));

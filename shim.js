@@ -200,21 +200,23 @@
 
   // 保存の題（コミットの文）：まとめて保存するときは「〜ほか N 件」、ポチが動かしたものは「ポチ：」を付ける
   // （2026-10-20 ポチが今やるの8枚を一度に次にやるへ回したのに、コミットの題が1枚分だけで、だれが動かしたか分からなかった）
+  // まだ保存していない変更の理由。保存できた分だけ消す（失敗したら次の保存の題に残す）
   let whys = [];
+  const relabel = () => { if (whys.length) lastWhy = whys.length > 1 ? `${whys[0]}ほか ${whys.length - 1} 件` : whys[0]; };
   function persist(why, who) {
     if (store.kind === 'github') ls.set('cache', cards);
     if (!store.canSave) { status(`変更しました（${why}）。「⋯ → ダウンロードで保存」で cards.json を local-board に置いてください。`, 'warn'); return; }
     whys.push((who ? who + '：' : '') + why);
-    dirty = true; lastWhy = whys.length > 1 ? `${whys[0]}ほか ${whys.length - 1} 件` : whys[0];
+    dirty = true; relabel();
     clearTimeout(saveTimer); saveTimer = setTimeout(flush, 1200);
   }
   async function flush() {
     if (!dirty || saving || !store?.canSave) return;
     saving = true; saveTimer = null;
-    const why = lastWhy, sent = ops.length; whys = [];
+    const why = lastWhy, sent = ops.length, sentWhys = whys.length;
     try {
       await store.write(LOCAL, JSON.stringify(cards, null, 2) + '\n', why);
-      ops = ops.slice(sent); dirty = ops.length > 0; keepOps();
+      ops = ops.slice(sent); dirty = ops.length > 0; keepOps(); whys = whys.slice(sentWhys); relabel();
       try { await store.write(MD, boardMd(cards), why); } catch {}
       status(`保存しました（${why}）${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
     } catch (e) {
@@ -224,9 +226,9 @@
           // 読み直しを待つあいだに増えた変更もかけ直す。送った分だけを消す（あとから来た変更は残して次に送る）
           const { text } = await store.loadCards(); cards = JSON.parse(text);
           ops.forEach(applyOp); emit();
-          const n = ops.length;
+          const n = ops.length, nWhys = whys.length;
           await store.write(LOCAL, JSON.stringify(cards, null, 2) + '\n', why + '（読み直してかけ直した）');
-          ops = ops.slice(n); dirty = ops.length > 0; keepOps(); try { await store.write(MD, boardMd(cards), why); } catch {}
+          ops = ops.slice(n); dirty = ops.length > 0; keepOps(); whys = whys.slice(nWhys); relabel(); try { await store.write(MD, boardMd(cards), why); } catch {}
           status('ほかの端末の変更と合わせて保存しました。', 'ok');
         } catch (e2) { status('保存できませんでした（ほかの端末と同時に書いたため）。↻ で読み直してください: ' + (e2.message || e2), 'err'); }
       } else if (!navigator.onLine) status('オフラインのため、まだ保存していません。つながったら自動で保存します。', 'warn');

@@ -197,7 +197,7 @@
   }
   // ---------- ポチの整理：会話を始めたとき、ボードを見て自分で直し、やったことを一言で返す（どれも「戻す」で戻せる） ----------
   // ・期限が今日まで・すぎたカード（次にやる・時間があるとき）を今やるへ上げる。予定待ち・保留・Claude の列はさわらない
-  // ・今やるは3枚まで（カンバンの WIP 制限。Kanban Guide）。あふれたら、急ぎでも大事でもないものを1日1回・2枚まで次にやるへ
+  // ・今やるは3枚まで（カンバンの WIP 制限。Kanban Guide）。あふれたら、急ぎでも大事でもないものを1日2枚まで次にやるへ（PC とスマホ合わせて）
   // ・調べもの・下書き・コードなど Claude ができそうなカードを Claude に回す（1回に2枚まで。メールのカードは回さない）
   // ・今やるで1週間動いていないカードを1日1回だけ知らせる
   // ポチが一度整理で動かしたカード（端末に id を覚える。履歴に「ポチ」があるものも）は二度と動かさない（本人が戻したら、それが答え）
@@ -210,13 +210,14 @@
     const up = list.filter(c => mine(c) && ['next', 'later'].includes(c.lane) && c.due && c.due <= today);
     const nowAll = list.filter(c => c.lane === 'now').concat(up).sort((a, b) => key(a).localeCompare(key(b)));
     const over = nowAll.slice(WIP);
-    // 今やるから下ろすのは、急ぎでも大事でもないものだけ・1日1回・2枚まで（大事さの低いものから）。
+    // 今やるから下ろすのは、急ぎでも大事でもないものだけ・1日2枚まで（大事さの低いものから）。
     // 多すぎること自体はボードが「12 / 3 ⚠」で見せる（WIP 制限は合意の印で、勝手に片付ける決まりではない。Kanban Guide）
     // 2026-10-20 ポチが今やるの8枚（お礼メール・返信など急ぎ）を一度に次にやるへ回した
-    const soon = (() => { const d = new Date(Date.parse(today + 'T00:00:00') + 2 * 864e5); return ymd(d); })();
+    const soon = (() => { const d = new Date(today + 'T00:00:00'); d.setDate(d.getDate() + 2); return ymd(d); })();
     const keep = c => (c.due && c.due <= soon) || c.priority === 'high' || c.type === 'mail' || !!c.draft || (c.decision && !c.answer) || (typeof window.repliedToYou === 'function' && (() => { try { return !!window.repliedToYou(c); } catch { return false; } })());
-    const downOk = L.ls.get('tidyDownDay') !== today;
-    const down = downOk ? nowAll.filter(c => c.lane === 'now' && mine(c) && !keep(c)).sort((a, b) => byPrio(b, a)).slice(0, Math.min(2, over.length)) : [];
+    // 今日もう下ろした枚数は、端末ごとの印ではなくカードの履歴（データのリポジトリ）から数える。PC とスマホで合わせて1日2枚まで
+    const downToday = list.filter(c => (c.history || []).some(h => h.who === 'ポチ' && h.text === '次にやるへ' && h.at && ymd(new Date(h.at)) === today)).length;
+    const down = nowAll.filter(c => c.lane === 'now' && mine(c) && !keep(c)).sort((a, b) => byPrio(b, a)).slice(0, Math.max(0, Math.min(2 - downToday, over.length)));
     // 動かせない今やる（ポチが触ったもの・Claude のもの）も数に入れて、上げるのは空いている分だけ
     const room = Math.max(0, WIP - (list.filter(c => c.lane === 'now').length - down.length));
     const upKeep = up.filter(c => !over.includes(c)).slice(0, room);
@@ -234,7 +235,6 @@
     if (stale) { const k = ymd() + ':' + stale.id; if (L.ls.get('tidyStale') === k) stale = null; else L.ls.set('tidyStale', k); }
     if (!p.up.length && !p.down.length && !p.agent.length) return stale ? { text: `「${stale.title}」がしばらく止まってるね。どうする？`, changed: false } : null;
     L.ls.set('tidied', [...(L.ls.get('tidied') || []), ...p.up, ...p.down, ...p.agent].map(c => c.id ?? c).slice(-300));
-    if (p.down.length) L.ls.set('tidyDownDay', ymd());
     L.as('ポチ', () => {
       for (const c of p.up) move(c.id, 'now', true, 'ポチ');
       for (const c of p.down) move(c.id, 'next', true, 'ポチ');
