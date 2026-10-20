@@ -245,6 +245,8 @@
     return total >= 5 && n / total >= 0.5 ? `${PART_LABEL[top]}によく片づける` : '';
   }
 
+  // 1回ごとの速さ（聞き取り・考え・話し始めの秒数）。会話の中身は入れない。「この端末の診断」で使う（最新 20 回）
+  const metrics = [];
   function create(host) {
     let s = { ...DEFAULTS, ...(host.settings || {}) };
     let on = false, speaking = false, stopVad = () => {}, stream = null, session = null, mode = 'script', brain = '', idx = 0, cur = null, doneCount = 0, fails = 0;
@@ -257,11 +259,19 @@
     const nameOf = () => mem().find((m) => m.kind === 'name')?.text || '';
     function remember(item) { if (!M) return null; try { const r = M.put(item); lastLearned = r?.id || item.id || ''; return r; } catch { return null; } }
     // 言い直しを覚える：分からなかった言葉のすぐあとに短い答えが来たら、その組を数える
+    // 1回目はこの端末の中だけで数え、2回目に初めてデータのリポジトリ（pochi-memory.json）に書く（聞き違えた言葉を1回目から GitHub に残さない）
     function learnWord(word, means) {
       if (!M || !word || word.length > 20) return;
       const id = 'word:' + word;
       const old = mem().find((m) => m.id === id && m.means === means);
-      const count = (old?.count || 0) + 1;
+      if (!old) {
+        let seen = {};
+        try { seen = JSON.parse(g.localStorage.getItem('lk.wordSeen')) || {}; } catch { seen = {}; }
+        const key = means + ':' + word;
+        if (!seen[key]) { seen[key] = 1; try { const ks = Object.keys(seen); if (ks.length > 50) delete seen[ks[0]]; g.localStorage.setItem('lk.wordSeen', JSON.stringify(seen)); } catch { /* なくてよい */ } return; }
+        try { delete seen[key]; g.localStorage.setItem('lk.wordSeen', JSON.stringify(seen)); } catch { /* なくてよい */ }
+      }
+      const count = Math.max(old?.count || 0, old ? 0 : 1) + 1;
       remember({ id, kind: 'word', word, means, count, text: `「${word}」は「${SHORT_LABEL[means]}」のこと` });
       if (count === WORD_MIN) log('sys', `「${word}」は「${SHORT_LABEL[means]}」のことだと覚えました（設定の「ポチが覚えたこと」から消せます）。`);
     }
@@ -306,8 +316,10 @@
 
     // ---------- 口：出来た文から順に話す（前の文が終わるまで次は待つ）。話している途中で声が来たら止める ----------
     let speech = Promise.resolve(), cut = false, lastOpen = '';
+    let turnAt = 0, firstAt = 0;
     async function voiceOut(text) {
       if (!on || cut || !text) return;
+      if (turnAt && !firstAt) firstAt = performance.now();
       speaking = true; state('speaking');
       const stopIt = () => { cut = true; g.Voice?.stop ? g.Voice.stop() : g.speechSynthesis?.cancel(); };
       if (s.bargeIn && stream) stopVad = g.LocalAI?.bargeIn(stream, stopIt) || vad(stream, stopIt); // Silero VAD が入っていればそれ、無ければ音の大きさ
@@ -513,6 +525,11 @@
           } catch { session = null; }
         }
         // 内蔵 AI が無い端末（スマホなど）は、「AI の部品を入れる」で入れた AI を使う
+        // 入れた AI がブラウザに消されていたら、黙って取り直さずに知らせる（取り直すと約0.4GB をモバイル通信で取ることがある）
+        if (mode !== 'ai' && g.LocalAI?.llmReady() && g.LocalAI.present) {
+          const p = await g.LocalAI.present().catch(() => ({}));
+          if (p.lost) log('sys', '入れた AI がこの端末から消えていました（ブラウザが空きを作るために消すことがあります）。もう一度入れるなら「🧠 AI を入れる」を押してね（Wi-Fi のときに）。');
+        }
         if (mode !== 'ai' && g.LocalAI?.llmReady()) {
           try {
             log('sys', '端末の中の AI を読み込んでいます（数秒〜数十秒）…');
@@ -582,7 +599,7 @@
       await mic();
       while (on && my === gen) {
         state('listening');
-        let text;
+        let text; const t0 = performance.now();
         try { text = (await g.Voice.listen()).text; miss = 0; }
         catch (e) {
           if (!on || my !== gen) break;
@@ -591,7 +608,7 @@
           continue; // 聞き取れなかった → もう一度
         }
         if (!on || my !== gen) break;
-        await hear(text, { voice: true });
+        await hear(text, { voice: true, listenS: (performance.now() - t0) / 1000 });
       }
       if (my === gen) { listening = false; if (on) state(idle()); }
     }
@@ -613,6 +630,7 @@
         await speech;
       }
       cut = false;
+      turnAt = performance.now(); firstAt = 0;
       const speak = s.reply === 'voice' ? true : s.reply === 'text' ? false : voice;
       log('you', text);
       if (END.test(g.Voice.norm(text))) { await say((doneCount ? `今日は${doneCount}枚片づけたね。` : '') + pick('bye', PHRASES.bye), speak); await speech; stop(); return; }
@@ -626,8 +644,13 @@
         viaAi = mode === 'ai';
         r = viaAi ? await smart(text, speak, voice) : scripted(text);
       }
+      const thinkS = (performance.now() - turnAt) / 1000;
       await say(r, speak);
       if (!viaAi) note(text, r);
+      const r1 = (x) => Math.round(x * 10) / 10;
+      metrics.push({ at: new Date().toISOString().slice(0, 16), via: voice ? '声' : '打つ', brain: viaAi ? brain : mode === 'ai' ? 'すぐやった命令' : 'AI なし', listen_s: opts.listenS ? r1(opts.listenS) : null, think_s: r1(thinkS), speak_s: firstAt ? r1((firstAt - turnAt) / 1000) : null });
+      if (metrics.length > 20) metrics.shift();
+      turnAt = 0;
       await speech;
       if (on && !listening) state(idle());
     }
@@ -647,5 +670,5 @@
     return { start, stop, hear, listen, get on() { return on; }, get speaking() { return speaking; }, get listening() { return listening; }, set settings(v) { s = { ...DEFAULTS, ...v }; } };
   }
 
-  g.Talk = { create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, PHRASES, picker, partOfDay, dueWords, dueShort, BOARD_MAX, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
+  g.Talk = { metrics, create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, PHRASES, picker, partOfDay, dueWords, dueShort, BOARD_MAX, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
 })(typeof window !== 'undefined' ? window : globalThis);

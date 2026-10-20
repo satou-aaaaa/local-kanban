@@ -95,7 +95,8 @@ const FAKE = {
   cfg?.initProgressCallback?.({ progress: 1, text: 'done' });
   return { chat: { completions: { create: async (req) => { window.__llmReq.push(req); return { choices: [{ message: { content: JSON.stringify(window.__llmReplies.shift() || { say: 'うん', action: null }) } }] }; } } }, unload() {} };
 }
-export async function deleteModelAllInfoInCache(id) { window.__deleted = id; }`,
+export async function deleteModelAllInfoInCache(id) { window.__deleted = id; }
+export async function hasModelInCache(id) { return !window.__modelGone; }`,
   cpu: `export class CacheManager { async clear() { window.__cpuCleared = true; } }
 export class Wllama {
   constructor(paths, cfg) { window.__cpu = { wasm: paths.default, cfg }; this.cacheManager = new CacheManager(); }
@@ -106,7 +107,7 @@ export class Wllama {
   tf: `export const env = { backends: { onnx: { wasm: {} } } };
 export class Tensor { constructor(type, data, dims) { Object.assign(this, { type, data, dims }); } }
 export async function pipeline(task, model, opts) {
-  window.__asr = { task, model, device: opts.device };
+  window.__asr = { task, model, device: opts.device, revision: opts.revision };
   opts.progress_callback?.({ status: 'progress', progress: 50, file: 'encoder_model.onnx' });
   await fetch('https://huggingface.co/' + model + '/resolve/main/config.json');
   return async (audio, o) => { window.__asrCalls.push({ n: audio.length, lang: o.language }); return { text: window.__heard.shift() || '' }; };
@@ -168,6 +169,8 @@ const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath
         const C = window[k];
         if (C) { C.available = async () => 'unavailable'; C.install = async () => false; }
       }
+      // 検査のブラウザは保存できる量（quota）が小さいので、空きのある端末のふりにする（空きが足りない場合は G の検査が自分で替える）
+      try { navigator.storage.estimate = async () => ({ quota: 5e10, usage: 1e9 }); } catch { /* なくてよい */ }
     });
     return c;
   };
@@ -691,16 +694,19 @@ try {
       const cards = Array.from({ length: 6 }, (_, i) => ({ title: '見本' + i, lane: 'now' }));
       const t = Talk.create({ settings: { ai: 'off', bargeIn: false }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']], memory: mem,
         board: () => cards, queue: () => cards, run: () => '', act: (c) => { acts.push(c.type); return 'ok'; }, pending: () => false, onLine() {}, onState() {} });
+      localStorage.removeItem('lk.wordSeen');
       await t.start();
-      for (const w of ['ばっちり', '済み', 'ばっちり', '済み', 'ばっちり']) await t.hear(w);
+      let first = null;
+      for (const [i, w] of ['ばっちり', '済み', 'ばっちり', '済み', 'ばっちり'].entries()) { await t.hear(w); if (i === 1) first = store.filter((x) => x.kind === 'word').length; }
       const learned = store.find((i) => i.kind === 'word');
       await t.hear('ばっちりを忘れて');
       const gone = !mem.all().some((i) => i.kind === 'word');
       t.stop();
-      return { acts, learned, gone };
+      return { acts, learned, gone, first };
     });
     check(r.learned?.word === 'ばっちり' && r.learned?.count >= 2 && r.acts.length === 3, `ポチが覚える：言い直しが2回あった言葉を覚えて、3回目からはその意味で動かす（${JSON.stringify(r.learned)}・${r.acts.join(',')}）`);
     check(r.gone, 'ポチが覚える：「〇〇を忘れて」で覚えた言葉を消す');
+    check(r.first === 0, `ポチが覚える：言い直しの1回目はデータのリポジトリに書かない（この端末の中だけで数える）（${r.first}）`);
     const h = await again.pg.evaluate(() => [Talk.habitText({ morning: 4, night: 1 }), Talk.habitText({ morning: 2, night: 1 }), Talk.habitText({ morning: 2, day: 2, evening: 2 })]);
     check(h[0] === '朝によく片づける' && h[1] === '' && h[2] === '', `ポチが覚える：よく片づける時間帯は5回以上・半分以上のときだけ覚える（${h.join('|')}）`);
     await again.pg.close();
@@ -1069,6 +1075,65 @@ try {
     await pg.close();
   }
 
+  // G. 準備を💬の中で1ボタンに・空きを先に見る・消えたら黙って取り直さない・耳の版を固定・この端末の診断（2026-10-20 問題点の一覧 5〜7）
+  {
+    fakeVendor = true;
+    const pg = await context.newPage();
+    pg.on('pageerror', (e) => errors.push(`pageerror(1ボタン): ${e.message}`));
+    const net = [];
+    pg.on('request', (r) => { const u = new URL(r.url()); if (!/^127\.0\.0\.1(:\d+)?$/.test(u.host) && u.host !== 'api.github.com') net.push(r.url()); });
+    await pg.route(/^https:\/\/([a-z0-9-]+\.)*(huggingface\.co|hf\.co)\//, (route) => route.fulfill({ json: {} }));
+    await pg.addInitScript(() => {
+      window.__heard = []; window.__spoken = []; window.__llmReq = []; window.__llmReplies = []; window.__asrCalls = []; window.__tiny = true; window.__locks = 0;
+      delete window.webkitSpeechRecognition; delete window.SpeechRecognition; delete window.LanguageModel;
+      Object.defineProperty(navigator, 'gpu', { configurable: true, value: { requestAdapter: async () => ({ features: new Set(['shader-f16']) }) } });
+      navigator.storage.estimate = async () => (window.__tiny ? { quota: 2e8, usage: 1e8 } : { quota: 5e10, usage: 1e9 });
+      Object.defineProperty(navigator, 'wakeLock', { configurable: true, value: { request: async () => { window.__locks++; return { release: async () => { window.__locks--; } }; } } });
+      window.speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }];
+      window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => u.onend && u.onend(), 5); };
+      window.speechSynthesis.cancel = () => {};
+    });
+    await pg.goto(base);
+    await ready(pg);
+    await pg.evaluate(() => localStorage.removeItem('lk.ai'));
+    await pg.click('#talkBtn');
+    await pg.waitForFunction(() => !document.querySelector('#talkAiGet').hidden, null, { timeout: 10000 }).catch(() => {});
+    check(await pg.isVisible('#talkAiGet') && /GB/.test(await pg.textContent('#talkAiGet')), `💬の中に AI を入れる1ボタンを、大きさと一緒に出す（${await pg.textContent('#talkAiGet')}）`);
+    await pg.click('#talkAiGet');
+    await pg.waitForFunction(() => /空き/.test(document.querySelector('#talkMode').textContent), null, { timeout: 5000 }).catch(() => {});
+    check(/空きが足りません/.test(await pg.textContent('#talkMode')) && net.length === 0, `入れる前に端末の空きを見て、足りなければ取りに行かない（${await pg.textContent('#talkMode')}）`);
+    await pg.evaluate(() => { window.__tiny = false; });
+    await pg.click('#talkAiGet');
+    await pg.waitForFunction(() => /WebLLM/.test(document.querySelector('#talkMode').textContent), null, { timeout: 15000 }).catch(() => {});
+    check(/WebLLM/.test(await pg.textContent('#talkMode')) && await pg.evaluate(() => document.querySelector('#talkDlg').open), `💬の中の1ボタンで入れて、そのまま AI で話し始める（${await pg.textContent('#talkMode')}）`);
+    check(await pg.evaluate(() => window.__locks === 0 && window.__asr?.revision === '1846881b6b3a3024392c1eea3ad983695bc23925'), '入れるあいだだけ画面を消さないようにし（終わったら放す）、耳（Whisper）は版を固定して取る');
+    await pg.fill('#talkIn', 'いい天気だね'); await pg.press('#talkIn', 'Enter');
+    await pg.waitForTimeout(800);
+    await pg.fill('#talkIn', '終わり'); await pg.press('#talkIn', 'Enter');
+    await pg.waitForTimeout(500);
+    // ブラウザがモデルを消していたら、黙って取り直さずに知らせる
+    await pg.evaluate(() => { window.__modelGone = true; });
+    net.length = 0;
+    await pg.click('#talkBtn');
+    await pg.waitForFunction(() => /消えていました/.test(document.querySelector('#talkLog').textContent), null, { timeout: 10000 }).catch(() => {});
+    check(/消えていました/.test(await pg.textContent('#talkLog')) && net.length === 0 && !(await pg.evaluate(() => LocalAI.llmReady())), `入れた AI が消えていたら、取り直さずに知らせる（${net.length} 回通信）`);
+    await pg.fill('#talkIn', '終わり'); await pg.press('#talkIn', 'Enter');
+    await pg.waitForTimeout(500);
+    // この端末の診断：データのリポジトリの local-board/diagnostics/ にだけ書く。会話の中身・カードは入れない
+    const b4 = puts.length;
+    await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
+    await pg.click('#diagBtn');
+    await pg.waitForFunction(() => /送りました|送れません/.test(document.querySelector('#diagMsg').textContent), null, { timeout: 10000 }).catch(() => {});
+    const d = puts.slice(b4).find((x) => /^local-board\/diagnostics\/[\w.-]+\.json$/.test(x.path));
+    const dj = d ? JSON.parse(d.text) : {};
+    check(!!d && 'webgpu' in dj && 'isolated' in dj && Array.isArray(dj['最近の返事']) && dj['最近の返事'].length >= 1 && 'think_s' in dj['最近の返事'][0], `「この端末の診断」で端末の様子と返事の秒数を local-board/diagnostics/ に書く（${d?.path}）`);
+    check(!!d && !/見本|終わり|ポチだよ/.test(d.text), '診断に会話の中身・カードの題を入れない');
+    await pg.click('#talkSetForm button[value=cancel]');
+    await pg.evaluate(() => { localStorage.removeItem('lk.ai'); return caches.delete('kanban-vendor'); });
+    fakeVendor = false;
+    await pg.close();
+  }
+
   // ---------- service worker・オフライン・インストールしたアプリ ----------
   const swOk = await page.evaluate(() => navigator.serviceWorker.ready.then((r) => !!r.active)).catch(() => false);
   check(swOk, 'service worker が動いた');
@@ -1094,8 +1159,20 @@ try {
   const offWp = await look(page);
   const offImg = await page.evaluate(() => new Promise((ok) => { const m = /url\("?([^")]+)/.exec(getComputedStyle(document.getElementById('wall')).backgroundImage); if (!m) return ok(false); const i = new Image(); i.onload = () => ok(true); i.onerror = () => ok(false); i.src = m[1]; }));
   check(offWp.wp && offImg, 'オフラインでも壁紙の写真が出る（一度見た写真は端末に取っておく）');
+  check(await page.evaluate(() => crossOriginIsolated), 'オフラインで開いても、ほかのサイトから切り離した状態（COOP・COEP）で開く');
   await context.setOffline(false);
   offline = false;
+  // 画面に COOP・COEP（credentialless）を付けても、GitHub の API とボードはそのまま動く。AI が CPU のスレッドを何本も使える（SharedArrayBuffer）
+  await page.reload();
+  await ready(page);
+  const coi = await page.evaluate(() => ({ iso: crossOriginIsolated, sab: typeof SharedArrayBuffer === 'function', cards: document.querySelectorAll('#board .card').length, ok: !!window.LK?.ready }));
+  check(coi.iso && coi.sab && coi.cards > 0 && coi.ok, `開き直したら、ほかのサイトから切り離した状態（crossOriginIsolated）になり、GitHub につないだボードもそのまま出る（${JSON.stringify(coi)}）`);
+  {
+    const sw = readFileSync(resolve(root, 'sw.js'), 'utf8');
+    const now = JSON.parse((sw.match(/VENDOR_NOW = (\[[^\]]*\])/) || [, '[]'])[1].replace(/'/g, '"'));
+    const dirs = readdirSync(resolve(root, 'vendor'), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+    check(JSON.stringify([...now].sort()) === JSON.stringify(dirs), `sw.js の VENDOR_NOW（残す部品の版）が vendor/ のフォルダと同じ（古い版を端末から消すため。${now.join(',')}）`);
+  }
   mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: resolve(OUT, 'pc.png'), fullPage: true });
 

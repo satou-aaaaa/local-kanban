@@ -3,7 +3,7 @@
 // ここではそれを、データのリポジトリ（非公開）の local-board/cards.json を読み書きする形に差し替える。
 // ボードの HTML 自体も、データのリポジトリの board/index.html（毎日の写し）から読む（boot.js）。このリポジトリ（公開）にはボードを置かない。
 //   読む : local-board/cards.json（無ければ board/cards.json＝毎日の写し）・local-board/settings.json・board/today.json・board/index.html
-//   書く : local-board/cards.json・local-board/BOARD.md・local-board/settings.json・local-board/pochi-memory.json だけ（board/ は毎日の書き出しが上書きするので触らない）
+//   書く : local-board/cards.json・local-board/BOARD.md・local-board/settings.json・local-board/pochi-memory.json・local-board/diagnostics/*.json（この端末の診断。会話の中身は入れない）だけ（board/ は毎日の書き出しが上書きするので触らない）
 // 置き場所は3通り：GitHub（端末に貼った鍵）・PC のフォルダ（File System Access API）・cards.json を選ぶ（保存はダウンロード）。
 // 鍵はこの端末の localStorage（lk.gh）にだけ置き、api.github.com 以外へは送らない。
 'use strict';
@@ -437,6 +437,12 @@
     add(body) { const id = newId(); return mutate({ kind: 'set', id, body }).then(() => id); },
     update(id, patch, why) { return mutate({ kind: 'update', id, patch }, why); },
     onStatus(f) { statusFns.push(f); },
+    // この端末の診断を書く（local-board/diagnostics/ の下だけ）
+    async diag(name, obj) {
+      if (!store?.canSave) throw new Error('いまは保存できません（GitHub かフォルダでつないでね）');
+      if (!/^[\w.-]{1,80}\.json$/.test(name)) throw new Error('名前が違います');
+      await store.write('local-board/diagnostics/' + name, JSON.stringify(obj, null, 2) + '\n', 'この端末の診断');
+    },
     json: () => JSON.stringify(cards, null, 2) + '\n',
   };
 })();

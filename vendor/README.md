@@ -28,4 +28,4 @@ npm pack @mlc-ai/web-llm@<版> @huggingface/transformers@<版> @wllama/wllama@<�
 # transformers の package.json の dependencies にある onnxruntime-web の版も npm pack する
 ```
 
-フォルダ名・`localai.js` の `VENDOR` を新しい版にし、古いフォルダを消す。WebLLM の版を上げるとモデル用 wasm の版（`modelVersion`）も変わることがある。
+フォルダ名・`localai.js` の `VENDOR`・`sw.js` の `VENDOR_NOW` を新しい版にし、古いフォルダを消す（`VENDOR_NOW` に無い版は、端末の保存から消える）。WebLLM の版を上げるとモデル用 wasm の版（`modelVersion`）も変わることがある。
