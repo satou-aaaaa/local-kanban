@@ -46,9 +46,10 @@
     if (st === 'available') return false;
     if (!tryInstall || (st !== 'downloadable' && st !== 'downloading')) return true;
     const t0 = Date.now();
-    const done = st === 'downloadable' ? V.install('ja-JP').catch(() => false) : Promise.resolve(false);
+    if (st === 'downloadable') V.install('ja-JP').catch(() => false);
+    // install の終わりは待たず、毎回1秒おいて聞き直す（終わったあとも状態が変わらないと、待たずに聞き続けてしまうため）
     while (Date.now() - t0 < EAR_WAIT) {
-      await Promise.race([done, new Promise((ok) => setTimeout(ok, 1000))]);
+      await new Promise((ok) => setTimeout(ok, 1000));
       st = await V.localStatus('ja-JP').catch(() => 'unavailable');
       if (st === 'available') return false;
       if (st === 'unavailable') return true;
