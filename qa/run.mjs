@@ -1071,6 +1071,23 @@ try {
     await pg.click('#aiDel');
     await pg.waitForFunction(() => /消しました/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 10000 }).catch(() => {});
     check(await pg.evaluate(() => !localStorage.getItem('lk.ai') && window.__cpuCleared === true), 'CPU 版の AI：「入れた AI を消す」でモデル（wllama の保存）と印を消した');
+    // 日本語が得意な頭（sarashina2.2）を選んで入れる・Qwen に戻すと前の頭を消してから入れる
+    await pg.evaluate(() => { window.__cpu = null; window.__cpuCleared = false; });
+    await pg.selectOption('#aiBrain', 'sarashina');
+    check(/sarashina2\.2/.test(await pg.textContent('#aiGet')) || /約 0\.\dGB/.test(await pg.textContent('#aiGet')), `日本語の頭：選ぶと入れる大きさが変わる（${await pg.textContent('#aiGet')}）`);
+    await pg.click('#aiGet');
+    await pg.waitForFunction(() => /入りました|入れられません/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 15000 }).catch(() => {});
+    const ja = await pg.evaluate(() => ({ url: window.__cpu?.url || '', st: LocalAI.status(), credit: document.querySelector('#aiCredit').textContent }));
+    check(/mmnga\/sarashina2\.2-0\.5b-instruct-v0\.1-gguf\/resolve\/[0-9a-f]{40}\/sarashina2\.2-0\.5b-instruct-v0\.1-Q4_0\.gguf$/.test(ja.url) && ja.st.brain === 'sarashina' && ja.st.cpu, `日本語の頭：sarashina2.2 の GGUF（コミットで固定）を CPU で入れた（${ja.url}）`);
+    check(/SB Intuitions/.test(ja.credit) && /MIT/.test(ja.credit), '日本語の頭：クレジット（作者・ライセンス）を出す');
+    await pg.selectOption('#aiBrain', 'qwen');
+    check(/頭を .*替える/.test(await pg.textContent('#aiGet')), `日本語の頭：入れたあとに別の頭を選ぶと「替える」と出す（${await pg.textContent('#aiGet')}）`);
+    await pg.click('#aiGet');
+    await pg.waitForFunction(() => /入りました|入れられません/.test(document.querySelector('#aiMsg').textContent) && !/sarashina/.test(window.__cpu?.url || 'sarashina'), null, { timeout: 15000 }).catch(() => {});
+    const back = await pg.evaluate(() => ({ url: window.__cpu?.url || '', cleared: window.__cpuCleared, brain: LocalAI.status().brain }));
+    check(back.cleared === true && /qwen2\.5-0\.5b-instruct-q4_0\.gguf$/.test(back.url) && back.brain === 'qwen', `日本語の頭：Qwen に戻すと、前の頭を消してから入れる（${JSON.stringify(back)}）`);
+    await pg.click('#aiDel');
+    await pg.waitForFunction(() => /消しました/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 10000 }).catch(() => {});
     await pg.click('#talkSetForm button[value=cancel]');
     // 頭だけ入れてある端末（耳を入れる前の版で入れた）：「耳だけ足す」で Whisper だけ取る
     await pg.evaluate(() => { localStorage.setItem('lk.ai', JSON.stringify({ llm: LocalAI.CPU.label, engine: 'cpu', at: '2026-10-20', from: ['huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF'] })); window.__cpu = null; window.__asr = null; });

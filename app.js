@@ -108,7 +108,9 @@
       <p id="aiStat" class="help"></p>
       <progress id="aiProg" max="1" value="0" hidden></progress>
       <p id="aiMsg" class="help" aria-live="polite"></p>
+      <label>頭（AI）の種類 <select id="aiBrain"><option value="qwen">Qwen2.5 0.5B（標準。WebGPU があれば速い）</option><option value="sarashina">sarashina2.2 0.5B（日本語が得意・CPU で動く・約0.5GB）</option></select></label>
       <div class="lk-actions"><button type="button" id="aiGet"></button><button type="button" id="aiDel" hidden>入れた AI を消す</button></div>
+      <details><summary>頭の選び方とクレジット</summary><p class="help">sarashina2.2 は日本語の受け答えが Qwen2.5 より得意です（モデルカードの日本語 MT-Bench 4.55 対 2.95）。WebGPU 版が無いので CPU で動かし、返事はゆっくりです。替えると前の頭は消してから入れます。<span id="aiCredit"></span></p></details>
       <p class="help">入れるあいだは画面を消さないようにします。空きが足りなければ取りに行きません。失敗したら途中まで取った分は消します。押したときだけ、モデルのファイルを Hugging Face（huggingface.co）と GitHub（raw.githubusercontent.com）から1回取ってきて、この端末に保存します。以後はオフラインで動きます。取りに行くのはモデルだけで、会話やカードは送りません。大きいので Wi-Fi のときに押してください。</p>
     </fieldset>
     <fieldset id="diagBox">
@@ -496,21 +498,23 @@
   function drawAi() {
     const A = window.LocalAI; if (!A) { $('#aiBox').hidden = true; return; }
     const st = A.status(), p = A.plan();
+    $('#aiBrain').value = A.brainPick(); $('#aiCredit').textContent = A.JA.credit;
     $('#aiStat').textContent = st.llm
       ? `入っています：頭 ${st.llm}${st.cpu ? '（CPU で動かしています。返事はゆっくり）' : ''}${st.ear ? '・耳 ' + A.EAR.label : ''}（${st.at} に ${[...new Set(st.from.map(f => f.split('/')[0]))].join('・')} から取得）`
       : `まだ入っていません。入れると、Chrome の内蔵 AI が無い端末（スマホなど）でも AI と話せます（頭 ${p.model}${p.ear ? '・耳 ' + A.EAR.label : ''}）。`;
-    $('#aiGet').textContent = st.llm ? '入れ直す' : `AI の部品を入れる（約 ${p.gb}GB）`;
+    const swap = st.llm && st.brain !== A.brainPick();
+    $('#aiGet').textContent = swap ? `頭を ${p.model} に替える（約 ${p.gb}GB）` : st.llm ? '入れ直す' : `AI の部品を入れる（約 ${p.gb}GB）`;
     $('#aiDel').hidden = !st.llm;
     // 頭は入っているが耳が無く、端末の音声認識でも日本語を聞き取れない端末は、耳（Whisper）だけ足せる
     $('#aiGet').dataset.earOnly = '';
-    if (st.llm && !st.ear) A.earNeeded().then(need => {
+    if (st.llm && !st.ear && !swap) A.earNeeded().then(need => {
       if (!need || A.status().ear || aiBusy) return;
       $('#aiGet').textContent = `耳（声の聞き取り）だけ足す（約 ${A.EAR.gb}GB）`; $('#aiGet').dataset.earOnly = '1';
       $('#aiStat').textContent += ' この端末の Chrome は日本語を端末の中で聞き取れないので、🎤には耳（Whisper）が要ります。';
     });
     // 入れる前：WebGPU が使えなければ CPU 版、端末の音声認識で日本語を聞き取れなければ耳も入れる、と目安を直す
-    else if (!st.llm) Promise.all([A.gpu(), A.earNeeded()]).then(([a, need]) => {
-      if (A.status().llm || aiBusy) return;
+    else if (!st.llm && A.brainPick() === 'qwen') Promise.all([A.gpu(), A.earNeeded()]).then(([a, need]) => {
+      if (A.status().llm || aiBusy || A.brainPick() !== 'qwen') return;
       const head = a ? p.model : A.CPU.label, gb = (a ? A.MODELS[p.model === A.MODELS.large.label ? 'large' : 'small'].gb : A.CPU.gb) + (need ? A.EAR.gb : 0);
       $('#aiStat').textContent = a
         ? `まだ入っていません。入れると、Chrome の内蔵 AI が無い端末（スマホなど）でも AI と話せます（頭 ${head}${need ? '・耳 ' + A.EAR.label : ''}）。`
@@ -571,6 +575,7 @@
     const ok = await installAi(t => { $('#aiMsg').textContent = t; }, $('#aiProg'), { earOnly: $('#aiGet').dataset.earOnly === '1' });
     if (ok) $('#aiMsg').textContent = '入りました。会話モードと🎤で使えます。';
   };
+  $('#aiBrain').onchange = e => { if (!window.LocalAI || aiBusy) return; LocalAI.setBrain(e.target.value); drawAi(); };
   $('#aiDel').onclick = async () => { if (aiBusy || !window.LocalAI) return; await LocalAI.remove(); $('#aiMsg').textContent = 'この端末から消しました。'; drawAi(); drawWhy(); };
   $('#talkSetForm').onsubmit = e => {
     if (e.submitter?.value !== 'ok') return;
