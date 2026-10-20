@@ -155,7 +155,7 @@
     const at = now();
     if (op.kind === 'set') { const h = op.body.history || []; op.body.history = before ? [...(before.history || []), { at, who: actor, text: '直した' }].slice(-50) : h.length ? h.map((x) => ({ ...x, who: actor })) : [{ at, who: actor, text: '足した' }]; return; }
     if (op.patch.history) return; // 履歴を自分で書く操作（コメントなど）はそのまま
-    op.patch.history = [...((before && before.history) || []), { at, who: actor, text: describe(op).replace(/^「[^」]*」[をの]?/, '') || '直した' }].slice(-50);
+    op.patch.history = [...((before && before.history) || []), { at, who: actor, text: describe(op, true) || '直した' }].slice(-50);
   }
   function mutate(op, why) {
     if (!ready) return Promise.reject(Object.assign(new Error('まだつないでいません'), { code: 'unavailable' }));
@@ -166,11 +166,14 @@
     if (!applyOp(op)) { undo.pop(); return Promise.reject(Object.assign(new Error('カードがありません'), { code: 'not_found' })); }
     ops.push(op); rev++; keepOps();
     queueMicrotask(emit);
-    persist(why || describe(op));
+    persist(why || describe(op), actor);
     return Promise.resolve();
   }
-  function describe(op) {
-    const c = byId(op.id), t = (c && c.title || '').slice(0, 30);
+  // bare：題を付けずに何をしたかだけ（履歴の文。題に「」が入っていても崩れない）
+  function describe(op, bare) {
+    const c = byId(op.id), t0 = (c && c.title || '').slice(0, 30);
+    if (bare) return describe(op).replace('「' + t0 + '」', '').replace(/^[をの]/, '');
+    const t = t0;
     if (op.kind === 'set') return `「${t}」を足した`;
     const p = op.patch;
     if (p.deleted === true) return `「${t}」を消した`;
@@ -195,16 +198,20 @@
   const where = () => store && (store.kind === 'github' ? 'github:' + (ls.get('gh') || {}).owner + '/' + (ls.get('gh') || {}).repo : store.kind);
   function keepOps() { if (store && store.canSave) ls.set('pending', ops.length ? { where: where(), ops } : null); }
 
-  function persist(why) {
+  // 保存の題（コミットの文）：まとめて保存するときは「〜ほか N 件」、ポチが動かしたものは「ポチ：」を付ける
+  // （2026-10-20 ポチが今やるの8枚を一度に次にやるへ回したのに、コミットの題が1枚分だけで、だれが動かしたか分からなかった）
+  let whys = [];
+  function persist(why, who) {
     if (store.kind === 'github') ls.set('cache', cards);
     if (!store.canSave) { status(`変更しました（${why}）。「⋯ → ダウンロードで保存」で cards.json を local-board に置いてください。`, 'warn'); return; }
-    dirty = true; lastWhy = why;
+    whys.push((who ? who + '：' : '') + why);
+    dirty = true; lastWhy = whys.length > 1 ? `${whys[0]}ほか ${whys.length - 1} 件` : whys[0];
     clearTimeout(saveTimer); saveTimer = setTimeout(flush, 1200);
   }
   async function flush() {
     if (!dirty || saving || !store?.canSave) return;
     saving = true; saveTimer = null;
-    const why = lastWhy, sent = ops.length;
+    const why = lastWhy, sent = ops.length; whys = [];
     try {
       await store.write(LOCAL, JSON.stringify(cards, null, 2) + '\n', why);
       ops = ops.slice(sent); dirty = ops.length > 0; keepOps();

@@ -685,6 +685,7 @@ try {
     });
     check(!r.repeat && r.distinct >= 2, '会話（AI なし）：同じ言い回しを続けて言わない');
     check(r.kinds.length === 0 && r.greet === 0, `会話（AI なし）：どの返事にも言い回しが2つ以上ある${r.kinds.length ? '（' + r.kinds.join(',') + '）' : ''}`);
+    { const miss = await pg.evaluate(() => Object.values(Talk.PHRASES.greet).flat().filter((h) => !Talk.withName(h, 'ポテト').includes('、ポテト'))); check(miss.length === 0, `会話：どのあいさつにも呼び方が入る${miss.length ? '（入らない: ' + miss.join(' / ') + '）' : ''}`); }
     check(r.day === 'night,morning,day,evening,night', `会話：時間帯であいさつを変える（${r.day}）`);
     check(r.due === '期限すぎてるよ。|今日が期限だよ。|明日が期限。|期限は11月2日。', `会話：期限の言い方（${r.due}）`);
     check(r.big <= r.budget, `会話（入れた AI）：1往復だけでも長すぎるときは BUDGET に収める（${r.big}字）`);
@@ -720,8 +721,9 @@ try {
 
     const again = await talkPage({ sr: false }, '覚える2');
     await again.pg.click('#talkBtn');
-    await again.pg.waitForFunction(() => window.__spoken.length > 0, null, { timeout: 10000 });
-    check(/ポテト/.test(await again.pg.evaluate(() => window.__spoken.join(''))), 'ポチが覚える：別の端末・次の会話でも覚えた呼び方であいさつする');
+    // あいさつは何回かに分けて読むので、最初の1つだけでなく、呼び方が出るまで待つ（1つ目だけ見ると時々落ちた）
+    await again.pg.waitForFunction(() => /ポテト/.test(window.__spoken.join('')), null, { timeout: 10000 }).catch(() => {});
+    { const sp = await again.pg.evaluate(() => window.__spoken.join('')); check(/ポテト/.test(sp), `ポチが覚える：別の端末・次の会話でも覚えた呼び方であいさつする（${sp.slice(0, 80)}）`); }
     // 言い直し：分からなかった言葉のすぐあとに「済み」が2回来たら、その言葉を「済み」として覚える
     const r = await again.pg.evaluate(async () => {
       const store = []; const acts = [];
@@ -1166,7 +1168,7 @@ try {
     await pg.evaluate(async ({ yesterday }) => {
       const t = new Date().toISOString();
       const body = (title, lane, due, o) => ({ type: 'task', title, owner: 'you', lane, priority: 'mid', order: o, created: t, updated: t, moves: [{ at: t, to: lane }], due, history: [{ at: t, who: 'you', text: '検査で足した' }] });
-      for (const [i, d] of ['2099-02-01', '2099-02-02', '2099-02-03'].entries()) await LK.add(body('見本の今やる' + (i + 1), 'now', d, 10 + i));
+      await LK.add(body('見本の今やる1', 'now', '2099-02-01', 10)); // 見本の s1・s2 と合わせて今やるは3枚
       await LK.add(body('見本の期限すぎ', 'next', yesterday, 20));
       await LK.add(body('見本の調べもの', 'later', null, 21));
       for (const [i, f] of ['りんご', 'みかん', 'ぶどう'].entries()) await LK.add(body('見本の' + f, 'next', null, 30 + i));
@@ -1185,12 +1187,27 @@ try {
       return p.up.length;
     });
     check(cap === 0, `任せる：動かせない今やるで3枚埋まっているときは、期限すぎを上げない（上げた ${cap} 枚）`);
+    // 今やるが多くても、急ぎ・大事なもの（期限が近い・優先度高・メール・下書き・答える確認）は下ろさない。下ろすのは1日1回・2枚まで
+    // （2026-10-20 ポチが今やるの8枚を一度に次にやるへ回した）
+    const many = await pg.evaluate(() => {
+      const c = (id, extra = {}) => ({ id, title: id, lane: 'now', owner: 'you', order: 1, priority: 'mid', ...extra });
+      const list = [c('mail', { type: 'mail' }), c('high', { priority: 'high' }), c('soon', { due: '2026-10-21' }), c('draft', { draft: { body: 'x' } }), c('ask', { decision: { question: '?' } }), c('low1', { priority: 'low' }), c('low2', { priority: 'low' }), c('mid1'), c('mid2'), c('mid3'), c('mid4'), c('mid5')];
+      const keepDay = LK.ls.get('tidyDownDay'); LK.ls.set('tidyDownDay', null);
+      const p = LK.tidyPlan(list, '2026-10-20', Date.now(), new Set()).down.map((x) => x.id);
+      LK.ls.set('tidyDownDay', '2026-10-20');
+      const again = LK.tidyPlan(list, '2026-10-20', Date.now(), new Set()).down.length;
+      LK.ls.set('tidyDownDay', keepDay);
+      return { p, again };
+    });
+    check(many.p.length <= 2 && many.p.every((id) => /^(low|mid)/.test(id)) && many.again === 0, `任せる：今やるが12枚でも下ろすのは急ぎでない2枚まで・1日1回（下ろした ${many.p.join(',') || 'なし'}、同じ日の2回目 ${many.again} 枚）`);
+    const msg = puts.find((p) => p.path === 'local-board/cards.json' && /ポチ：.*ほか \d+ 件/.test(p.body.message))?.body.message || [...puts].reverse().find((p) => /ポチ：/.test(p.body.message))?.body.message || '';
+    check(/ポチ：/.test(msg) && /ほか \d+ 件/.test(msg), `保存の題（コミット）に、ポチが動かしたことと、まとめて何件かが出る（${msg}）`);
     const agent = await pg.evaluate(() => LK.cards.find((c) => c.title === '見本の調べもの'));
     check(agent?.lane === 'agent' && agent?.owner === 'agent', '任せる：調べものなど Claude ができそうなカードは Claude に回した');
     check(await pg.evaluate(() => LK.cards.filter((c) => (c.history || []).some((h) => h.who === 'ポチ')).length >= 3), '任せる：ポチが動かしたカードの履歴に「ポチ」と残る');
     const type = async (t) => { await pg.fill('#talkIn', t); await pg.press('#talkIn', 'Enter'); await pg.waitForTimeout(400); };
     await type('戻して');
-    check(await lane('見本の期限すぎ') === 'next' && await lane('見本の調べもの') === 'later' && await nowN() === 5, `任せる：「戻して」で整理を全部まとめて元に戻す（今やる ${await nowN()} 枚）`);
+    check(await lane('見本の期限すぎ') === 'next' && await lane('見本の調べもの') === 'later' && await nowN() === 3, `任せる：「戻して」で整理を全部まとめて元に戻す（今やる ${await nowN()} 枚）`);
     await pg.waitForTimeout(900);
     await type('りんごとみかんを済みに、ぶどうは明日');
     const fr = await pg.evaluate(() => Object.fromEntries(['りんご', 'みかん', 'ぶどう'].map((f) => { const c = LK.cards.find((x) => x.title === '見本の' + f); return [f, c?.lane + ':' + (c?.due || '')]; })));

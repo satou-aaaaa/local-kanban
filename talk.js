@@ -50,6 +50,8 @@
 
   // ---------- 返事の言い回し（AI なしのとき）。同じ文を続けて言わないように、毎回この中から選ぶ ----------
   // 人の会話のように言い回しを変えると機械っぽさが減る（Google の会話デザインの指針「Randomize prompts」）
+  // あいさつに呼び方を入れる。終わりが「！」でも「。」でも入れる（「夜もおつかれさま。」で呼び方が抜けていた。10/20）
+  const withName = (hi, you) => { const m = /[！!。]$/.exec(hi); const end = m ? (m[0] === '!' ? '！' : m[0]) : '！'; const body = m ? hi.slice(0, -1) : hi; return body + (you ? `、${you}` : '') + end; };
   const PHRASES = {
     greet: { morning: ['おはよう！', 'おはよ〜！', '朝からえらいね！'], day: ['やっほー！', 'おつかれ！', 'こんにちは！'], evening: ['おつかれさま！', '今日もおつかれ！'], night: ['こんばんは！', '夜もおつかれさま。'] },
     hi: ['{name}だよ。今日どれからやる？', '{name}です。一緒に片づけよっか。', '待ってたよ、{name}です。さっそく見ていこう。', '{name}だよ。ちゃちゃっと見ていこう！', 'ぼく、{name}。今日もいっしょに片づけよっか。'],
@@ -874,7 +876,7 @@
       const q = host.queue();
       const you = nameOf();
       const news = growthNews();
-      const hi = pick('greet', PHRASES.greet[partOfDay()]).replace(/[！!]$/, you ? `、${you}！` : '！') + (news ? ' ' + news : pick('hi', PHRASES.hi, { name: s.name }));
+      const hi = withName(pick('greet', PHRASES.greet[partOfDay()]), you) + (news ? ' ' + news : pick('hi', PHRASES.hi, { name: s.name }));
       if (news) mood('happy');
       const nowN = host.board().filter((c) => c.lane === 'now').length;
       const back = followUp();
@@ -1131,5 +1133,5 @@
     return { start, stop, hear, listen, hold, release, get holding() { return holding; }, get on() { return on; }, get speaking() { return speaking; }, get listening() { return listening; }, set settings(v) { s = settingsOf(v); } };
   }
 
-  g.Talk = { metrics, cueLog, recentStore, kindly, quietToday, weeklyText, streakText, fixTitles, seasonOf, vowels, PERSONA, GROWTH, growthOf, growthText, buddyDays, wearSvg, settingsOf, unfinished, joinHeard, create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, EXAMPLES_ALL, pickExamples, PHRASES, picker, partOfDay, dueWords, dueShort, BOARD_MAX, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
+  g.Talk = { withName, metrics, cueLog, recentStore, kindly, quietToday, weeklyText, streakText, fixTitles, seasonOf, vowels, PERSONA, GROWTH, growthOf, growthText, buddyDays, wearSvg, settingsOf, unfinished, joinHeard, create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, EXAMPLES_ALL, pickExamples, PHRASES, picker, partOfDay, dueWords, dueShort, BOARD_MAX, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
 })(typeof window !== 'undefined' ? window : globalThis);
