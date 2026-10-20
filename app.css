@@ -72,6 +72,7 @@ dialog.lk .help{font-size:.8rem;color:var(--muted)}
 #talkMode:empty{display:none}
 #talkMode[data-ai=on]{background:color-mix(in srgb,#22c55e 22%,transparent)}
 #talkAiGet:not([hidden]){display:block;margin-top:6px;min-height:44px}
+#talkAiProg:not([hidden]){display:block;width:100%;margin-top:6px}
 #talkLog{max-height:40vh;overflow:auto;margin:12px 0;display:flex;flex-direction:column;gap:6px}
 #talkLog .l{padding:6px 10px;border-radius:10px;max-width:90%;white-space:pre-wrap;word-break:break-word}
 #talkLog .ai{background:var(--lane);align-self:flex-start}

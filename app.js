@@ -66,7 +66,7 @@
   </form>
 </dialog>
 <dialog id="talkDlg" class="lk" aria-labelledby="talkName">
-  <div class="who"><span id="talkAva"></span><div><p id="talkName"></p><div id="talkState"></div><div id="talkMode" class="help"></div><button type="button" id="talkAiGet" hidden>🧠 AI を入れて自由に話す</button></div></div>
+  <div class="who"><span id="talkAva"></span><div><p id="talkName"></p><div id="talkState"></div><div id="talkMode" class="help"></div><button type="button" id="talkAiGet" hidden>🧠 AI を入れて自由に話す</button><progress id="talkAiProg" max="1" value="0" hidden></progress></div></div>
   <div id="talkLog" aria-live="polite"></div>
   <form id="talkForm"><input id="talkIn" autocomplete="off" aria-label="ポチに話す" placeholder="打っても🎤で話してもOK（例：牛乳を買うを追加・済み・今やるを読んで）"><button type="button" id="talkMic" aria-pressed="false" aria-label="声で話す" title="声で話す（もう一度押すと止める）">🎤</button><button class="primary">送る</button></form>
   <div class="lk-actions"><button type="button" id="talkSetBtn">⚙ キャラの設定</button><button type="button" id="talkEnd">終わる</button></div>
@@ -109,7 +109,13 @@
       <progress id="aiProg" max="1" value="0" hidden></progress>
       <p id="aiMsg" class="help" aria-live="polite"></p>
       <div class="lk-actions"><button type="button" id="aiGet"></button><button type="button" id="aiDel" hidden>入れた AI を消す</button></div>
-      <p class="help">押したときだけ、モデルのファイルを Hugging Face（huggingface.co）と GitHub（raw.githubusercontent.com）から1回取ってきて、この端末に保存します。以後はオフラインで動きます。取りに行くのはモデルだけで、会話やカードは送りません。大きいので Wi-Fi のときに押してください。</p>
+      <p class="help">入れるあいだは画面を消さないようにします。空きが足りなければ取りに行きません。失敗したら途中まで取った分は消します。押したときだけ、モデルのファイルを Hugging Face（huggingface.co）と GitHub（raw.githubusercontent.com）から1回取ってきて、この端末に保存します。以後はオフラインで動きます。取りに行くのはモデルだけで、会話やカードは送りません。大きいので Wi-Fi のときに押してください。</p>
+    </fieldset>
+    <fieldset id="diagBox">
+      <legend>この端末の診断</legend>
+      <p class="help">うまく動かないときに押すと、この端末の様子（WebGPU の有無・聞き取りの方式・AI の種類・空き・最近の返事にかかった秒数）を、データのリポジトリの local-board/diagnostics/ に書きます。Claude がそれを読んで直します。会話の中身・カードは入れません。</p>
+      <div class="lk-actions"><button type="button" id="diagBtn">この端末の診断を送る</button></div>
+      <p id="diagMsg" class="help" aria-live="polite"></p>
     </fieldset>
     <div class="lk-actions"><button type="button" id="talkReset">元に戻す</button>
       <span><button value="cancel" formnovalidate>やめる</button> <button value="ok" class="primary">保存</button></span></div>
@@ -423,6 +429,7 @@
         $('#talkMode').dataset.ai = m === 'ai' ? 'on' : 'off';
         // AI なしで、入れれば使える端末（WebGPU がある）なら、入れる場所への近道を出す
         $('#talkAiGet').hidden = m === 'ai' || why === 'off' || !window.LocalAI || LocalAI.llmReady(); // WebGPU が無くても CPU 版を入れられる
+        if (window.LocalAI) $('#talkAiGet').textContent = `🧠 AI を入れて自由に話す（約 ${LocalAI.plan().gb}GB・Wi-Fi で）`;
       },
     });
     $('#talkDlg').showModal();
@@ -457,7 +464,32 @@
   $('#memAll').onclick = () => { if (!L.memory) return; L.memory.forgetAll(); drawMem(); };
   // まだ送っていない変更の数（オフラインなど）。送れたら消える
   setInterval(() => { const n = L.unsent ? L.unsent() : 0, el = $('#lkUnsent'); if (!el) return; el.hidden = !n; if (n) el.textContent = `未送信 ${n}件（つながったら自動で送ります）`; }, 1000);
-  $('#talkAiGet').onclick = () => { openTalkSet(); $('#aiBox')?.scrollIntoView({ block: 'center' }); $('#aiGet')?.focus(); };
+  // 💬の中の1ボタンで入れる（設定の画面を探さなくてよい）。入ったら会話を開き直して AI で話す
+  $('#talkAiGet').onclick = async () => {
+    const ok = await installAi(t => { $('#talkMode').textContent = t; }, $('#talkAiProg'));
+    if (!ok) return;
+    talkLine('sys', '入りました。AI で話します。');
+    if (talk?.on) { talk.stop(); openTalk('talk'); }
+  };
+  // この端末の診断（会話の中身・カードは入れない）
+  $('#diagBtn').onclick = async () => {
+    const out = $('#diagMsg'); out.textContent = '調べています…';
+    try {
+      let dev = L.ls.get('device'); if (!dev) { dev = Math.random().toString(36).slice(2, 8); L.ls.set('device', dev); }
+      const ua = navigator.userAgentData;
+      const d = {
+        at: new Date().toISOString(), device: dev,
+        端末: ua ? `${ua.platform || ''}${ua.mobile ? '（スマホ）' : ''} ${(ua.brands || []).filter(b => !/Not/.test(b.brand)).map(b => b.brand + ' ' + b.version).join('・')}` : navigator.userAgent.replace(/\s*\([^)]*\)\s*/g, ' ').slice(0, 120),
+        聞き取り: window.Voice ? (await Voice.localStatus().catch(() => '?')) + (window.LocalAI?.status().ear ? '・Whisper あり' : '') : 'なし',
+        内蔵AI: window.Talk ? await Talk.aiStatus() : 'なし',
+        ...(window.LocalAI ? await LocalAI.info() : {}),
+        気持ちの声: window.Koe?.status().installed || 'なし',
+        最近の返事: (window.Talk?.metrics || []).slice(-20),
+      };
+      await L.diag(`${d.at.slice(0, 10)}-${dev}.json`, d);
+      out.textContent = `送りました（local-board/diagnostics/${d.at.slice(0, 10)}-${dev}.json）。会話の中身は入れていません。`;
+    } catch (e) { out.textContent = '送れませんでした：' + (e?.message || e); }
+  };
   function drawAi() {
     const A = window.LocalAI; if (!A) { $('#aiBox').hidden = true; return; }
     const st = A.status(), p = A.plan();
@@ -521,13 +553,20 @@
   };
   $('#koeDel').onclick = async () => { if (koeBusy || !window.Koe) return; await Koe.remove(); $('#koeMsg').textContent = 'この端末から消しました。'; drawKoe(); };
   $('#koeOn').onchange = e => { window.Koe?.setOn(e.target.checked); drawKoe(); };
+  // AI の部品を入れる（設定の画面からも、💬の中の1ボタンからも同じ）。msg・prog は進み具合を出す場所
   let aiBusy = false;
+  const onPC = () => /Windows|Macintosh|Linux x86/.test(navigator.userAgent) && !/Android|Mobile/.test(navigator.userAgent);
+  async function installAi(msg, prog, opts = {}) {
+    if (aiBusy || !window.LocalAI) return false;
+    aiBusy = true; $('#aiGet').disabled = true; $('#talkAiGet').disabled = true; prog.hidden = false; prog.value = 0;
+    msg('取ってきています…（Wi-Fi で、画面を閉じずに待ってね）' + (onPC() ? ' PC ではブラウザの保存場所（ふつう C ドライブ）に入ります。' : ''));
+    try { await LocalAI.safeInstall((v, what) => { prog.value = v; if (what) msg(String(what).slice(0, 120)); }, opts); return true; }
+    catch (e) { msg(e?.message || String(e)); return false; }
+    finally { aiBusy = false; $('#aiGet').disabled = false; $('#talkAiGet').disabled = false; prog.hidden = true; drawAi(); drawWhy(); }
+  }
   $('#aiGet').onclick = async () => {
-    if (aiBusy || !window.LocalAI) return;
-    aiBusy = true; $('#aiGet').disabled = true; $('#aiProg').hidden = false; $('#aiProg').value = 0; $('#aiMsg').textContent = '取ってきています…（画面を閉じずに待ってね）';
-    try { await LocalAI.install((v, what) => { $('#aiProg').value = v; if (what) $('#aiMsg').textContent = String(what).slice(0, 120); }, { earOnly: $('#aiGet').dataset.earOnly === '1' }); $('#aiMsg').textContent = '入りました。会話モードと🎤で使えます。'; }
-    catch (e) { $('#aiMsg').textContent = '入れられませんでした：' + (e?.message || e); }
-    finally { aiBusy = false; $('#aiGet').disabled = false; $('#aiProg').hidden = true; drawAi(); drawWhy(); }
+    const ok = await installAi(t => { $('#aiMsg').textContent = t; }, $('#aiProg'), { earOnly: $('#aiGet').dataset.earOnly === '1' });
+    if (ok) $('#aiMsg').textContent = '入りました。会話モードと🎤で使えます。';
   };
   $('#aiDel').onclick = async () => { if (aiBusy || !window.LocalAI) return; await LocalAI.remove(); $('#aiMsg').textContent = 'この端末から消しました。'; drawAi(); drawWhy(); };
   $('#talkSetForm').onsubmit = e => {

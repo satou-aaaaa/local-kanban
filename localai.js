@@ -25,15 +25,20 @@
     small: { label: 'Qwen2.5 0.5B', gb: 0.4, f16: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', f32: 'Qwen2.5-0.5B-Instruct-q4f32_1-MLC' },
     large: { label: 'Qwen2.5 1.5B', gb: 1.0, f16: 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC', f32: 'Qwen2.5-1.5B-Instruct-q4f32_1-MLC' },
   };
-  const EAR = { id: 'onnx-community/whisper-base', label: 'Whisper base', gb: 0.1 };
-  const VAD = { id: 'onnx-community/silero-vad', label: 'Silero VAD' };
+  // 耳と割り込みのモデルも版（コミット）で固定する（置き場の中身が変わっても、同じものを取る）
+  const EAR = { id: 'onnx-community/whisper-base', revision: '1846881b6b3a3024392c1eea3ad983695bc23925', label: 'Whisper base', gb: 0.1 };
+  const VAD = { id: 'onnx-community/silero-vad', revision: 'e71cae966052b992a7eca6b17738916ce0eca4ec', label: 'Silero VAD' };
   const KEY = 'lk.ai';
   const here = (p) => new URL(p, g.document?.baseURI || g.location?.href).href;
   const load = () => { try { return JSON.parse(g.localStorage.getItem(KEY)) || {}; } catch { return {}; } };
   const save = (v) => { try { g.localStorage.setItem(KEY, JSON.stringify({ ...load(), ...v })); } catch { /* 保存できなくても動く */ } };
 
+  // 耳を版の固定より前に入れた端末には「固定していない」印を付ける（次に読むとき取り直さないため）。新しく入れるときは固定した版
+  if (load().ear && load().pinned === undefined) save({ pinned: false });
+
   // ---------- 端末の下調べ ----------
-  function pickModel() { return (g.navigator?.deviceMemory || 4) >= 8 ? MODELS.large : MODELS.small; }
+  // いつも 0.5B（約0.4GB）。1.5B（約1GB）は PC で断りなく大きいものを取ってしまったので既定にしない（PC はふつう C ドライブに入る）
+  function pickModel() { return MODELS.small; }
   // 端末内の音声認識（Chrome 139 以降）で日本語を聞き取れない端末だけ Whisper を入れる。
   // 関数（SpeechRecognition.available）があっても、Android の Chrome は日本語が 'unavailable' のことがある（2026-10-20 Pixel 6a）ので、
   // 実際の答えで決める。'downloadable' なら入れてみて、EAR_WAIT ミリ秒たっても使えなければ Whisper にする
@@ -190,10 +195,12 @@
     if (asr) return Promise.resolve();
     return earLoading || (earLoading = (async () => {
       const m = await transformers();
+      // 版を固定する前に入れた端末は、取り直さないよう前と同じ（main）を使う
+      const pin = load().pinned !== false;
       const webgpu = (await gpu())?.mode === 'default'; // 互換モードでしか見つからない GPU では wasm（CPU）で聞く
       const progress_callback = (p) => { if (p?.status === 'progress' && onProgress) onProgress((p.progress || 0) / 100, p.file || ''); };
-      asr = await m.pipeline('automatic-speech-recognition', EAR.id, { device: webgpu ? 'webgpu' : 'wasm', dtype: webgpu ? { encoder_model: 'fp32', decoder_model_merged: 'q4' } : 'q8', progress_callback });
-      try { vadModel = await m.AutoModel.from_pretrained(VAD.id, { config: { model_type: 'custom' }, dtype: 'fp32', progress_callback }); } catch { vadModel = null; }
+      asr = await m.pipeline('automatic-speech-recognition', EAR.id, { revision: pin ? EAR.revision : 'main', device: webgpu ? 'webgpu' : 'wasm', dtype: webgpu ? { encoder_model: 'fp32', decoder_model_merged: 'q4' } : 'q8', progress_callback });
+      try { vadModel = await m.AutoModel.from_pretrained(VAD.id, { revision: pin ? VAD.revision : 'main', config: { model_type: 'custom' }, dtype: 'fp32', progress_callback }); } catch { vadModel = null; }
     })().catch((e) => { earLoading = null; throw e; }));
   }
 
@@ -309,10 +316,11 @@
   async function install(onProgress, { earOnly = false } = {}) {
     const ear = await earNeeded({ tryInstall: true });
     const step = (base, part) => (p, what) => onProgress?.(base + part * Math.max(0, Math.min(1, p || 0)), what);
+    if (ear && !load().ear) save({ pinned: true });
     if (earOnly && load().llm) {
       if (ear) {
         await loadEar(step(0, 1));
-        save({ ear: true, from: [...new Set([...(load().from || []), `huggingface.co/${EAR.id}`, ...(vadModel ? [`huggingface.co/${VAD.id}`] : [])])] });
+        save({ ear: true, earCache: await hasTfCache(), from: [...new Set([...(load().from || []), `huggingface.co/${EAR.id}`, ...(vadModel ? [`huggingface.co/${VAD.id}`] : [])])] });
       }
       onProgress?.(1, '');
       return status();
@@ -346,10 +354,57 @@
       if (vadModel) from.push(`huggingface.co/${VAD.id}`);
       save({ ear: true });
     }
-    save({ at: new Date().toISOString().slice(0, 10), from });
+    save({ at: new Date().toISOString().slice(0, 10), from, earCache: await hasTfCache() });
     try { await g.navigator.storage?.persist?.(); } catch { /* 保存を守る設定ができなくても動く */ }
     onProgress?.(1, '');
     return status();
+  }
+  // 入れるときの守り：空きを先に見る・入れているあいだ画面を消さない（Wake Lock）・失敗したら途中まで取った分を消す・エラーは日本語にする
+  const GB = 1024 ** 3;
+  async function room() {
+    try { const e = await g.navigator.storage?.estimate?.(); return e && e.quota ? (e.quota - (e.usage || 0)) / GB : null; } catch { return null; }
+  }
+  function friendly(e) {
+    const m = String(e?.message || e || '');
+    if (/quota|QuotaExceeded|storage|空き/i.test(m)) return '端末の空きが足りません。写真やアプリを消して空きを作ってから、もう一度押してください。';
+    if (/fetch|network|NetworkError|Load failed|ERR_/i.test(m)) return 'ネットから取ってこられませんでした。Wi-Fi につないで、画面を閉じずにもう一度押してください。';
+    if (/abort/i.test(m)) return '途中で止まりました。画面を閉じずに、もう一度押してください。';
+    if (/memory|Out of memory|RangeError/i.test(m)) return 'この端末のメモリでは動かせませんでした。ほかのアプリを閉じてから、もう一度押してください。';
+    return '入れられませんでした（' + m.slice(0, 80) + '）。';
+  }
+  async function safeInstall(onProgress, opts = {}) {
+    const before = status();
+    const need = opts.earOnly ? EAR.gb : plan().gb;
+    const free = await room();
+    if (free != null && free < need * 1.5) throw new Error(`端末の空きが足りません（あと約 ${Math.max(0.1, Math.round((need * 1.5 - free) * 10) / 10)}GB 要ります）。`);
+    let lock = null;
+    try { lock = await g.navigator.wakeLock?.request?.('screen'); } catch { lock = null; } // 画面が消えると取得が止まるため
+    try { return await install(onProgress, opts); }
+    catch (e) {
+      if (!before.llm) { try { await remove(); } catch { /* 片づけられなくても続ける */ } } // 初めて入れるのに失敗したら、途中まで取った分を残さない
+      throw new Error(/^端末の空き/.test(e?.message || '') ? e.message : friendly(e));
+    } finally { try { await lock?.release?.(); } catch { /* なくてよい */ } }
+  }
+  const hasTfCache = async () => { try { return (await g.caches.keys()).some((k) => /^transformers-cache/.test(k)); } catch { return false; } };
+  // 入れた AI がまだ端末にあるか（ブラウザは空きが少ないと保存したものを消すことがある）。消えていたら印を外す（黙って取り直さない）
+  async function present() {
+    const s = load();
+    const out = { llm: !!s.llm, ear: !!s.ear };
+    try {
+      if (s.llm && s.engine === 'cpu') { cpuLib = cpuLib || await import(here(VENDOR.cpu)); const l = await new cpuLib.CacheManager().list(); out.llm = l.some((f) => /\.gguf$/i.test(f.key || '') && f.size > 1e8); }
+      else if (s.llm) { const f = (await webllm()).hasModelInCache; if (typeof f === 'function') out.llm = !!(await f(s.llm)); }
+    } catch { /* 調べられないときは、あるものとして進める */ }
+    try { if (s.ear && s.earCache) { const ks = await g.caches.keys(); out.ear = ks.some((k) => /^transformers-cache/.test(k)) ? !!(await (await g.caches.open(ks.find((k) => /^transformers-cache/.test(k)))).keys()).length : false; } } catch { /* 同上 */ }
+    if (s.llm && !out.llm) save({ llm: '', engine: '' });
+    if (s.ear && !out.ear) save({ ear: false });
+    return { llm: !!s.llm && out.llm, ear: !!s.ear && out.ear, lost: (s.llm && !out.llm) || (s.ear && !out.ear) };
+  }
+  // 診断に使う、この端末の様子（会話の中身は入れない）
+  async function info() {
+    const a = await gpu().catch(() => null);
+    const st = status();
+    return { webgpu: a ? a.mode + (a.f16 ? '・f16' : '') : 'なし', isolated: !!g.crossOriginIsolated, threads: g.navigator?.hardwareConcurrency || 0, memoryGB: g.navigator?.deviceMemory || 0,
+      freeGB: await room().then((f) => (f == null ? null : Math.round(f * 10) / 10)), ai: st.llm ? st.llm + (st.cpu ? '（CPU）' : '') : 'なし', ear: st.ear ? EAR.label : 'なし' };
   }
   async function remove() {
     const s = load();
@@ -363,7 +418,7 @@
   }
 
   const LocalAI = {
-    MODELS, CPU, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, SAMPLING, KEEP, CTX, BUDGET, messages, plan, status, install, remove, session, listen, bargeIn,
+    MODELS, CPU, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, safeInstall, present, info, friendly, SAMPLING, KEEP, CTX, BUDGET, messages, plan, status, install, remove, session, listen, bargeIn,
     llmReady: () => !!load().llm,
     earReady: () => !!load().ear,
     prepareEar: () => (load().ear ? loadEar().catch(() => {}) : Promise.resolve()),
