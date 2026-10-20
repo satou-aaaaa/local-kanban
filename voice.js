@@ -174,10 +174,18 @@
   }
   // まとめて読み上げる。間で cancel せずに声の順番待ちに並べるので、文と文のあいだが空かない
   function speakAll(list, lang = 'ja-JP') {
-    const v = localVoice(lang);
     const parts = (Array.isArray(list) ? list : chunks(list)).map(speechText).filter(Boolean);
-    if (!v || !parts.length) return Promise.resolve(false); // 端末の中の声が無ければ読み上げず、画面の文字だけにする
+    if (!parts.length) return Promise.resolve(false);
     const { rate, pitch } = tune();
+    // 「気持ちで話し分ける声」（koe.js）を入れていれば、そちらで今の表情（Voice.mood）に合う気持ちで話す。だめなら端末の声
+    if (g.Koe && g.Koe.ready() && lang.startsWith('ja')) {
+      return g.Koe.speak(parts, { mood: api.mood, rate }).catch(() => synthSpeak(parts, lang, rate, pitch));
+    }
+    return synthSpeak(parts, lang, rate, pitch);
+  }
+  function synthSpeak(parts, lang, rate, pitch) {
+    const v = localVoice(lang);
+    if (!v) return Promise.resolve(false); // 端末の中の声が無ければ読み上げず、画面の文字だけにする
     return new Promise((ok) => {
       let done = false, base = 0;
       const end = (r) => { if (!done) { done = true; ok(r); } };
@@ -198,6 +206,11 @@
     });
   }
   const speak = (text, lang) => speakAll(chunks(text), lang);
+  function stop() {
+    try { g.Koe?.stop(); } catch { /* なくてよい */ }
+    try { g.speechSynthesis?.cancel(); } catch { /* なくてよい */ }
+  }
 
-  g.Voice = { parse, match, nearest, laneOf, listen, localStatus, install, speak, speakAll, speechText, chunks, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm };
+  const api = { mood: 'normal', stop, parse, match, nearest, laneOf, listen, localStatus, install, speak, speakAll, speechText, chunks, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm };
+  g.Voice = api;
 })(typeof window !== 'undefined' ? window : globalThis);

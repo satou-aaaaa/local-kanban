@@ -2,7 +2,7 @@
 //   ボードの HTML は公開しない（このリポジトリには置かない）。データのリポジトリ（非公開）の board/index.html＝毎日の写しを
 //   つないだあとに shim.js が読み、この端末に取っておく（LKBoot.save）。次に開いたときからは、それを画面にする（オフラインでも開ける）。
 //   まだ取っていないとき（初めて開いたとき）は、つなぐための小さな画面（SKELETON）を出す。
-//   どちらの場合も、頭に app.css・shim.js を、最後に voice.js・localai.js・talk.js・app.js を足す。
+//   どちらの場合も、頭に app.css・shim.js を、最後に voice.js・koe.js・localai.js・talk.js・app.js を足す。
 'use strict';
 (function () {
   const KEY = 'lk.board';
@@ -15,7 +15,7 @@
 <link rel="stylesheet" href="app.css">
 <script src="shim.js"></script>
 `;
-  const TAIL = '<script src="voice.js"></script>\n<script src="localai.js"></script>\n<script src="talk.js"></script>\n<script src="app.js"></script>\n';
+  const TAIL = '<script src="voice.js"></script>\n<script src="koe.js"></script>\n<script src="localai.js"></script>\n<script src="talk.js"></script>\n<script src="app.js"></script>\n';
   // まだボードを取っていないときの画面（app.js が当てにする部品だけ）
   const SKELETON = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>カンバン</title>
 <style>:root{--bg:#f3f4f1;--lane:#e8eae4;--card:#fff;--fg:#22261f;--muted:#62695d;--line:#d3d7cd;--you:#b5462f;--agent:#2f6b8a;--done:#5b7a3a;--warn:#a36a00}

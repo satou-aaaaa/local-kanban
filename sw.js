@@ -2,9 +2,9 @@
 // カードのデータ（api.github.com など他のサイト）と AI のモデル（Hugging Face など）には触らない（モデルは localai.js の部品が自分で保存する）。
 // 先にネットを見て、つながらないときだけ保存したものを使う（更新はすぐ届く）。
 // vendor/（同梱の AI 部品。数十MB）と bg/（壁紙の写真）は、一度取ったら保存したものを使う（中身は変わらない。スマホの通信量のため。見た目で選んだ写真だけ取る）。
-const CACHE = 'kanban-v15';
+const CACHE = 'kanban-v16';
 const VENDOR_CACHE = 'kanban-vendor';
-const SHELL = ['./', './index.html', './boot.js', './shim.js', './app.js', './app.css', './manifest.webmanifest', './icon-192.png', './icon-512.png', './qrcode.js', './voice.js', './localai.js', './talk.js'];
+const SHELL = ['./', './index.html', './boot.js', './shim.js', './app.js', './app.css', './manifest.webmanifest', './icon-192.png', './icon-512.png', './qrcode.js', './voice.js', './koe.js', './localai.js', './talk.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

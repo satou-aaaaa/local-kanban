@@ -99,6 +99,8 @@ Notion の代わりのメモ：https://satou-aaaaa.github.io/local-kanban/notes/
 - AI に渡すのは題・列・期限だけ（補足・履歴・リンクは渡さない）。AI が「消す」と言っても、アプリが「消しますか？」と聞き返してから。
 - 「終わり」「またね」で閉じる。名前・性格（AI への指示）・アイコン・色・声は「⚙ キャラの設定」で変えられる（端末に保存）。
 - **ポチが覚える**：「〇〇って呼んで」「〇〇って覚えて」で覚える。言い直しが2回あった言葉（例「ばっちり」＝済み）と、よく片づける時間帯（5回以上・半分以上のとき）も覚える。覚えたことは AI への指示とあいさつに使う（モデル自体は学び直さない）。置き場所はデータのリポジトリの `local-board/pochi-memory.json`（PC とスマホで同じ）。「何を覚えてる？」で聞ける。「〇〇を忘れて」「全部忘れて」か、設定の「ポチが覚えたこと」の「忘れる」で消す（中身ごと消し、消した印だけ残す）。
+- **気持ちで話し分ける声**（`koe.js`）：設定の「声を入れる」を押した端末だけ、ポチの表情（ふつう・うれしい・悲しい・驚き など）に合わせて7つの気持ちで話す。声の人は4人（女性2・男性2）から選ぶ。Style-Bert-VITS2 の JVNV モデルを Karume（WebGPU）で端末の中だけで動かす。モデル（1人 約250MB）と読みの辞書（約19MB）は押したときだけ Hugging Face から取り、ブラウザに保存する。WebGPU が無い端末・入れていない端末は端末の声（speechSynthesis）で話す。PC ではブラウザの保存場所（ふつう C ドライブ）に入るので、空きが少ないときは入れない。
+  - クレジット：声は [litagin/style_bert_vits2_jvnv](https://huggingface.co/litagin/style_bert_vits2_jvnv) を [hdae/karume-sbv2-jvnv](https://huggingface.co/hdae/karume-sbv2-jvnv) が変換・量子化（i8/i4）したもの。元のコーパス JVNV は Detai Xin, Junfeng Jiang, Shinnosuke Takamichi, Yuki Saito, Akiko Aizawa, Hiroshi Saruwatari（[arXiv:2310.06072](https://arxiv.org/abs/2310.06072)）。[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)。読みの辞書は naist-jdic（BSD 3-Clause）。
 - 外に出さない保証：ページの CSP で、通信できる先を自分のサイト・GitHub の API（カードの保存）・モデルの置き場（下）だけにしている。QA が会話中は外へ通信しないこと、モデルを取るときは置き場に GET するだけなことを確かめる。
 
 ### スマホでも AI と話す（端末の中の AI を入れる）
@@ -118,7 +120,7 @@ Notion の代わりのメモ：https://satou-aaaaa.github.io/local-kanban/notes/
 
 ## 直すとき
 
-- アプリだけの機能は `app.js`・`app.css`、データの読み書きは `shim.js`、画面の組み立ては `boot.js`（声の命令は `voice.js`、会話モードは `talk.js`、端末の中の AI は `localai.js`＋`vendor/`、QR は `qrcode.js`）。
+- アプリだけの機能は `app.js`・`app.css`、データの読み書きは `shim.js`、画面の組み立ては `boot.js`（声の命令は `voice.js`、会話モードは `talk.js`、気持ちで話し分ける声は `koe.js`＋`vendor/karume-models-…/`、端末の中の AI は `localai.js`＋`vendor/`、QR は `qrcode.js`）。
 - **ボードの画面・機能はここで直さない**（claude.ai のボードを直せば、書き出しのあとアプリにも入る）。app.js が当てにするボードの部品（`move`・`remove`・`say`・`render`・`openDetail`・`cards`・`#micBtn`・`#voice`・`#vstatus`・`.hbtns`・`#board` の `lane-<列>`・`#jump`・`#compose-btn`・`#toast-msg`・`#wall`・`WPS`）は `qa/board.fixture.html`（にせもののボード）に同じ名前で置いてある。ボードがこれを変えたら、データ側の `tools/local_board.py check` が止める。
 - ボードに壁紙が足されたら、写真を `bg/`（小さい見本は `bg/t/`）にも置く（QA が本物のボードで回すときに確かめる）。
 - データ側のリポジトリの `local-board/` に同じ部品の写し（`index.html` は `kanban.html`）がある。直したら両方そろえる。

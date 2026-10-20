@@ -113,7 +113,7 @@ const server = createServer((req, res) => {
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (p === '/favicon.ico') { res.writeHead(204); return res.end(); } // ブラウザが勝手に取りに行くだけ（アプリは使わない）
   if (p.startsWith('/vendor/')) {
-    vendorHits.push(p);
+    if (!/[?&]qa-import=1/.test(req.url)) vendorHits.push(p); // 検査がわざと読む（声の部品が読めるかの確認）ものは数えない
     if (fakeVendor && /web-llm/.test(p)) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(FAKE.llm); }
     if (fakeVendor && /transformers/.test(p)) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(FAKE.tf); }
   }
@@ -481,6 +481,27 @@ try {
   check(Math.abs(flow.got[0]?.rate - 1.2) < 1e-3 && Math.abs(flow.got[0]?.pitch - 0.9) < 1e-3, '🔊 決めた速さと高さで読む');
   check(flow.best === 'B (Enhanced)' && flow.chosen === 'A', `🔊 端末の中の声のうち、なめらかな声（Enhanced など）を先に選ぶ・選んだ声があればそれ（${flow.best}・${flow.chosen}）`);
   check(flow.long === 2, '🔊 長い文は分けて読む（Chrome が途中で止めないように）');
+  // 気持ちで話し分ける声（koe.js）：入れていれば表情の気持ちで話す・だめなら端末の声・部品は読み込めて取得元は固定
+  const koe = await mic.evaluate(async () => {
+    const got = [], said = [];
+    const kr = Koe.ready, ks = Koe.speak, sp = speechSynthesis.speak, cn = speechSynthesis.cancel;
+    speechSynthesis.cancel = () => {};
+    speechSynthesis.speak = (u) => { said.push(u.text); setTimeout(() => u.onend && u.onend(), 5); };
+    Koe.ready = () => true;
+    Koe.speak = async (parts, o) => { got.push({ parts, mood: o.mood }); return true; };
+    Voice.mood = 'happy'; await Voice.speakAll('やったね！済みにしたよ。');
+    Koe.speak = async () => { throw new Error('GPU が止まった'); };
+    await Voice.speakAll('だめでも話す。');
+    Koe.ready = kr; Koe.speak = ks; speechSynthesis.speak = sp; speechSynthesis.cancel = cn; Voice.mood = 'normal';
+    const lib = await import('./vendor/karume-models-0.14.0/sbv2.js?qa-import=1');
+    return { got, said, styles: [...new Set(Object.values(Koe.STYLE))].sort(), lib: ['Sbv2Pipeline', 'toSbv2Utterance', 'analyzeWithWords', 'getDictionary'].every((k) => typeof lib[k] === 'function'), rev: lib.SBV2_SOURCES['sbv2-jvnv'], installed: Koe.status().installed, credit: Koe.CREDIT };
+  });
+  check(koe.got.length === 1 && koe.got[0].mood === 'happy', `🎭 入れた声では、ポチの表情（うれしい）の気持ちで話す（${JSON.stringify(koe.got[0]?.mood)}）`);
+  check(koe.said.some((t) => /だめでも話す/.test(t)), '🎭 入れた声が動かないときは、端末の声で話す');
+  check(koe.styles.join() === 'Angry,Disgust,Fear,Happy,Neutral,Sad,Surprise', `🎭 7つの気持ちを全部使える（${koe.styles.join('・')}）`);
+  check(koe.lib && /^[0-9a-f]{40}$/.test(koe.rev?.revision || '') && koe.rev?.repo === 'hdae/karume-sbv2-jvnv', '🎭 声の部品（vendor）が読み込め、モデルの取得元はコミットで固定');
+  check(koe.installed === '', '🎭 声のモデルは押すまで入れない（PC でも勝手に取らない）');
+  check(/CC BY-SA 4\.0/.test(koe.credit) && /Takamichi/.test(koe.credit) && /litagin/.test(koe.credit), '🎭 クレジット（CC BY-SA 4.0・JVNV の作者・元のモデル）を出す');
   await mic.close();
 
   // ---------- 会話モード（talk.js）：耳・頭・口をにせものに差し替えて、流れと「外に出さない」を確かめる ----------
@@ -836,6 +857,7 @@ try {
     await pg.locator('#lkMenu [data-m=aiset]').click();
     await pg.waitForSelector('#talkSet[open]', { timeout: 5000 }).catch(() => {});
     check(await pg.isVisible('#aiGet'), 'つなぐ前の画面から「⋯ → 🎤と会話・AI の設定」で「AI の部品を入れる」ボタンにたどり着ける');
+    check(await pg.isVisible('#koeGet') && /声を入れる|WebGPU/.test((await pg.textContent('#koeGet')) + (await pg.textContent('#koeStat'))), `キャラの設定に「気持ちで話し分ける声」を入れるボタンがある（${await pg.textContent('#koeStat')}）`);
     {
       await pg.evaluate(() => { window.__try = []; speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }]; speechSynthesis.cancel = () => {}; speechSynthesis.speak = (u) => { window.__try.push(u.rate); setTimeout(() => u.onend && u.onend(), 5); }; });
       await pg.locator('#talkSetForm [name=rate]').fill('1.3');
