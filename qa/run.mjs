@@ -499,6 +499,11 @@ try {
   // A. AI なし：1枚ずつ読み上げ、「済み」「あとで」で動かし、「終わり」で閉じる
   {
     const { pg, outside } = await talkPage({ heard: ['済み', 'あとで', '終わり'] }, '会話 AI なし');
+    await pg.evaluate(() => {
+      window.__moods = []; window.__confetti = 0;
+      new MutationObserver(() => window.__moods.push(document.querySelector('#talkDlg').dataset.mood)).observe(document.querySelector('#talkDlg'), { attributes: true, attributeFilter: ['data-mood'] });
+      new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => { if (n.classList?.contains('confetti')) window.__confetti++; }))).observe(document.querySelector('#talkAva'), { childList: true });
+    });
     await pg.click('#talkBtn');
     await waitTalkEnd(pg);
     const spoken = await pg.evaluate(() => window.__spoken.join(''));
@@ -507,6 +512,8 @@ try {
     check(/AI を入れると/.test(await pg.textContent('#talkLog')), '会話（AI なし）：AI なしで話していることと、AI を入れられることを伝えた');
     const phr = await pg.evaluate(() => Talk.PHRASES.done);
     check(phr.some((p) => spoken.includes(p)), '会話（AI なし）：「済み」でほめた');
+    const moods = await pg.evaluate(() => ({ m: window.__moods, c: window.__confetti }));
+    check(moods.m.includes('happy') && moods.m.includes('listen') && moods.c > 0, `キャラの見た目：聞くときは耳を動かし、済みにしたら笑顔と紙吹雪（${[...new Set(moods.m)].join(',')}・紙吹雪 ${moods.c}）`);
     await waitCards((cs) => cs.find((c) => c.doc_id === 's1')?.lane === 'done' && cs.find((c) => c.doc_id === 's2')?.lane === 'later', '会話（AI なし）の「済み」「あとで」');
     check(!(await pg.evaluate(() => document.querySelector('#talkDlg').open)), '会話（AI なし）：「終わり」で閉じた');
     check(outside.length === 0, `会話（AI なし）：自分のサイトと GitHub 以外へ通信していない${outside.length ? '（' + outside.join(', ') + '）' : ''}`);
@@ -618,6 +625,29 @@ try {
     const h = await again.pg.evaluate(() => [Talk.habitText({ morning: 4, night: 1 }), Talk.habitText({ morning: 2, night: 1 }), Talk.habitText({ morning: 2, day: 2, evening: 2 })]);
     check(h[0] === '朝によく片づける' && h[1] === '' && h[2] === '', `ポチが覚える：よく片づける時間帯は5回以上・半分以上のときだけ覚える（${h.join('|')}）`);
     await again.pg.close();
+  }
+
+  // キャラの見た目：どの形にも まばたき・表情の口・演出の部品がある。動きを減らす設定では動かさない
+  {
+    const pg = await context.newPage();
+    await pg.emulateMedia({ reducedMotion: 'reduce' });
+    await pg.goto(base); await ready(pg);
+    const r = await pg.evaluate(() => {
+      const parts = ['.lid', '.m-normal', '.m-happy', '.m-open', '.m-surprise', '.m-sad', '.m-think', '.brow', '.ears', '.fx-think', '.fx-ring'];
+      const box = document.createElement('div'); box.id = 'talkDlg'; document.body.appendChild(box);
+      const miss = [];
+      for (const k of ['maru', 'kaku', 'shizuku']) { box.innerHTML = Talk.avatarSvg(k, '#3b82f6'); for (const p of parts) if (!box.querySelector(p)) miss.push(k + p); }
+      const ids = new Set([...document.querySelectorAll('radialGradient')].map((g) => g.id));
+      box.innerHTML = Talk.avatarSvg('maru', '#3b82f6') + Talk.avatarSvg('maru', '#3b82f6');
+      const two = new Set([...box.querySelectorAll('radialGradient')].map((g) => g.id)).size === 2;
+      const anim = getComputedStyle(box.querySelector('.lid')).animationName;
+      box.remove();
+      return { miss, two, anim, ids: ids.size };
+    });
+    check(r.miss.length === 0, `キャラの見た目：3つの形すべてに まばたき・6つの口・眉・耳・演出がある${r.miss.length ? '（無い: ' + r.miss.join(',') + '）' : ''}`);
+    check(r.two, 'キャラの見た目：同じ画面に2つ描いても色のぼかしの id がぶつからない');
+    check(r.anim === 'none', `キャラの見た目：「動きを減らす」設定ではまばたきなどを動かさない（${r.anim}）`);
+    await pg.close();
   }
 
   // C. 耳が無い端末：文字を打って話す。キャラの設定を変えられる

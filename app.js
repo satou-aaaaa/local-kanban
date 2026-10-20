@@ -290,6 +290,32 @@
     const box = $('#talkLog'); box.appendChild(d); while (box.children.length > 30) box.firstChild.remove(); box.scrollTop = box.scrollHeight;
   }
   const TALK_STATE = { starting: '準備しています…', listening: '聞いてるよ（話してね）', thinking: '考え中…', speaking: '話しています（割り込めます）', typing: '下の欄に打って話してね', off: '' };
+  // 表情（data-mood）。少しのあいだだけ見せて、ふつうに戻す。うれしいときは紙吹雪（動きを減らす設定のときは出さない）
+  let moodTimer = 0;
+  function setMood(m, hold = 2500) {
+    const d = $('#talkDlg'); if (!d) return;
+    if (!hold && moodTimer) return; // うれしい・驚いたを見せているあいだは、聞く・考える で消さない
+    d.dataset.mood = m;
+    clearTimeout(moodTimer); moodTimer = 0;
+    if (hold) moodTimer = setTimeout(() => { moodTimer = 0; d.dataset.mood = d.dataset.state === 'listening' ? 'listen' : 'normal'; }, hold);
+    if (m === 'happy' && !matchMedia('(prefers-reduced-motion: reduce)').matches) confetti();
+  }
+  function confetti() {
+    const box = $('#talkAva'); if (!box) return;
+    const cs = ['#f59e0b', '#22c55e', '#3b82f6', '#ec4899', '#a855f7'];
+    for (let i = 0; i < 14; i++) {
+      const p = document.createElement('i'); p.className = 'confetti';
+      p.style.setProperty('--x', (Math.random() * 160 - 80).toFixed(0) + 'px'); p.style.setProperty('--r', (Math.random() * 720 - 360).toFixed(0) + 'deg');
+      p.style.background = cs[i % cs.length]; p.style.animationDelay = (Math.random() * 0.15).toFixed(2) + 's';
+      box.appendChild(p); setTimeout(() => p.remove(), 1400);
+    }
+  }
+  // 口：読み上げの言葉の区切りで開け閉めする（区切りが来ない声では、話している間ずっと動かす）
+  let mouthTimer = 0;
+  addEventListener('voice:boundary', () => {
+    const d = $('#talkDlg'); if (!d?.open) return;
+    d.dataset.sync = '1'; d.classList.add('mouth-open'); clearTimeout(mouthTimer); mouthTimer = setTimeout(() => d.classList.remove('mouth-open'), 140);
+  });
   function drawTalkHead() { const t = talkSettings(); $('#talkAva').innerHTML = Talk.avatarSvg(t.icon, t.color); $('#talkName').textContent = t.name; }
   const order = l => L.LANES.findIndex(([k]) => k === l);
   function openTalk() {
@@ -307,7 +333,13 @@
       act: cmd => apply(cmd, false),
       pending: () => !!pending,
       onLine: talkLine,
-      onState: st => { $('#talkState').textContent = TALK_STATE[st] ?? ''; $('#talkDlg').classList.toggle('speaking', st === 'speaking'); if (st === 'off' && $('#talkDlg').open) $('#talkDlg').close(); },
+      onState: st => {
+        $('#talkState').textContent = TALK_STATE[st] ?? ''; $('#talkDlg').classList.toggle('speaking', st === 'speaking');
+        $('#talkDlg').dataset.state = st;
+        if (st === 'listening') setMood('listen', 0); else if (st === 'thinking') setMood('think', 0); else if (st !== 'speaking' && !moodTimer) setMood('normal', 0);
+        if (st === 'off' && $('#talkDlg').open) $('#talkDlg').close();
+      },
+      onMood: m => setMood(m),
       onMode: (m, brain, why) => {
         $('#talkMode').textContent = m === 'ai'
           ? '🧠 AI と話しています（' + (brain === 'webllm' ? '入れた WebLLM' : 'Chrome の内蔵 AI') + '・端末の中だけ）'

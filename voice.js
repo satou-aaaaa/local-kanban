@@ -151,6 +151,8 @@
         const u = new SpeechSynthesisUtterance(text); u.lang = v.lang; u.rate = 1.1;
         try { u.voice = v; } catch { /* 本物の声オブジェクトでないとき（検査）*/ }
         u.onend = () => ok(true); u.onerror = () => ok(false);
+        // 言葉の区切りごとに知らせる（キャラの口を合わせる。音そのものは読めないので区切りで動かす）
+        u.onboundary = (e) => { try { g.dispatchEvent(new CustomEvent('voice:boundary', { detail: { at: e.charIndex } })); } catch { /* なくてよい */ } };
         g.speechSynthesis.speak(u);
         setTimeout(() => ok(true), 400 + text.length * 250); // 読み上げが終わらない環境の保険
       } catch { ok(false); }
