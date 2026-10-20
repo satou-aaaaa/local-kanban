@@ -173,13 +173,15 @@
     return { rate: num('voice.rate', 1), pitch: num('voice.pitch', 1.05) };
   }
   // まとめて読み上げる。間で cancel せずに声の順番待ちに並べるので、文と文のあいだが空かない
+  let turn = 0;
   function speakAll(list, lang = 'ja-JP') {
     const parts = (Array.isArray(list) ? list : chunks(list)).map(speechText).filter(Boolean);
     if (!parts.length) return Promise.resolve(false);
     const { rate, pitch } = tune();
     // 「気持ちで話し分ける声」（koe.js）を入れていれば、そちらで今の表情（Voice.mood）に合う気持ちで話す。だめなら端末の声
     if (g.Koe && g.Koe.ready() && lang.startsWith('ja')) {
-      return g.Koe.speak(parts, { mood: api.mood, rate }).catch(() => synthSpeak(parts, lang, rate, pitch));
+      const id = ++turn; // 止めた後に失敗しても、端末の声で話し直さない
+      return g.Koe.speak(parts, { mood: api.mood, rate }).catch(() => (id === turn ? synthSpeak(parts, lang, rate, pitch) : false));
     }
     return synthSpeak(parts, lang, rate, pitch);
   }
@@ -207,6 +209,7 @@
   }
   const speak = (text, lang) => speakAll(chunks(text), lang);
   function stop() {
+    turn++;
     try { g.Koe?.stop(); } catch { /* なくてよい */ }
     try { g.speechSynthesis?.cancel(); } catch { /* なくてよい */ }
   }

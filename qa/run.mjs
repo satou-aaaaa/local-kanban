@@ -492,12 +492,15 @@ try {
     Voice.mood = 'happy'; await Voice.speakAll('やったね！済みにしたよ。');
     Koe.speak = async () => { throw new Error('GPU が止まった'); };
     await Voice.speakAll('だめでも話す。');
+    Koe.speak = () => new Promise((_, no) => setTimeout(() => no(new Error('止めた後に失敗')), 20));
+    const late = Voice.speakAll('止めたら話さない。'); Voice.stop(); await late;
     Koe.ready = kr; Koe.speak = ks; speechSynthesis.speak = sp; speechSynthesis.cancel = cn; Voice.mood = 'normal';
     const lib = await import('./vendor/karume-models-0.14.0/sbv2.js?qa-import=1');
     return { got, said, styles: [...new Set(Object.values(Koe.STYLE))].sort(), lib: ['Sbv2Pipeline', 'toSbv2Utterance', 'analyzeWithWords', 'getDictionary'].every((k) => typeof lib[k] === 'function'), rev: lib.SBV2_SOURCES['sbv2-jvnv'], installed: Koe.status().installed, credit: Koe.CREDIT };
   });
   check(koe.got.length === 1 && koe.got[0].mood === 'happy', `🎭 入れた声では、ポチの表情（うれしい）の気持ちで話す（${JSON.stringify(koe.got[0]?.mood)}）`);
   check(koe.said.some((t) => /だめでも話す/.test(t)), '🎭 入れた声が動かないときは、端末の声で話す');
+  check(!koe.said.some((t) => /止めたら話さない/.test(t)), '🎭 止めた後に入れた声が失敗しても、端末の声で話し出さない');
   check(koe.styles.join() === 'Angry,Disgust,Fear,Happy,Neutral,Sad,Surprise', `🎭 7つの気持ちを全部使える（${koe.styles.join('・')}）`);
   check(koe.lib && /^[0-9a-f]{40}$/.test(koe.rev?.revision || '') && koe.rev?.repo === 'hdae/karume-sbv2-jvnv', '🎭 声の部品（vendor）が読み込め、モデルの取得元はコミットで固定');
   check(koe.installed === '', '🎭 声のモデルは押すまで入れない（PC でも勝手に取らない）');

@@ -418,9 +418,10 @@
   }
   $('#koeGet').onclick = async () => {
     if (koeBusy || !window.Koe) return;
+    const model = $('#koeModel').value; // 描き直すと選択が戻るので先に取っておく
     koeBusy = true; drawKoe(); $('#koeProg').hidden = false; $('#koeProg').value = 0; $('#koeMsg').textContent = '取ってきています…（画面を閉じずに待ってね）';
     try {
-      await Koe.install($('#koeModel').value, p => { if (p.part === 'model' && p.total) $('#koeProg').value = p.loaded / p.total; });
+      await Koe.install(model, p => { if (p.part === 'model' && p.total) $('#koeProg').value = p.loaded / p.total; });
       $('#koeMsg').textContent = '入りました。これからはこの声で話します。';
     } catch (e) { $('#koeMsg').textContent = '入れられませんでした：' + (e.message || e); }
     finally { koeBusy = false; $('#koeProg').hidden = true; drawKoe(); }
