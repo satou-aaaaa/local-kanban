@@ -685,6 +685,7 @@ try {
     });
     check(!r.repeat && r.distinct >= 2, '会話（AI なし）：同じ言い回しを続けて言わない');
     check(r.kinds.length === 0 && r.greet === 0, `会話（AI なし）：どの返事にも言い回しが2つ以上ある${r.kinds.length ? '（' + r.kinds.join(',') + '）' : ''}`);
+    { const miss = await pg.evaluate(() => Object.values(Talk.PHRASES.greet).flat().filter((h) => !Talk.withName(h, 'ポテト').includes('、ポテト'))); check(miss.length === 0, `会話：どのあいさつにも呼び方が入る${miss.length ? '（入らない: ' + miss.join(' / ') + '）' : ''}`); }
     check(r.day === 'night,morning,day,evening,night', `会話：時間帯であいさつを変える（${r.day}）`);
     check(r.due === '期限すぎてるよ。|今日が期限だよ。|明日が期限。|期限は11月2日。', `会話：期限の言い方（${r.due}）`);
     check(r.big <= r.budget, `会話（入れた AI）：1往復だけでも長すぎるときは BUDGET に収める（${r.big}字）`);
