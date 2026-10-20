@@ -2,7 +2,7 @@
 
 データを外に置かないカンバンの PWA（GitHub Pages で公開）。使い方・鍵の作り方・安全のための決まりは README.md。
 
-- **画面は claude.ai のボードそのもの**：ボードの HTML（データ側の `board/index.html`＝毎日の写し）をつないだあとに読み、`boot.js` が画面にする。ボードの HTML はこのリポジトリに入れない（公開リポジトリ）。データの読み書きは `shim.js`（ボードの `window.claude.use("db")` の代わり）、アプリだけの機能は `app.js`・`app.css`。ボードの機能・見た目はここで作り直さない（ボードを直せばアプリにも入る）。声と命令欄の文の読み取りは `voice.js`（ほかのアプリからも使う。文型を変えたら qa/run.mjs の「声の文型」も直す）。会話モードは `talk.js`。気持ちで話し分ける声は `koe.js`（モデルはボタンを押したときだけ取る。クレジットを消さない）。スマホ向けの端末の中の AI は `localai.js`（同梱の部品は `vendor/`、版を上げる手順は `vendor/README.md`）。声・会話・AI は端末の中だけで動かし、外へ通信する部品を足さない（`index.html` の CSP の connect-src は、自分・GitHub の API・モデルの置き場だけ。広げない。worker-src は自分と blob:（wllama が中で作る worker）だけ。QA が見る）。モデルはボタンを押したときだけ取る。QR 表示だけ qrcode.js＝qrcode-generator 1.4.4、MIT を同梱。`sw.js`・`manifest.webmanifest`・アイコンは手書き。
+- **画面は claude.ai のボードそのもの**：ボードの HTML（データ側の `board/index.html`＝毎日の写し）をつないだあとに読み、`boot.js` が画面にする。ボードの HTML はこのリポジトリに入れない（公開リポジトリ）。データの読み書きは `shim.js`（ボードの `window.claude.use("db")` の代わり）、アプリだけの機能は `app.js`・`app.css`。ボードの機能・見た目はここで作り直さない（ボードを直せばアプリにも入る）。声と命令欄の文の読み取りは `voice.js`（ほかのアプリからも使う。文型を変えたら qa/run.mjs の「声の文型」も直す）。会話モードは `talk.js`（💬・🎤・Ctrl+K の入口は一つ＝会話の欄。命令もそこで打つ・話す。命令だけの欄を別に作らない）。気持ちで話し分ける声は `koe.js`（モデルはボタンを押したときだけ取る。クレジットを消さない）。スマホ向けの端末の中の AI は `localai.js`（同梱の部品は `vendor/`、版を上げる手順は `vendor/README.md`）。声・会話・AI は端末の中だけで動かし、外へ通信する部品を足さない（`index.html` の CSP の connect-src は、自分・GitHub の API・モデルの置き場だけ。広げない。worker-src は自分と blob:（wllama が中で作る worker）だけ。QA が見る）。モデルはボタンを押したときだけ取る。QR 表示だけ qrcode.js＝qrcode-generator 1.4.4、MIT を同梱。`sw.js`・`manifest.webmanifest`・アイコンは手書き。
 - **データ・鍵（トークン）・データのリポジトリの名前を、このリポジトリに入れない**（公開リポジトリ）。検査の見本データ（`qa/cards.sample.json`）も作り話だけにする。
 - `index.html`・`boot.js`・`shim.js`・`app.js`・`app.css`・`bg/`・`voice.js`・`koe.js`・`talk.js`・`localai.js`・`vendor/` を直したら、データ側のリポジトリの `local-board/` の同じ名前のファイル（`index.html` は `kanban.html`）も同じ中身にする。
 - カードの形を変えるときは、データ側の `local-board/cards.schema.json` と `tools/local_board.py` も合わせる。ポチが覚えたこと（`pochi-memory.json`）の形も同じく `local-board/pochi-memory.schema.json` と合わせる。
@@ -19,9 +19,9 @@ LK_BOARD=<board/index.html> node qa/run.mjs   # 本物のボードの写しで�
 
 - CI は Playwright の headless shell で回る（本物の Chrome より部品が少なく、本物の音声認識を呼ぶとタブごと落ちる）。CI だけ「Target crashed」で落ちたら、`PW_CHROMIUM` に headless shell（`chromium_headless_shell-*/…/headless_shell`）を指して再現する。端末の機能はにせものに替えて調べる（`qa/run.mjs` の先頭で全コンテキストに入れている）。
 - app.js が当てにするボードの部品（`move`・`remove`・`say`・`render`・`openDetail`・`cards`・`WPS`・`#micBtn`・`#voice`・`#vstatus`・`.hbtns`・`#board` の `lane-<列>`・`#jump`・`#compose-btn`・`#toast-msg`・`#toast-undo`・`#wall`・`dialog#detail`）は `qa/board.fixture.html` に同じ名前で置く。増やしたらにせものにも、データ側の `tools/local_board.py` の相性の検査にも足す。
-- アプリの部品（`#voiceTry`・`#lkMenu`・`#lkIntro`・`#lkStatus`・`#talkWhy`・`#cmdIn`・`#talkBtn`・`#talkDlg`・`#talkIn`・`#talkSetForm`・`#aiGet`・`#talkAiGet`・`#lkPick`・`#lkUnsent`・`#memList`・`#memAll`・`#voiceTry`・`#koeGet`・`#koeBox`）を変えたら `qa/run.mjs` も合わせて直す。
+- アプリの部品（`#voiceTry`・`#lkMenu`・`#lkIntro`・`#lkStatus`・`#talkWhy`・`#talkBtn`・`#talkDlg`・`#talkIn`・`#talkMic`・`#talkSetForm`・`#aiGet`・`#talkAiGet`・`#lkPick`・`#lkUnsent`・`#memList`・`#memAll`・`#voiceTry`・`#koeGet`・`#koeBox`）を変えたら `qa/run.mjs` も合わせて直す。
 - ボードに壁紙が足されたら写真を `bg/`・`bg/t/` に置く（本物のボードで回す QA が、ボードの `WPS` の写真がすべてあるかを見る）。
-- 切り替えボタン（選んだものに色が付くボタン）は、見た目のクラス `.on` と `aria-pressed` を必ず一緒に変える。QA が `aria-pressed` の付いたボタンを全部押して確かめる（2026-10-19 claude.ai のボードで印が変わらない不具合があった）。
+- 切り替えボタン（選んだものに色が付くボタン）は、見た目のクラス `.on` と `aria-pressed` を必ず一緒に変える。QA が見えている `aria-pressed` の付いたボタンを全部押して確かめる（2026-10-19 claude.ai のボードで印が変わらない不具合があった）。閉じた画面の中のもの（会話の欄の `#talkMic`）は、会話の検査で印を見る。
 
 ## 公開
 

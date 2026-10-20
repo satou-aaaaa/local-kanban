@@ -379,18 +379,21 @@ try {
     '{"type":"read","lane":"now"}', '{"type":"status","query":"請求書"}', '{"type":"status","query":"請求書"}'];
   parsed.forEach((p, i) => check(p === want[i], `声の文型 ${i + 1}: ${want[i]}（${p}）`));
 
-  // Ctrl+K の命令欄で列を移す
-  const cmd = async (t) => { await page.keyboard.press('Control+k'); await page.fill('#cmdIn', t); await page.press('#cmdIn', 'Enter'); };
+  // Ctrl+K で会話の欄に打って列を移す（命令も会話も同じ欄。2026-10-20 入口を一つにした）
+  const cmd = async (t) => { await page.keyboard.press('Control+k'); await page.fill('#talkIn', t); await page.press('#talkIn', 'Enter'); };
   await cmd('見本のカード（次にやる・毎週）を保留へ');
   await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold', 'Ctrl+K の「〇〇を保留へ」');
   check(lastCards().find((c) => c.doc_id === 's3')?.lane === 'hold', 'Ctrl+K の命令でカードが保留に移った');
+  check(await page.evaluate(() => document.querySelector('#talkDlg').open && !document.querySelector('#cmdDlg')), 'Ctrl+K は会話と同じ欄を開く（命令だけの欄は無い）');
+  await page.waitForFunction(() => /保留にしたよ/.test(document.querySelector('#talkLog').textContent), null, { timeout: 3000 }).catch(() => {});
+  check(/保留にしたよ/.test(await page.textContent('#talkLog')), `打った命令の結果をポチが一言で返す（${(await page.textContent('#talkLog')).slice(-60)}）`);
   // 消す前に聞き返す → はい で消す → 戻す で戻る
   await page.waitForTimeout(1500);
   const b4 = puts.length;
   await cmd('見本のカード（エージェント）を消して');
   await page.waitForTimeout(1600);
   check(puts.length === b4 && /消しますか/.test(await page.textContent('#toast-msg')), '「消して」はすぐ消さずに聞き返す');
-  await page.fill('#cmdIn', 'はい'); await page.press('#cmdIn', 'Enter');
+  await page.fill('#talkIn', 'はい'); await page.press('#talkIn', 'Enter');
   await waitCards((cs) => cs.find((c) => c.doc_id === 's4')?.deleted === true, '聞き返しへの「はい」');
   check(lastCards().find((c) => c.doc_id === 's4')?.deleted === true, '「はい」でカードが消えた（行は残る）');
   await page.waitForTimeout(1500);
@@ -406,8 +409,8 @@ try {
   check(/「見本のカード（エージェント）」はエージェント/.test(st) && /進めています/.test(st), `「〇〇はどうなった」で列と今の段を答える（${st}）`);
   await cmd('見本のカード（次にやる・毎週）を今やるへ');
   await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'now', '命令で今やるへ');
-  check(await page.isVisible('#toast-undo'), '命令で動かしたら「戻す」を出す');
-  await page.click('#toast-undo');
+  check(await page.isVisible('#talkLog .undo'), '命令で動かしたら、会話の返事に「戻す」を出す');
+  await page.click('#talkLog .undo >> nth=-1');
   await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold', '「戻す」を押す');
   check(lastCards().find((c) => c.doc_id === 's3')?.lane === 'hold', '「戻す」を押すと前の列に戻る');
   await page.waitForTimeout(1500);
@@ -468,6 +471,7 @@ try {
       start() { window.__local = this.processLocally === true; const t = window.__heard.shift(); setTimeout(() => { if (t) this.onresult({ results: [[{ transcript: t }]] }); this.onend(); }, 50); }
     }
     window.webkitSpeechRecognition = FakeSR; delete window.SpeechRecognition;
+    navigator.mediaDevices.getUserMedia = () => Promise.reject(new Error('検査ではマイクを使わない'));
     window.speechSynthesis.getVoices = () => [{ name: 'ネットの声', lang: 'ja-JP', localService: false }, { name: '端末の声', lang: 'ja-JP', localService: true }];
     window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => u.onend && u.onend(), 10); };
   });
@@ -482,7 +486,9 @@ try {
   const saved6 = JSON.parse(puts.slice(b6).find((p) => p.path === 'local-board/cards.json')?.text || '[]');
   const picked = saved6.filter((c) => c.lane === 'done' && c.moves?.at(-1)?.to === 'done' && c.moves?.at(-1)?.from !== null && c.doc_id !== 's5');
   check(picked.length === 1, `🎤「2番」で選んだカードが済みになった（${picked.map((c) => c.title).join('・') || 'なし'}）`);
-  check(spoken.some((t) => /済みにしました/.test(t)), '🎤 結果を読み上げた');
+  await mic.waitForFunction(() => window.__spoken.some((t) => /済みにした/.test(t)), null, { timeout: 3000 }).catch(() => {});
+  check((await mic.evaluate(() => window.__spoken)).some((t) => /済みにした/.test(t)), '🎤 結果を読み上げた');
+  check(await mic.evaluate(() => document.querySelector('#talkDlg').open && [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent).join('|') === '見本のカードを済み|2番'), '🎤 ボードの🎤も会話と同じ欄を開き、話したことを文字で同じ流れに残す');
   check(await mic.evaluate(() => Voice.localVoice()?.name === '端末の声'), '🎤 読み上げは端末の中の声を選ぶ（ネット経由の声は使わない）');
   check(await mic.evaluate(() => { const g = speechSynthesis.getVoices; speechSynthesis.getVoices = () => [{ name: 'ネットの声', lang: 'ja-JP', localService: false }]; const n = Voice.localVoice(); speechSynthesis.getVoices = g; return n === null; }), '🎤 端末の中の声が無ければ読み上げない');
   check(await mic.evaluate(() => window.__local), '🎤 端末の中だけで聞き取る設定（processLocally = true）で聞いた');
@@ -607,7 +613,7 @@ try {
     check(/内蔵 AI/.test(await pg.textContent('#talkMode')), '会話（AI）：内蔵 AI があれば使う');
     await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold' && cs.find((c) => c.doc_id === 's4')?.deleted === true, '会話（AI）の「保留」と「消す（はい）」');
     const spoken = await pg.evaluate(() => window.__spoken.join(''));
-    check(/消しますか/.test(spoken), '会話（AI）：AI が消すと言っても、すぐ消さずに聞き返した');
+    check(/消しますか|消していい/.test(spoken), '会話（AI）：消す前に、すぐ消さずに聞き返した');
     const prompts = await pg.evaluate(() => window.__prompts.join('\n'));
     check(prompts.includes('見本のカード（次にやる・毎週）') && !prompts.includes('見本の補足'), '会話（AI）：AI に渡すのは題・列・期限だけ（補足は渡さない）');
     check(!prompts.includes('はい'), '会話（AI）：消す確認への「はい」は AI ではなくアプリが受け取る');
@@ -738,6 +744,77 @@ try {
     check(await pg.evaluate(() => JSON.parse(localStorage.getItem('lk.talk')).icon === 'kaku'), 'キャラの設定：アイコンの選択を端末に保存した');
     await pg.click('#talkEnd');
     check(outside.length === 0, '会話（耳なし）：自分のサイトと GitHub 以外へ通信していない');
+    await pg.close();
+  }
+
+  // D. 入口を一つに（2026-10-20 satouさん「チャットと声で入力のやり方が違う。もっとシームレスに」）：
+  //    🎤で話しても、打っても、同じ欄・同じ流れに文字で残る。はっきりした命令は AI を待たずに動かし、それ以外は会話（AI）へ。
+  //    声には声で、打ったら文字だけで返す。打つと聞くのをやめ、🎤でまた聞く
+  {
+    const { pg, outside } = await talkPage({ heard: ['見本のカード（次にやる・毎週）を保留へ'], replies: [{ say: 'いいね、その調子！', action: null }] }, '一つの欄');
+    await pg.click('#micBtn');
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold', '一つの欄：🎤で言った命令');
+    await pg.waitForFunction(() => window.__spoken.some((t) => /保留にしたよ/.test(t)), null, { timeout: 5000 }).catch(() => {});
+    const a = await pg.evaluate(() => ({ spoken: window.__spoken.slice(), prompts: window.__prompts.length }));
+    check(a.spoken.some((t) => /保留にしたよ/.test(t)) && a.prompts === 0, `一つの欄：🎤で言ったはっきりした命令は AI を待たずに動かし、結果を声で一言返す（${a.spoken.join('／')}・AI ${a.prompts} 回）`);
+    await pg.waitForFunction(() => document.querySelector('#talkDlg').dataset.state === 'idle', null, { timeout: 5000 }).catch(() => {});
+    check(await pg.evaluate(() => document.querySelector('#talkMic').getAttribute('aria-pressed') === 'false' && !document.querySelector('#talkMic').classList.contains('on')), '一つの欄：しばらく何も聞こえなければ聞くのをやめ、🎤の印（aria-pressed と見た目）も消す');
+    const n0 = a.spoken.length;
+    await pg.fill('#talkIn', '今日はいい天気だね'); await pg.press('#talkIn', 'Enter');
+    await pg.waitForFunction(() => /その調子/.test(document.querySelector('#talkLog').textContent), null, { timeout: 5000 }).catch(() => {});
+    const b = await pg.evaluate(() => ({ you: [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent), log: document.querySelector('#talkLog').textContent, spoken: window.__spoken.length, prompts: window.__prompts.length }));
+    check(b.you.join('|') === '見本のカード（次にやる・毎週）を保留へ|今日はいい天気だね', `一つの欄：話したことも打ったことも、同じ流れに順に文字で残る（${b.you.join('|')}）`);
+    check(b.prompts === 1 && /その調子/.test(b.log), '一つの欄：命令でない言葉は会話として AI に渡し、返事を同じ流れに出す');
+    check(b.spoken === n0, '一つの欄：打ったときは文字だけで返す（声を出さない）');
+    await pg.evaluate(() => { window.__heard.push('終わり'); });
+    await pg.click('#talkMic');
+    check(await pg.evaluate(() => document.querySelector('#talkMic').getAttribute('aria-pressed') === 'true' || !document.querySelector('#talkDlg').open), '一つの欄：🎤を押すと、打っていた会話の続きを声で聞く');
+    await waitTalkEnd(pg);
+    check(!(await pg.evaluate(() => document.querySelector('#talkDlg').open)), '一つの欄：打つ⇄話すを切り替えたあとも「終わり」で閉じる');
+    check(outside.length === 0, '一つの欄：自分のサイトと GitHub 以外へ通信していない');
+    await pg.close();
+  }
+
+  // 人っぽく：同じ言い出しを続けない・2文まで・考えているあいだの相槌・出来た文から読み上げる
+  {
+    const pg = await context.newPage();
+    pg.on('pageerror', (e) => errors.push(`pageerror(人っぽく): ${e.message}`));
+    await pg.goto(base); await ready(pg);
+    const r = await pg.evaluate(async () => {
+      const t0 = performance.now(), ev = [];
+      speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }];
+      speechSynthesis.cancel = () => {};
+      speechSynthesis.speak = (u) => { ev.push(['speak', u.text, performance.now() - t0]); setTimeout(() => u.onend && u.onend(), 5); };
+      const wait = (ms) => new Promise((ok) => setTimeout(ok, ms));
+      const replies = [
+        ['{"say":"オッケー、牛乳ね。', '今やるに入れとく？ あと三つ目の文。","action":null}'],
+        ['{"say":"オッケー、じゃあ次。', 'どれにする？","action":null}'],
+      ];
+      window.LanguageModel = {
+        availability: async () => 'available',
+        create: async () => ({
+          async *promptStreaming() { const [a, b] = replies.shift(); await wait(900); ev.push(['chunk1', '', performance.now() - t0]); yield a; await wait(400); ev.push(['chunk2', '', performance.now() - t0]); yield b; },
+          prompt: async () => '{"say":"うん","action":null}', destroy() {},
+        }),
+      };
+      const lines = [];
+      const t = Talk.create({ settings: { ai: 'auto', bargeIn: false }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']], board: () => [], queue: () => [],
+        run: () => '', act: () => '', pending: () => false, onLine: (w, x) => lines.push([w, x]), onState() {} });
+      await t.start('text');
+      await t.hear('牛乳買わなきゃ', { voice: true });
+      await t.hear('うん', { voice: true });
+      t.stop();
+      const ai = lines.filter(([w]) => w === 'ai').map(([, x]) => x);
+      const pick = Talk.picker(); const acks = Array.from({ length: 30 }, () => pick('ack', Talk.PHRASES.ack));
+      return { ev, ai, aizuchi: Talk.PHRASES.aizuchi, acks, opens: ai.map((x) => Talk.opening(x)) };
+    });
+    const speaks = r.ev.filter((e) => e[0] === 'speak');
+    const c2 = r.ev.find((e) => e[0] === 'chunk2')?.[2] ?? 0;
+    check(r.aizuchi.includes(speaks[0]?.[1]), `人っぽく：AI が考えているあいだ（0.7 秒より長いとき）は相槌を打つ（${speaks[0]?.[1]}）`);
+    check(speaks[1] && speaks[1][2] < c2, `人っぽく：AI の返事は出来た文から読み上げ始める（1文目 ${Math.round(speaks[1]?.[2] ?? -1)}ms・残りが届く ${Math.round(c2)}ms）`);
+    check(!speaks.some((e) => /三つ目/.test(e[1])), `人っぽく：返事は2文までで切る（${speaks.map((e) => e[1]).join('／')}）`);
+    check(r.opens.length >= 2 && r.opens[0] !== r.opens[1], `人っぽく：直前と同じ言い出しを続けない（${r.ai.join('／')}）`);
+    check(!r.acks.some((x, i) => i && x === r.acks[i - 1]), '人っぽく：命令をやったときの最初の一言も、同じものを続けない');
     await pg.close();
   }
 
@@ -1056,7 +1133,7 @@ try {
   // （2026-10-19 claude.ai のボードで、表示だけ変わって印が変わらない不具合があった。shared-workflows incidents/2026-10-19-board-toggle-state.md）
   if (!REAL) {
     await phone.click('#lookBtn');
-    const groups = await phone.$$eval('[aria-pressed]', (bs) => [...new Set(bs.map((b) => b.parentElement))].map((p) => (p.id ? '#' + p.id : null)).filter(Boolean));
+    const groups = await phone.$$eval('[aria-pressed]', (bs) => [...new Set(bs.filter((b) => b.offsetParent !== null).map((b) => b.parentElement))].map((p) => (p.id ? '#' + p.id : null)).filter(Boolean)); // 閉じた画面の中のボタンは押せないので、見えている組だけ
     check(groups.includes('#look'), 'ボードの壁紙えらびが切り替えボタン（aria-pressed）になっている');
     for (const g of groups) {
       const n = await phone.$$eval(`${g} > [aria-pressed]`, (bs) => bs.length);
