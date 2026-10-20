@@ -90,6 +90,12 @@
     <label class="chk"><input type="checkbox" name="bargeIn"> 話の途中で割り込める（話している間だけマイクの音の大きさを端末の中で見る）</label>
     <label class="chk"><input type="checkbox" name="ai"> 端末の中の AI（Chrome の内蔵 AI か、下で入れた AI）があれば使う</label>
     <p class="help">声も会話も端末の外に出しません。AI が無い端末では、カードを1枚ずつ読み上げて「済み・あとで・保留・次」で片づけます。キャラの設定は、つないでいればデータのリポジトリにも置き、PC とスマホで同じになります。</p>
+    <fieldset id="memBox">
+      <legend>ポチが覚えたこと</legend>
+      <p class="help">会話で「〇〇って呼んで」「〇〇って覚えて」と言うと覚えます。言い直しが2回あった言葉と、よく片づける時間帯も覚えます。置き場所はデータのリポジトリの local-board/pochi-memory.json だけです（外には送りません）。会話で「〇〇を忘れて」と言っても消せます。</p>
+      <ul id="memList"></ul>
+      <div class="lk-actions"><button type="button" id="memAll" hidden>全部忘れる</button></div>
+    </fieldset>
     <fieldset id="aiBox">
       <legend>スマホでも AI と話す（端末の中の AI）</legend>
       <p id="aiStat" class="help"></p>
@@ -296,6 +302,7 @@
       // AI に渡すのは題・列・期限だけ（補足・履歴・リンクは渡さない）
       board: () => live().filter(c => c.lane !== 'done').sort((a, b) => order(a.lane) - order(b.lane) || (a.order || 0) - (b.order || 0)).map(c => ({ title: c.title, lane: c.lane, due: c.due || '' })),
       queue: () => ['now', 'next'].flatMap(laneCards),
+      memory: L.memory,
       run: t => runCommand(t),
       act: cmd => apply(cmd, false),
       pending: () => !!pending,
@@ -324,10 +331,20 @@
     $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{ maru: 'まる', kaku: 'しかく', shizuku: 'しずく' }[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
     const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
     f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
-    drawAi();
+    drawAi(); drawMem();
     $('#talkSet').showModal();
   }
   $('#talkSetBtn').onclick = openTalkSet;
+  function drawMem() {
+    const items = L.memory ? L.memory.all() : [];
+    const shown = items.filter(m => m.kind !== 'word' || (m.count || 0) >= (window.Talk?.WORD_MIN || 2)).filter(m => m.kind !== 'habit' || m.text);
+    $('#memList').innerHTML = shown.length
+      ? shown.map(m => `<li><span>${esc(m.kind === 'name' ? '呼び方：' + m.text : m.text)}</span> <button type="button" data-forget="${esc(m.id)}" aria-label="「${esc(m.text)}」を忘れる">忘れる</button></li>`).join('')
+      : '<li class="help">まだ何も覚えていません。</li>';
+    $('#memAll').hidden = !shown.length;
+  }
+  $('#memList').addEventListener('click', e => { const b = e.target.closest('[data-forget]'); if (!b || !L.memory) return; L.memory.forget(b.dataset.forget); drawMem(); });
+  $('#memAll').onclick = () => { if (!L.memory) return; L.memory.forgetAll(); drawMem(); };
   // まだ送っていない変更の数（オフラインなど）。送れたら消える
   setInterval(() => { const n = L.unsent ? L.unsent() : 0, el = $('#lkUnsent'); if (!el) return; el.hidden = !n; if (n) el.textContent = `未送信 ${n}件（つながったら自動で送ります）`; }, 1000);
   $('#talkAiGet').onclick = () => { openTalkSet(); $('#aiBox')?.scrollIntoView({ block: 'center' }); $('#aiGet')?.focus(); };

@@ -132,9 +132,10 @@
       },
     },
   };
-  function systemPrompt(s, lanes) {
+  function systemPrompt(s, lanes, memo = []) {
     return [
       `あなたは「${s.name}」。${s.persona}`,
+      ...(memo.length ? ['覚えていること（ユーザーが教えてくれたこと・よくあること。自然に活かす。毎回は口に出さない）:', ...memo.map((m) => '- ' + m)] : []),
       'ユーザーと声で話しながら、カンバンのカードを一緒に片づける相棒。電話で友だちと話すように、自然な話し言葉で返す。',
       '話し方：1〜2文で短く。まず相手の言ったことに一言反応してから続ける。同じ言い回しを繰り返さない。質問は1回に1つ。説明や箇条書きはしない。',
       '雑談や気持ちの話（疲れた・眠い・うれしい）にも短く付き合い、無理のない範囲で次のカードに戻す。済みにしたらほめる。',
@@ -152,8 +153,31 @@
     ['いまのボード:\n- [次にやる] 部屋の片づけ\n\nユーザー: 歯医者の予約するの忘れないようにしたい', { say: 'それ大事だね。「歯医者の予約」を今やるに足したよ。', action: { type: 'add', title: '歯医者の予約', lane: 'now' } }],
   ].map(([u, a]) => [u, JSON.stringify(a)]);
   // Prompt API の initialPrompts の形（指示＋見本）
-  function initialPrompts(s, lanes) {
-    return [{ role: 'system', content: systemPrompt(s, lanes) }, ...EXAMPLES.flatMap(([u, a]) => [{ role: 'user', content: u }, { role: 'assistant', content: a }])];
+  function initialPrompts(s, lanes, memo = []) {
+    return [{ role: 'system', content: systemPrompt(s, lanes, memo) }, ...EXAMPLES.flatMap(([u, a]) => [{ role: 'user', content: u }, { role: 'assistant', content: a }])];
+  }
+
+  // ---------- ポチが覚える（モデルは学び直さない。覚えたことを書きとめて、毎回の指示と返事に使う） ----------
+  // 書く → まとめる → 読む の繰り返し（AI エージェントの長期記憶の基本形）。全部は覚えず、
+  // 「覚えて」「〇〇って呼んで」と言われたとき・同じ言い直しが2回あったとき・よく片づける時間帯が分かったときだけ書く。
+  // 置き場所はデータのリポジトリの local-board/pochi-memory.json（shim.js）。本人が設定の画面か「〇〇を忘れて」で消せる。
+  const PART_LABEL = { morning: '朝', day: '昼', evening: '夕方', night: '夜' };
+  const SHORT_LABEL = { done: '済み', later: 'あとで', hold: '保留', now: '今やる', skip: '次' };
+  const WORD_MIN = 2; // 言い直しを覚えるまでの回数
+  function memoryLines(items) {
+    const out = [];
+    for (const m of items || []) {
+      if (m.kind === 'name') out.push(`ユーザーの呼び方: ${m.text}`);
+      else if (m.kind === 'word' && (m.count || 0) >= WORD_MIN) out.push(`「${m.word}」は「${SHORT_LABEL[m.means] || m.means}」の意味`);
+      else if (m.kind === 'habit' && m.text) out.push(m.text);
+      else if (m.kind === 'note') out.push(m.text);
+    }
+    return out.slice(-15);
+  }
+  function habitText(counts) {
+    const total = Object.values(counts || {}).reduce((a, b) => a + b, 0);
+    const [top, n] = Object.entries(counts || {}).sort((a, b) => b[1] - a[1])[0] || [];
+    return total >= 5 && n / total >= 0.5 ? `${PART_LABEL[top]}によく片づける` : '';
   }
 
   function create(host) {
@@ -161,6 +185,55 @@
     let on = false, speaking = false, stopVad = () => {}, stream = null, session = null, mode = 'script', brain = '', idx = 0, cur = null, doneCount = 0;
     const pick = picker();
     const log = (who, text) => host.onLine?.(who, text);
+    const M = host.memory || null;
+    const mem = () => { try { return M?.all() || []; } catch { return []; } };
+    let lastUnknown = '', lastLearned = '', askForgetAll = false;
+    const nameOf = () => mem().find((m) => m.kind === 'name')?.text || '';
+    function remember(item) { if (!M) return null; try { const r = M.put(item); lastLearned = r?.id || item.id || ''; return r; } catch { return null; } }
+    // 言い直しを覚える：分からなかった言葉のすぐあとに短い答えが来たら、その組を数える
+    function learnWord(word, means) {
+      if (!M || !word || word.length > 20) return;
+      const id = 'word:' + word;
+      const old = mem().find((m) => m.id === id && m.means === means);
+      const count = (old?.count || 0) + 1;
+      remember({ id, kind: 'word', word, means, count, text: `「${word}」は「${SHORT_LABEL[means]}」のこと` });
+      if (count === WORD_MIN) log('sys', `「${word}」は「${SHORT_LABEL[means]}」のことだと覚えました（設定の「ポチが覚えたこと」から消せます）。`);
+    }
+    function learnHabit() {
+      if (!M) return;
+      const old = mem().find((m) => m.id === 'habit') || { counts: {} };
+      const counts = { ...old.counts, [partOfDay()]: ((old.counts || {})[partOfDay()] || 0) + 1 };
+      M.put({ id: 'habit', kind: 'habit', counts, text: habitText(counts) });
+    }
+    const aliasOf = (t) => mem().find((m) => m.kind === 'word' && (m.count || 0) >= WORD_MIN && g.Voice.norm(m.word) === t)?.means || '';
+    // 「覚えて」「〇〇って呼んで」「〇〇を忘れて」「何を覚えてる？」。当てはまらなければ null
+    function memoryTalk(text) {
+      if (!M) return null;
+      const t = g.Voice.norm(text);
+      if (askForgetAll) {
+        askForgetAll = false;
+        if (/^(はい|うん|いいよ|お願い|消して)/.test(t)) { M.forgetAll(); return 'わかった、全部忘れたよ。また一から覚えるね。'; }
+        if (/^(いいえ|いや|やめ|だめ)/.test(t)) return 'よかった、そのまま覚えとくね。';
+      }
+      let m = t.match(/^(.{1,20}?)(って|と)呼んで(ね|ほしい)?$/);
+      if (m) { remember({ id: 'name', kind: 'name', text: m[1] }); return `オッケー、これから「${m[1]}」って呼ぶね。`; }
+      m = t.match(/^(?:覚えて(?:おいて|ね)?[、。:：\s]*)(.{2,80})$/) || t.match(/^(.{2,80}?)(って|と|を|のこと)?覚えて(おいて|ね|て)?$/);
+      if (m && !/^(何|なに)/.test(m[1])) { const r = remember({ kind: 'note', text: m[1] }); return r ? 'わかった、覚えとくね。' : null; }
+      if (/^(何|なに)を?覚えて(る|いる|ます)/.test(t) || /^覚えてること/.test(t)) {
+        const ls = memoryLines(mem());
+        return ls.length ? `覚えてるのは、${ls.slice(0, 5).join('、')}。` + (ls.length > 5 ? `ほか${ls.length - 5}つ。` : '') : 'まだ何も覚えてないよ。「〇〇って覚えて」で教えてね。';
+      }
+      m = t.match(/^(.{0,40}?)を?忘れて(ね|ほしい|いいよ)?$/);
+      if (m) {
+        const q = m[1];
+        if (/^(全部|ぜんぶ|すべて)$/.test(q)) { askForgetAll = true; return 'ほんとに全部忘れていい？ 「はい」か「いいえ」で。'; }
+        const all = mem();
+        const hit = /^(それ|今の|いまの|さっきの)?$/.test(q) ? all.find((x) => x.id === lastLearned) || all[all.length - 1] : all.find((x) => (x.text || '').includes(q) || (x.word || '') === q);
+        if (!hit) return `「${q}」は覚えてないみたい。`;
+        M.forget(hit.id); return `「${hit.text || hit.word}」は忘れたよ。`;
+      }
+      return null;
+    }
     const state = (st) => host.onState?.(st);
 
     async function say(text) {
@@ -199,6 +272,8 @@
       if (/^(ありがとう|ありがと|サンキュー|助かる|助かった)/.test(t)) return pick('thanks', PHRASES.thanks) + ' ' + (cur ? askCard() : '');
       if (/(疲れ|つかれ|しんどい|眠い|ねむい|だるい)/.test(t)) return pick('tired', PHRASES.tired);
       if (cur) {
+        const learned = aliasOf(t);
+        if (learned) return scripted(learned === 'skip' ? '次' : SHORT_LABEL[learned]);
         const short = [
           [/^(済み|すみ|済んだ|終わった|できた|やった|完了|はい|うん|片づけた|片付けた)$/, 'done'],
           [/^(あとで|後で|いつか|時間があるとき)$/, 'later'],
@@ -208,12 +283,13 @@
         ].find(([re]) => re.test(t));
         if (short) {
           const k = short[1];
+          if (lastUnknown) { learnWord(lastUnknown, k); lastUnknown = ''; }
           let r = '';
           if (k === 'skip') { idx++; r = pick('skip', PHRASES.skip); }
           else {
             const got = host.act(k === 'done' ? { type: 'done', card: cur } : { type: 'move', card: cur, lane: k });
             if (trouble(got)) return got;
-            if (k === 'done') { doneCount++; r = pick('done', PHRASES.done) + (doneCount >= 3 ? ` これで${doneCount}枚目！` : ''); }
+            if (k === 'done') { doneCount++; learnHabit(); r = pick('done', PHRASES.done) + (doneCount >= 3 ? ` これで${doneCount}枚目！` : ''); }
             else r = pick(k, PHRASES[k]);
             if (cur.lane === 'now' || cur.lane === 'next') idx++; // 列から外れたときは同じ番号のまま（次のカードが繰り上がる）
           }
@@ -221,7 +297,8 @@
         }
       }
       const cmd = g.Voice.parse(text, host.laneWords);
-      if (cmd && cmd.type !== 'unknown') return host.run(text) + (host.pending() ? '' : ' ' + askCard());
+      if (cmd && cmd.type !== 'unknown') { lastUnknown = ''; return host.run(text) + (host.pending() ? '' : ' ' + askCard()); }
+      lastUnknown = cur && t.length <= 20 ? t : '';
       return pick('again', PHRASES.again);
     }
 
@@ -244,7 +321,7 @@
         if (['done', 'move', 'delete', 'read', 'status'].includes(a.type)) { cmd.query = String(a.query || a.title || ''); if (a.type !== 'read' && !cmd.query) return out.say || 'どのカード？'; }
         if (a.type === 'move' || a.type === 'read') { if (!host.lanes[a.lane]) return out.say || 'どの列にする？'; cmd.lane = a.lane; }
         r = host.act(cmd);
-        if (a.type === 'done' && !trouble(r)) doneCount++;
+        if (a.type === 'done' && !trouble(r)) { doneCount++; learnHabit(); }
       }
       // 動かせた・読めたときは AI の返事、聞き返し（消す確認・候補）や見つからないときはアプリの文を優先
       if (r && a?.type === 'status') return r; // 様子はアプリがカードから答える（AI に作らせない）
@@ -266,7 +343,7 @@
         if (st === 'available' || st === 'downloadable' || st === 'downloading') {
           try {
             if (st !== 'available') log('sys', '端末の中の AI を準備しています（初回だけ、ブラウザが部品を入れます）…');
-            session = await LM().create({ ...LANG, initialPrompts: initialPrompts(s, host.lanes) });
+            session = await LM().create({ ...LANG, initialPrompts: initialPrompts(s, host.lanes, memoryLines(mem())) });
             mode = 'ai'; brain = 'builtin';
           } catch { session = null; }
         }
@@ -274,7 +351,7 @@
         if (mode !== 'ai' && g.LocalAI?.llmReady()) {
           try {
             log('sys', '端末の中の AI を読み込んでいます（数秒〜数十秒）…');
-            session = await g.LocalAI.session(systemPrompt(s, host.lanes), EXAMPLES);
+            session = await g.LocalAI.session(systemPrompt(s, host.lanes, memoryLines(mem())), EXAMPLES);
             if (session) { mode = 'ai'; brain = 'webllm'; }
           } catch { session = null; log('sys', '端末の中の AI を読み込めなかったので、AI なしで進めます。'); }
         }
@@ -284,7 +361,8 @@
       host.onMode?.(mode, brain, s.ai === 'off' ? 'off' : 'none');
       if (mode !== 'ai') log('sys', s.ai === 'off' ? 'AI は設定で切っています。決まった返事で1枚ずつ聞きます。' : 'いまは AI なし（決まった返事）です。⚙ キャラの設定で AI を入れると、自由に話せます。');
       const q = host.queue();
-      const hi = pick('greet', PHRASES.greet[partOfDay()]) + pick('hi', PHRASES.hi, { name: s.name });
+      const you = nameOf();
+      const hi = pick('greet', PHRASES.greet[partOfDay()]).replace(/[！!]$/, you ? `、${you}！` : '！') + pick('hi', PHRASES.hi, { name: s.name });
       const nowN = host.board().filter((c) => c.lane === 'now').length;
       const first = mode === 'ai'
         ? `${hi} 今やるは${nowN}枚${q[0] ? `、まずは「${q[0].title}」から？` : '。'}`
@@ -315,7 +393,7 @@
       log('you', text);
       if (END.test(g.Voice.norm(text))) { await say((doneCount ? `今日は${doneCount}枚片づけたね。` : '') + pick('bye', PHRASES.bye)); stop(); return; }
       state('thinking');
-      const reply = mode === 'ai' ? await smart(text) : scripted(text);
+      const reply = memoryTalk(text) ?? (mode === 'ai' ? await smart(text) : scripted(text));
       await say(reply);
       if (!fromLoop && on) state(g.Voice.supported ? 'listening' : 'typing');
     }
@@ -333,5 +411,5 @@
     return { start, stop, hear, get on() { return on; }, get speaking() { return speaking; }, set settings(v) { s = { ...DEFAULTS, ...v }; } };
   }
 
-  g.Talk = { create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, PHRASES, picker, partOfDay, dueWords, sentences };
+  g.Talk = { create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, PHRASES, picker, partOfDay, dueWords, sentences, memoryLines, habitText, WORD_MIN };
 })(typeof window !== 'undefined' ? window : globalThis);

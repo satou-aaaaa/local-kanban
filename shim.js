@@ -3,13 +3,13 @@
 // ここではそれを、データのリポジトリ（非公開）の local-board/cards.json を読み書きする形に差し替える。
 // ボードの HTML 自体も、データのリポジトリの board/index.html（毎日の写し）から読む（boot.js）。このリポジトリ（公開）にはボードを置かない。
 //   読む : local-board/cards.json（無ければ board/cards.json＝毎日の写し）・local-board/settings.json・board/today.json・board/index.html
-//   書く : local-board/cards.json・local-board/BOARD.md・local-board/settings.json だけ（board/ は毎日の書き出しが上書きするので触らない）
+//   書く : local-board/cards.json・local-board/BOARD.md・local-board/settings.json・local-board/pochi-memory.json だけ（board/ は毎日の書き出しが上書きするので触らない）
 // 置き場所は3通り：GitHub（端末に貼った鍵）・PC のフォルダ（File System Access API）・cards.json を選ぶ（保存はダウンロード）。
 // 鍵はこの端末の localStorage（lk.gh）にだけ置き、api.github.com 以外へは送らない。
 'use strict';
 (function () {
   const LOCAL = 'local-board/cards.json', BASE = 'board/cards.json', MD = 'local-board/BOARD.md';
-  const SETTINGS = 'local-board/settings.json', TODAY = 'board/today.json', BOARD_HTML = 'board/index.html';
+  const SETTINGS = 'local-board/settings.json', MEMORY = 'local-board/pochi-memory.json', TODAY = 'board/today.json', BOARD_HTML = 'board/index.html';
   const LANES = [['now', '今やる'], ['next', '次にやる'], ['wait', '予定待ち'], ['later', '時間があるとき'], ['hold', '保留'], ['agent', 'エージェントが進行中'], ['done', '済み']];
   // PC とスマホで同じにする設定（見た目・カードの文字の量・キャラ）。並べ替え・絞り込み・開いた列などは端末ごと
   const SYNC_KEYS = ['kanban-theme', 'kanban-pal', 'kanban-wp', 'kanban-veil', 'kanban-glass', 'kanban-daily', 'kanban-density', 'lk.talk', 'voice.name'];
@@ -274,6 +274,41 @@
     return { changed, newer: mine };
   }
 
+  // ================= ポチが覚えたこと（local-board/pochi-memory.json） =================
+  // 形：{ "updated": "...", "items": [{ id, kind: name|note|word|habit, text, at, ... }] }。忘れたものは { id, forgotten: true, at } だけ残す（中身は消す）。
+  // 端末どうしは id ごとに at が新しいほうを使う。最大 60 件（古いものから捨てる）
+  let memory = ls.get('memory') || { updated: '', items: [] }, memTimer = null;
+  const MEM_MAX = 60;
+  function mergeMemory(a, b) {
+    const by = {};
+    for (const it of [...(a?.items || []), ...(b?.items || [])]) { if (!it?.id) continue; const o = by[it.id]; if (!o || (it.at || '') >= (o.at || '')) by[it.id] = it; }
+    const items = Object.values(by).sort((x, y) => (x.at || '').localeCompare(y.at || ''));
+    const live = items.filter(i => !i.forgotten), dead = items.filter(i => i.forgotten).slice(-MEM_MAX);
+    return { updated: now(), items: [...dead, ...live.slice(-MEM_MAX)] };
+  }
+  function keepMemory() {
+    ls.set('memory', memory);
+    clearTimeout(memTimer);
+    memTimer = setTimeout(async () => {
+      if (!store?.canSave) return;
+      try { const t = await store.read(MEMORY); if (t) memory = mergeMemory(JSON.parse(t), memory); } catch {}
+      try { await store.write(MEMORY, JSON.stringify(memory, null, 2) + '\n', 'ポチが覚えたこと'); } catch {}
+    }, 1200);
+  }
+  const memoryApi = {
+    all: () => memory.items.filter(i => !i.forgotten).map(copy),
+    put(item) {
+      const it = { ...copy(item), id: item.id || 'm-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), at: now() };
+      for (const k of ['text', 'word']) if (typeof it[k] === 'string') it[k] = it[k].slice(0, 200);
+      memory = mergeMemory(memory, { items: [it] }); keepMemory(); return copy(it);
+    },
+    forget(id) { memory = mergeMemory(memory, { items: [{ id, forgotten: true, at: now() }] }); keepMemory(); },
+    forgetAll() { memory = mergeMemory(memory, { items: memory.items.filter(i => !i.forgotten).map(i => ({ id: i.id, forgotten: true, at: now() })) }); keepMemory(); },
+  };
+  async function loadMemory() {
+    try { const t = await store.read(MEMORY); if (t) { memory = mergeMemory(memory, JSON.parse(t)); ls.set('memory', memory); } } catch {}
+  }
+
   // ================= つなぐ =================
   let resolveDb; const dbReady = new Promise(r => { resolveDb = r; });
   async function connect(s) {
@@ -316,6 +351,7 @@
     }
     sessionStorage.removeItem('lk.reloaded');
     try { const t = await store.read(TODAY); today = t ? JSON.parse(t) : null; } catch { today = null; }
+    await loadMemory();
     // 前に開いたとき保存できなかった変更をかけ直す
     const kept = store.canSave ? ls.get('pending') : null;
     if (kept && kept.where === where() && Array.isArray(kept.ops) && kept.ops.length) {
@@ -383,7 +419,7 @@
 
   // ================= アプリ（app.js）から使う =================
   window.LK = {
-    LANES, SYNC_KEYS, ls, entry, unsent: () => (dirty ? ops.length : 0), ghStore, folderStore, fileStore, connect, reload, flush, undo: undoLast, writable,
+    LANES, SYNC_KEYS, ls, entry, memory: memoryApi, unsent: () => (dirty ? ops.length : 0), ghStore, folderStore, fileStore, connect, reload, flush, undo: undoLast, writable,
     get store() { return store; }, get ready() { return ready; }, get dirty() { return dirty; },
     get cards() { return cards; },
     add(body) { const id = newId(); return mutate({ kind: 'set', id, body }).then(() => id); },

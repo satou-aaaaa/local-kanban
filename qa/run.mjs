@@ -166,7 +166,7 @@ await context.route('https://api.github.com/**', async (route) => {
     const body = req.postDataJSON();
     if (failPuts) return route.fulfill({ status: 503, json: { message: 'unavailable' } });
     if (conflictOnce && path === 'local-board/cards.json') { conflictOnce = false; return route.fulfill({ status: 409, json: { message: 'conflict' } }); }
-    if (path === 'local-board/settings.json') files[path] = Buffer.from(body.content, 'base64').toString('utf8');
+    if (path === 'local-board/settings.json' || path === 'local-board/pochi-memory.json') files[path] = Buffer.from(body.content, 'base64').toString('utf8');
     puts.push({ path, body, text: Buffer.from(body.content, 'base64').toString('utf8') });
     return route.fulfill({ json: { content: { sha: `sha-${puts.length}` } } });
   }
@@ -184,6 +184,7 @@ page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 page.on('console', (m) => {
   if (m.type() !== 'error') return;
   if (/status of (409|503)/.test(m.text())) return; // 保存がぶつかった・届かなかったときの検査でわざと返す
+  if (/status of 404/.test(m.text()) && /pochi-memory\.json/.test(m.location()?.url || '')) return; // まだ何も覚えていない（初めは無いファイル）
   if (offline && /ERR_INTERNET_DISCONNECTED|Failed to fetch|Failed to load resource/.test(m.text())) return;
   errors.push(`console.error: ${m.text()}`);
 });
@@ -521,6 +522,7 @@ try {
         { say: '消すね', action: { type: 'delete', query: '見本のカード（エージェント）' } },
       ],
     }, '会話 AI');
+    await pg.evaluate(() => LK.memory.put({ id: 'qa-note', kind: 'note', text: '見本の覚えたこと' }));
     await pg.click('#talkBtn');
     await waitTalkEnd(pg);
     check(/内蔵 AI/.test(await pg.textContent('#talkMode')), '会話（AI）：内蔵 AI があれば使う');
@@ -533,6 +535,8 @@ try {
     const sys = await pg.evaluate(() => window.__system);
     check(/ポチ/.test(sys) && /タメ口/.test(sys), '会話（AI）：キャラの名前と性格を AI への指示に入れた');
     check(/"role":"assistant"/.test(sys) && /話し言葉/.test(sys), '会話（AI）：指示に話し方と返事の見本（few-shot）を入れた');
+    check(/覚えていること/.test(sys) && /見本の覚えたこと/.test(sys), '会話（AI）：ポチが覚えたことを AI への指示に入れた');
+    await pg.evaluate(() => LK.memory.forget('qa-note'));
     check(/🧠/.test(await pg.textContent('#talkMode')) && await pg.isHidden('#talkAiGet'), '会話（AI）：AI と話していることを会話の画面に出す');
     check(outside.length === 0, `会話（AI）：自分のサイトと GitHub 以外へ通信していない${outside.length ? '（' + outside.join(', ') + '）' : ''}`);
     await pg.close();
@@ -563,6 +567,57 @@ try {
     check(r.due === '期限すぎてるよ。|今日が期限だよ。|明日が期限。|期限は11月2日。', `会話：期限の言い方（${r.due}）`);
     check(/まとめ/.test(r.sys) && r.n === 1 + 2 + r.keep * 2 + 1 && r.first === String(40 - r.keep * 2) && r.last === 'いま', `会話（入れた AI）：覚えるのは直近 ${r.keep} 往復で、古い分はまとめにして渡す`);
     await pg.close();
+  }
+
+  // ポチが覚える：呼び方・「覚えて」・設定の画面で忘れる・次の会話で呼び方を使う・言い直しを覚える
+  {
+    const { pg, outside } = await talkPage({ sr: false }, '覚える');
+    await pg.click('#talkBtn');
+    await pg.waitForFunction(() => /打って/.test(document.querySelector('#talkState').textContent), null, { timeout: 10000 });
+    const type = async (t) => { await pg.fill('#talkIn', t); await pg.press('#talkIn', 'Enter'); await pg.waitForTimeout(150); };
+    await type('ポテトって呼んで');
+    await type('見本の豆知識って覚えて');
+    await pg.waitForTimeout(1600);
+    const saved = JSON.parse(files['local-board/pochi-memory.json'] || '{"items":[]}');
+    check(saved.items.some((i) => i.kind === 'name' && i.text === 'ポテト') && saved.items.some((i) => i.kind === 'note' && /見本の豆知識/.test(i.text)), 'ポチが覚える：「〇〇って呼んで」「〇〇って覚えて」をデータのリポジトリの pochi-memory.json に書いた');
+    await type('何を覚えてる');
+    check(/ポテト/.test(await pg.textContent('#talkLog')) && /見本の豆知識/.test(await pg.textContent('#talkLog')), 'ポチが覚える：「何を覚えてる？」で覚えたことを答える');
+    await pg.click('#talkEnd');
+    await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
+    const listed = await pg.textContent('#memList');
+    check(/ポテト/.test(listed) && /見本の豆知識/.test(listed), 'ポチが覚える：設定の画面に覚えたことの一覧を出す');
+    await pg.click('#memList button[aria-label*="見本の豆知識"]');
+    await pg.waitForTimeout(1600);
+    const after = files['local-board/pochi-memory.json'] || '';
+    check(!/見本の豆知識/.test(after) && /ポテト/.test(after), 'ポチが覚える：「忘れる」を押すと中身ごと消す（ほかは残す）');
+    await pg.click('#talkSetForm button[value=cancel]');
+    await pg.close();
+    check(outside.length === 0, 'ポチが覚える：自分のサイトと GitHub 以外へ通信していない');
+
+    const again = await talkPage({ sr: false }, '覚える2');
+    await again.pg.click('#talkBtn');
+    await again.pg.waitForFunction(() => window.__spoken.length > 0, null, { timeout: 10000 });
+    check(/ポテト/.test(await again.pg.evaluate(() => window.__spoken.join(''))), 'ポチが覚える：別の端末・次の会話でも覚えた呼び方であいさつする');
+    // 言い直し：分からなかった言葉のすぐあとに「済み」が2回来たら、その言葉を「済み」として覚える
+    const r = await again.pg.evaluate(async () => {
+      const store = []; const acts = [];
+      const mem = { all: () => store.filter((i) => !i.gone), put: (it) => { const x = { ...it, id: it.id || 'x' + store.length }; const k = store.findIndex((i) => i.id === x.id); if (k >= 0) store[k] = x; else store.push(x); return x; }, forget: (id) => { const x = store.find((i) => i.id === id); if (x) x.gone = true; }, forgetAll: () => store.forEach((i) => { i.gone = true; }) };
+      const cards = Array.from({ length: 6 }, (_, i) => ({ title: '見本' + i, lane: 'now' }));
+      const t = Talk.create({ settings: { ai: 'off', bargeIn: false }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']], memory: mem,
+        board: () => cards, queue: () => cards, run: () => '', act: (c) => { acts.push(c.type); return 'ok'; }, pending: () => false, onLine() {}, onState() {} });
+      await t.start();
+      for (const w of ['ばっちり', '済み', 'ばっちり', '済み', 'ばっちり']) await t.hear(w);
+      const learned = store.find((i) => i.kind === 'word');
+      await t.hear('ばっちりを忘れて');
+      const gone = !mem.all().some((i) => i.kind === 'word');
+      t.stop();
+      return { acts, learned, gone };
+    });
+    check(r.learned?.word === 'ばっちり' && r.learned?.count >= 2 && r.acts.length === 3, `ポチが覚える：言い直しが2回あった言葉を覚えて、3回目からはその意味で動かす（${JSON.stringify(r.learned)}・${r.acts.join(',')}）`);
+    check(r.gone, 'ポチが覚える：「〇〇を忘れて」で覚えた言葉を消す');
+    const h = await again.pg.evaluate(() => [Talk.habitText({ morning: 4, night: 1 }), Talk.habitText({ morning: 2, night: 1 }), Talk.habitText({ morning: 2, day: 2, evening: 2 })]);
+    check(h[0] === '朝によく片づける' && h[1] === '' && h[2] === '', `ポチが覚える：よく片づける時間帯は5回以上・半分以上のときだけ覚える（${h.join('|')}）`);
+    await again.pg.close();
   }
 
   // C. 耳が無い端末：文字を打って話す。キャラの設定を変えられる
