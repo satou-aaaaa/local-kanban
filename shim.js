@@ -259,7 +259,7 @@
     applying = true;
     try {
       for (const k of SYNC_KEYS) {
-        const their = d.at?.[k] || d.updated || '', ours = setAt[k] || '';
+        const their = d.at?.[k] || (d.values && k in d.values ? d.updated : '') || '', ours = setAt[k] || '';
         if (ours > their) { mine = true; continue; }
         let v = d.values[k];
         // 「自分の写真」は claude.ai の中にだけあるので、ここでは使えない（壁紙は「湖と山なみ」にする）

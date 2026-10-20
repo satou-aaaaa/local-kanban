@@ -298,7 +298,7 @@
     if (!hold && moodTimer) return; // うれしい・驚いたを見せているあいだは、聞く・考える で消さない
     d.dataset.mood = m;
     clearTimeout(moodTimer); moodTimer = 0;
-    if (hold) moodTimer = setTimeout(() => { moodTimer = 0; d.dataset.mood = d.dataset.state === 'listening' ? 'listen' : 'normal'; }, hold);
+    if (hold) moodTimer = setTimeout(() => { moodTimer = 0; d.dataset.mood = d.dataset.state === 'listening' ? 'listen' : d.dataset.state === 'thinking' ? 'think' : 'normal'; }, hold);
     if (m === 'happy' && !matchMedia('(prefers-reduced-motion: reduce)').matches) confetti();
   }
   function confetti() {
