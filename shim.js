@@ -431,7 +431,7 @@
 
   // ================= アプリ（app.js）から使う =================
   window.LK = {
-    LANES, SYNC_KEYS, ls, entry, memory: memoryApi, unsent: () => (dirty ? ops.length : 0), ghStore, folderStore, fileStore, connect, reload, flush, undo: undoLast, writable, as,
+    LANES, SYNC_KEYS, ls, entry, memory: memoryApi, unsent: () => (dirty ? ops.length : 0), ghStore, folderStore, fileStore, connect, reload, flush, undo: undoLast, writable, as, actor: () => actor,
     get store() { return store; }, get ready() { return ready; }, get dirty() { return dirty; },
     get cards() { return cards; },
     add(body) { const id = newId(); return mutate({ kind: 'set', id, body }).then(() => id); },

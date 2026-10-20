@@ -217,8 +217,8 @@
     if (!p.up.length && !p.down.length && !p.agent.length) return stale ? { text: `「${stale.title}」がしばらく止まってるね。どうする？`, changed: false } : null;
     L.ls.set('tidied', [...(L.ls.get('tidied') || []), ...p.up, ...p.down, ...p.agent].map(c => c.id ?? c).slice(-300));
     L.as('ポチ', () => {
-      for (const c of p.up) move(c.id, 'now', true);
-      for (const c of p.down) move(c.id, 'next', true);
+      for (const c of p.up) move(c.id, 'now', true, 'ポチ');
+      for (const c of p.down) move(c.id, 'next', true, 'ポチ');
       for (const c of p.agent) L.update(c.id, toAgent(c)).catch(() => {});
     });
     const q = l => l.map(c => `「${c.title}」`).join('と');
@@ -318,7 +318,7 @@
         }
         const lane = cmd.type === 'done' ? 'done' : cmd.lane;
         if (c.lane === lane) return reply(`「${c.title}」はもう${LANE_LABEL[lane]}です。`, voice);
-        move(c.id, lane);
+        move(c.id, lane, false, L.actor?.() || undefined); // くり返しのカードの次の回をボードが後から書くときも、ポチの名前で残す（ボード v42 以降）
         return reply(`「${c.title}」を${LANE_LABEL[lane]}にしました。`, voice, () => L.undo());
       }
       case 'status': {
