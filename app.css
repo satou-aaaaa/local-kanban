@@ -110,3 +110,15 @@ button,select,summary,a{touch-action:manipulation}
 #memList li{display:flex;justify-content:space-between;align-items:center;gap:8px}
 #memList button{min-height:44px}
 #koeBox select{max-width:100%}#koeProg{width:100%}#koeGet,#koeTry,#koeDel{min-height:44px}
+/* ボードの隅のポチ（app.js の drawPochi）。しゃべらない・吹き出しを出さない。済みで跳ねる・夜は眠そう */
+#lkPochi{position:fixed;left:max(12px,env(safe-area-inset-left,0px));bottom:max(12px,env(safe-area-inset-bottom,0px));z-index:15;width:56px;height:56px;padding:0;border:0;border-radius:50%;background:transparent;cursor:pointer;-webkit-tap-highlight-color:transparent}
+#lkPochi .ava{width:56px;height:56px;overflow:visible;filter:drop-shadow(0 2px 4px rgba(0,0,0,.25))}
+#lkPochi:focus-visible{outline:3px solid var(--agent,#3b82f6);outline-offset:2px}
+#lkPochi .fx-ring,#lkPochi .fx-think,#lkPochi .fx-sweat,#lkPochi .mouth:not(.m-normal),#lkPochi .eyes-happy{display:none}
+#lkPochi.hop{animation:lk-hop .9s ease-out}
+#lkPochi.hop .eye{display:none}#lkPochi.hop .eyes-happy{display:inline}
+@keyframes lk-hop{0%,100%{transform:translateY(0)}25%{transform:translateY(-18px)}45%{transform:translateY(0) scale(1.08,.92)}65%{transform:translateY(-8px)}}
+#lkPochi[data-night="1"] .lid{animation:none;transform:scaleY(.6)}
+#lkPochi[data-night="1"] .body{animation-duration:6s}
+@media (prefers-reduced-motion:reduce){#lkPochi.hop{animation:none}#lkPochi .body,#lkPochi .lid{animation:none!important}}
+@media print{#lkPochi{display:none}}
