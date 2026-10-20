@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- 外に出さない保証：通信できる先は自分のサイトと GitHub の API（カードの保存）と、モデルの置き場（「AI の部品を入れる」を押したときだけ）。声・会話・AI は端末の中で動く -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' file:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://api.github.com https://huggingface.co https://*.huggingface.co https://*.hf.co https://raw.githubusercontent.com; media-src 'self' blob:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' file:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://api.github.com https://huggingface.co https://*.huggingface.co https://*.hf.co https://raw.githubusercontent.com; media-src 'self' blob:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'">
 <title>カンバン</title>
 <!--
   Claude が使えないときに使うカンバン（PWA）。画面は claude.ai のボードそのもの。

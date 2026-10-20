@@ -53,8 +53,8 @@ check(shell.includes('./localai.js'), 'SHELL に localai.js がある（入れ�
 check(!shell.some((p) => p.includes('vendor/')), 'SHELL に vendor/（数十MB の AI 部品）を入れていない（使う人だけが取る）');
 // 同梱の AI 部品：localai.js が指すファイルがあり、ライセンスが添えてある
 const localai = readFileSync(resolve(root, 'localai.js'), 'utf8');
-const vendorFiles = [...localai.matchAll(/'(vendor\/[^']+)'/g)].map((m) => m[1]).flatMap((p) => (/\.(m?js)$/.test(p) ? [p] : [p + '.mjs', p + '.wasm']));
-check(vendorFiles.length === 4, `localai.js が指す同梱の部品を読めた（${vendorFiles.length}）`);
+const vendorFiles = [...localai.matchAll(/'(vendor\/[^']+)'/g)].map((m) => m[1]).flatMap((p) => (/\.(m?js|wasm)$/.test(p) ? [p] : [p + '.mjs', p + '.wasm']));
+check(vendorFiles.length === 6, `localai.js が指す同梱の部品を読めた（${vendorFiles.length}）`);
 for (const p of vendorFiles) {
   check(existsSync(resolve(root, p)), `同梱の部品 ${p} がある`);
   check(existsSync(resolve(root, dirname(p), 'LICENSE')), `同梱の部品 ${dirname(p)} に LICENSE がある`);
@@ -74,6 +74,7 @@ const connect = (csp.match(/connect-src ([^;]+)/) || [])[1]?.trim().split(/\s+/)
 const MODEL_HOSTS = ['https://huggingface.co', 'https://*.huggingface.co', 'https://*.hf.co', 'https://raw.githubusercontent.com'];
 check(connect.length > 0 && connect.every((x) => x === "'self'" || x === 'https://api.github.com' || MODEL_HOSTS.includes(x)), `CSP の connect-src は自分のサイト・GitHub の API・モデルの置き場だけ（${connect.join(' ') || 'なし'}）`);
 const isModelHost = (h) => h === 'huggingface.co' || h.endsWith('.huggingface.co') || h.endsWith('.hf.co') || h === 'raw.githubusercontent.com';
+check((csp.match(/worker-src ([^;]+)/) || [])[1]?.trim() === "'self' blob:", "CSP の worker-src は自分のサイトと blob:（CPU 版の AI が中で作る worker）だけ");
 check(/default-src 'self'/.test(csp), 'CSP の default-src は自分のサイトだけ');
 const sc = manifest.shortcuts || [];
 check(sc.length >= 3, `manifest に shortcuts が 3 つ以上ある（${sc.length}）`);
@@ -95,6 +96,13 @@ const FAKE = {
   return { chat: { completions: { create: async (req) => { window.__llmReq.push(req); return { choices: [{ message: { content: JSON.stringify(window.__llmReplies.shift() || { say: 'うん', action: null }) } }] }; } } }, unload() {} };
 }
 export async function deleteModelAllInfoInCache(id) { window.__deleted = id; }`,
+  cpu: `export class CacheManager { async clear() { window.__cpuCleared = true; } }
+export class Wllama {
+  constructor(paths, cfg) { window.__cpu = { wasm: paths.default, cfg }; this.cacheManager = new CacheManager(); }
+  async loadModelFromUrl(url, o) { Object.assign(window.__cpu, { url, gpuLayers: o.n_gpu_layers }); o.progressCallback?.({ loaded: 1, total: 2 }); await fetch(url); }
+  async createChatCompletion(req) { window.__llmReq.push(req); return { choices: [{ message: { content: JSON.stringify(window.__llmReplies.shift() || { say: 'うん', action: null }) } }] }; }
+  async exit() {}
+}`,
   tf: `export const env = { backends: { onnx: { wasm: {} } } };
 export class Tensor { constructor(type, data, dims) { Object.assign(this, { type, data, dims }); } }
 export async function pipeline(task, model, opts) {
@@ -115,6 +123,7 @@ const server = createServer((req, res) => {
   if (p.startsWith('/vendor/')) {
     if (!/[?&]qa-import=1/.test(req.url)) vendorHits.push(p); // 検査がわざと読む（声の部品が読めるかの確認）ものは数えない
     if (fakeVendor && /web-llm/.test(p)) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(FAKE.llm); }
+    if (fakeVendor && /wllama.*\.js$/.test(p)) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(FAKE.cpu); }
     if (fakeVendor && /transformers/.test(p)) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(FAKE.tf); }
   }
   if (p.endsWith('/')) p += 'index.html';
@@ -730,6 +739,9 @@ try {
       const out = {};
       try { const m = await import('./' + v.llm); out.llm = ['CreateMLCEngine', 'deleteModelAllInfoInCache'].filter((k) => typeof m[k] === 'function'); } catch (e) { out.llmErr = String(e); }
       try { const m = await import('./' + v.tf); out.tf = ['pipeline', 'Tensor'].filter((k) => typeof m[k] === 'function').concat(typeof m.AutoModel?.from_pretrained === 'function' ? ['AutoModel'] : [], m.env?.backends?.onnx?.wasm ? ['wasm'] : []); } catch (e) { out.tfErr = String(e); }
+      try { const m = await import('./' + v.cpu); out.cpu = ['Wllama', 'CacheManager'].filter((k) => typeof m[k] === 'function'); } catch (e) { out.cpuErr = String(e); }
+      const cw = await fetch('./' + v.cpuWasm).then((r) => r.arrayBuffer()).catch(() => null);
+      out.cpuWasm = !!cw && cw.byteLength > 1e6 && new Uint8Array(cw, 0, 4).join() === '0,97,115,109';
       const w = await fetch('./' + v.ort + '.wasm').then((r) => r.arrayBuffer()).catch(() => null);
       out.wasm = !!w && WebAssembly.validate(new Uint8Array(w));
       out.compiled = !!w && await WebAssembly.compile(w).then(() => true, (e) => String(e)); // CSP の 'wasm-unsafe-eval' で wasm を動かせる
@@ -738,6 +750,8 @@ try {
     check((got.llm || []).length === 2, `同梱の WebLLM を読み込めて、使う関数がある${got.llmErr ? '（' + got.llmErr + '）' : ''}`);
     check((got.tf || []).length === 4, `同梱の transformers.js を読み込めて、使う関数がある（${(got.tf || []).join(',')}${got.tfErr ? ' ' + got.tfErr : ''}）`);
     check(got.wasm === true, '同梱の ONNX Runtime の wasm が壊れていない');
+    check((got.cpu || []).length === 2, `同梱の wllama（CPU 版の頭）を読み込めて、使う関数がある${got.cpuErr ? '（' + got.cpuErr + '）' : ''}`);
+    check(got.cpuWasm === true, '同梱の wllama の wasm がある（壊れていない）');
     check(got.compiled === true, `CSP の下で wasm を動かせる（${got.compiled}）`);
     check(outside.length === 0, `部品を読み込むだけでは外へ通信しない${outside.length ? '（' + outside.join(', ') + '）' : ''}`);
     await pg.evaluate(() => caches.delete('kanban-vendor')); // 次の検査でにせものの部品を使うため
@@ -808,6 +822,67 @@ try {
     await pg.waitForFunction(() => /消しました/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 10000 }).catch(() => {});
     check(await pg.evaluate(() => !localStorage.getItem('lk.ai') && window.__deleted === 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC'), '端末の中の AI：「入れた AI を消す」でモデルと印を消した');
     check(await pg.evaluate(() => !Voice.supported), '端末の中の AI：消したら🎤も使えなくなる');
+    await pg.click('#talkSetForm button[value=cancel]');
+    await pg.evaluate(() => caches.delete('kanban-vendor'));
+    fakeVendor = false;
+    await pg.close();
+  }
+
+  // F. WebGPU が使えないスマホ（GPU が Chrome の対象外。2026-10-20 Pixel 6a で止まった）：CPU 版の頭（wllama）を入れて話す
+  {
+    fakeVendor = true;
+    const pg = await context.newPage();
+    pg.on('pageerror', (e) => errors.push(`pageerror(CPU 版の AI): ${e.message}`));
+    const net = [];
+    pg.on('request', (r) => { const u = new URL(r.url()); if (!/^127\.0\.0\.1(:\d+)?$/.test(u.host) && u.host !== 'api.github.com') net.push({ host: u.host, url: r.url(), method: r.method() }); });
+    await pg.route(/^https:\/\/([a-z0-9-]+\.)*(huggingface\.co|hf\.co)\//, (route) => route.fulfill({ json: {} }));
+    await pg.addInitScript(() => {
+      window.__heard = []; window.__spoken = []; window.__llmReq = []; window.__llmReplies = []; window.__asrCalls = []; window.__tried = [];
+      delete window.LanguageModel;
+      Object.defineProperty(navigator, 'gpu', { configurable: true, value: { requestAdapter: async (o) => { window.__tried.push(JSON.stringify(o || {})); return null; } } });
+      window.speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }];
+      window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => u.onend && u.onend(), 5); };
+      window.speechSynthesis.cancel = () => {};
+    });
+    await pg.goto(base);
+    await ready(pg);
+    await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
+    await pg.waitForFunction(() => /CPU で動く AI/.test(document.querySelector('#aiStat').textContent), null, { timeout: 5000 }).catch(() => {});
+    check(/WebGPU が使えないので、CPU で動く AI/.test(await pg.textContent('#aiStat')), `CPU 版の AI：WebGPU が使えない端末では、入れる前に CPU 版になる・ゆっくりと出す（${await pg.textContent('#aiStat')}）`);
+    const tried = await pg.evaluate(() => window.__tried);
+    check(tried.some((t) => /compatibility/.test(t)) && tried.some((t) => /low-power/.test(t)), `CPU 版の AI：あきらめる前に WebGPU を別の指定（互換モード・電力）でも探した（${tried.join(' ')}）`);
+    await pg.waitForFunction(() => /CPU で動かして|WebGPU が使えない/.test(document.querySelector('#koeStat')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+    check(/WebGPU が使えない/.test(await pg.textContent('#koeStat')) && (await pg.isDisabled('#koeGet')), `CPU 版の AI：気持ちの声は入れられない理由を出し、ボタンを押せなくする（${await pg.textContent('#koeStat')}）`);
+    check(net.length === 0, 'CPU 版の AI：ボタンを押す前はモデルを取りに行かない');
+    await pg.click('#aiGet');
+    await pg.waitForFunction(() => /入りました|入れられません/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 15000 }).catch(() => {});
+    const msg = await pg.textContent('#aiMsg');
+    check(/入りました/.test(msg), `CPU 版の AI：WebGPU が無くても「AI の部品を入れる」で入った（${msg}）`);
+    const cpu = await pg.evaluate(() => window.__cpu || {});
+    check(/Qwen2\.5-0\.5B-Instruct-GGUF\/resolve\/[0-9a-f]{40}\/qwen2\.5-0\.5b-instruct-q4_0\.gguf$/.test(cpu.url || '') && cpu.gpuLayers === 0 && /vendor\/wllama-[\d.]+\/wllama\.wasm$/.test(cpu.wasm || ''), `CPU 版の AI：Qwen 公式の GGUF（コミットで固定）を GPU なしで、同梱の wasm で動かす（${cpu.url}）`);
+    check(net.length > 0 && net.every((x) => isModelHost(x.host) && x.method === 'GET'), `CPU 版の AI：取りに行ったのはモデルの置き場だけで、GET だけ（${[...new Set(net.map((x) => x.method + ' ' + x.host))].join(', ')}）`);
+    check(/CPU で動かしています/.test(await pg.textContent('#aiStat')), 'CPU 版の AI：入れたあと、CPU で動かしていることを設定画面に出す');
+    await pg.click('#talkSetForm button[value=cancel]');
+    net.length = 0;
+    await pg.evaluate(() => {
+      window.__heard.push('毎週のやつ今やるにして', '終わり');
+      window.__llmReplies.push({ say: 'オッケー、今やるに入れたよ', action: { type: 'move', query: '見本のカード（次にやる・毎週）', lane: 'now' } });
+    });
+    await pg.click('#talkBtn');
+    await pg.waitForFunction(() => /AI と話して/.test(document.querySelector('#talkMode')?.textContent || ''), null, { timeout: 10000 }).catch(() => {});
+    check(/CPU で動かしています（ゆっくり）/.test(await pg.textContent('#talkMode')), `会話（CPU 版の AI）：CPU で動かしている（ゆっくり）と出す（${await pg.textContent('#talkMode')}）`);
+    await pg.fill('#talkIn', '毎週のやつ今やるにして').catch(() => {});
+    await pg.press('#talkIn', 'Enter').catch(() => {});
+    const t0 = Date.now();
+    while (Date.now() - t0 < 10000 && !(await pg.evaluate(() => window.__llmReq.length))) await pg.waitForTimeout(200);
+    const req = await pg.evaluate(() => window.__llmReq);
+    check(req.length >= 1 && req[0].response_format?.type === 'json_schema' && req[0].response_format.json_schema?.schema?.required?.includes('say') && req[0].temp === 0.7 && req[0].penalty_repeat === 1.1, `会話（CPU 版の AI）：JSON の形と返事の出し方を wllama の形で渡した（${JSON.stringify(req[0]?.response_format)?.slice(0, 80)}）`);
+    check(net.length === 0, `会話（CPU 版の AI）：会話中は外へ通信していない${net.length ? '（' + net.map((x) => x.url).join(', ') + '）' : ''}`);
+    await pg.evaluate(() => document.querySelector('#talkDlg')?.open && document.querySelector('#talkDlg').close());
+    await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
+    await pg.click('#aiDel');
+    await pg.waitForFunction(() => /消しました/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 10000 }).catch(() => {});
+    check(await pg.evaluate(() => !localStorage.getItem('lk.ai') && window.__cpuCleared === true), 'CPU 版の AI：「入れた AI を消す」でモデル（wllama の保存）と印を消した');
     await pg.click('#talkSetForm button[value=cancel]');
     await pg.evaluate(() => caches.delete('kanban-vendor'));
     fakeVendor = false;

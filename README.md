@@ -92,7 +92,7 @@ Notion の代わりのメモ：https://satou-aaaaa.github.io/local-kanban/notes/
 | 役 | 使うもの | 無いとき |
 | --- | --- | --- |
 | 耳 | 端末の中だけで聞き取る音声認識（Chrome 139 以降）。無い端末は、入れた Whisper | 下の欄に打って話す |
-| 頭 | Chrome の内蔵 AI（Prompt API。PC の Chrome、日本語は 149 以降。初回はブラウザが部品を入れる）。無い端末（スマホなど）は、入れた WebLLM（Qwen2.5） | AI なし：「今やる」「次にやる」を1枚ずつ読み上げ、「済み」「あとで」「保留」「次」で動かす |
+| 頭 | Chrome の内蔵 AI（Prompt API。PC の Chrome、日本語は 149 以降。初回はブラウザが部品を入れる）。無い端末（スマホなど）は、入れた WebLLM（Qwen2.5）。WebGPU が使えない端末は CPU で動く wllama（Qwen2.5 0.5B。返事はゆっくり） | AI なし：「今やる」「次にやる」を1枚ずつ読み上げ、「済み」「あとで」「保留」「次」で動かす |
 | 口 | 端末の中の声（「Google 日本語」などネット経由の声は使わない） | 画面の文字だけ |
 | 割り込み | 話している間だけマイクを端末の中で見て、声が続いたら止めて聞く（入れた Silero VAD。無ければ音の大きさを見る自作の VAD） | 割り込みなし |
 
@@ -110,11 +110,12 @@ Notion の代わりのメモ：https://satou-aaaaa.github.io/local-kanban/notes/
 | 役 | モデル | 取ってくる場所 |
 | --- | --- | --- |
 | 頭 | WebLLM で Qwen2.5（メモリ 8GB 以上の端末は 1.5B、それ以外は 0.5B） | huggingface.co/mlc-ai、モデル用 wasm は raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs |
+| 頭（WebGPU が使えない端末） | wllama（llama.cpp の wasm、CPU で動く）で Qwen2.5 0.5B Instruct の Q4_0 GGUF（約430MB、Apache-2.0） | huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF（コミットで固定） |
 | 耳 | Whisper base（端末内の音声認識が無い端末だけ。iPhone など） | huggingface.co/onnx-community/whisper-base |
 | 割り込み | Silero VAD（耳と一緒に入る） | huggingface.co/onnx-community/silero-vad |
 
-- 要るもの：WebGPU（Android は Chrome 121 以降・Android 12 以降、iPhone は iOS 26 以降）。使えない端末は「入れられませんでした」と出て、AI なしの会話のまま。
-- 動かす部品（WebLLM・transformers.js・ONNX Runtime）はこのリポジトリの `vendor/` に版を固定して同梱（出どころ・ライセンスは `vendor/README.md`）。
+- WebGPU（Android は Chrome 121 以降・Android 12 以降、iPhone は iOS 26 以降）があれば WebLLM。GPU が Chrome の対象外などで WebGPU が使えない端末（例：Pixel 6a）は、電力の指定違い・互換モードでも GPU を探し、それでもだめなら CPU 版（wllama）を入れる。CPU 版は1本のスレッドで動くので返事はゆっくり（GitHub Pages では多スレッドに要る COOP/COEP のヘッダを付けられないため）。Chrome のフラグ（unsafe-webgpu など）を変えるようには勧めない。気持ちで話し分ける声は WebGPU 必須のまま（使えない端末は端末の日本語の声で話す）。
+- 動かす部品（WebLLM・wllama・transformers.js・ONNX Runtime）はこのリポジトリの `vendor/` に版を固定して同梱（出どころ・ライセンスは `vendor/README.md`）。
 - 取りに行くのはモデルのファイルだけ。会話・カードは送らない。どこから取ったかは設定画面に出る。「入れた AI を消す」で端末から消せる。
 - 小さなモデルなので、カードの操作と短いやりとりは十分、長い雑談は苦手。返事まで数秒かかる。
 

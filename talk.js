@@ -380,7 +380,7 @@
           try {
             log('sys', '端末の中の AI を読み込んでいます（数秒〜数十秒）…');
             session = await g.LocalAI.session(systemPrompt(s, host.lanes, memoryLines(mem())), EXAMPLES);
-            if (session) { mode = 'ai'; brain = 'webllm'; }
+            if (session) { mode = 'ai'; brain = g.LocalAI.status().cpu ? 'cpu' : 'webllm'; }
           } catch { session = null; log('sys', '端末の中の AI を読み込めなかったので、AI なしで進めます。'); }
         }
       }
