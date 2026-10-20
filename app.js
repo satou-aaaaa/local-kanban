@@ -68,7 +68,7 @@
 <dialog id="talkDlg" class="lk" aria-labelledby="talkName">
   <div class="who"><span id="talkAva"></span><div><p id="talkName"></p><div id="talkState"></div><div id="talkMode" class="help"></div><button type="button" id="talkAiGet" hidden>🧠 AI を入れて自由に話す</button><progress id="talkAiProg" max="1" value="0" hidden></progress></div></div>
   <div id="talkLog" aria-live="polite"></div>
-  <form id="talkForm"><input id="talkIn" autocomplete="off" aria-label="ポチに話す" placeholder="打っても🎤で話してもOK（例：牛乳を買うを追加・済み・今やるを読んで）"><button type="button" id="talkMic" aria-pressed="false" aria-label="声で話す" title="声で話す（もう一度押すと止める）">🎤</button><button class="primary">送る</button></form>
+  <form id="talkForm"><input id="talkIn" autocomplete="off" aria-label="ポチに話す" placeholder="打っても🎤で話してもOK（例：牛乳を買うを追加・済み・今やるを読んで）"><button type="button" id="talkMic" aria-pressed="false" aria-label="声で話す" title="声で話す（押すと聞き続ける・もう一度押すと止める。長押しなら離すまで聞く）">🎤</button><button class="primary">送る</button></form>
   <div class="lk-actions"><button type="button" id="talkSetBtn">⚙ キャラの設定</button><button type="button" id="talkEnd">終わる</button></div>
 </dialog>
 <dialog id="talkSet" class="lk">
@@ -84,6 +84,9 @@
     <label>返事のしかた</label><select name="reply"><option value="match">声で話したら声で、打ったら文字で（おすすめ）</option><option value="voice">打っても声で返す</option><option value="text">いつも文字だけ（声を出さない）</option></select>
     <label class="chk"><input type="checkbox" name="tidy"> 話し始めたら、ポチがボードを自分で整理して報告する（期限すぎを今やるへ・今やるは3枚まで・Claude ができそうなものは Claude へ。「戻す」で戻せる）</label>
     <label class="chk"><input type="checkbox" name="bargeIn"> 話の途中で割り込める（話している間だけマイクの音の大きさを端末の中で見る）</label>
+    <label class="chk"><input type="checkbox" name="cue"> 聞き始め「ポン」・聞き終わり「ポロン」の音と短い振動（音は端末の中で作ります）</label>
+    <label class="chk"><input type="checkbox" name="waitMore"> 言いかけ（〜て・〜けど・えっと）で終わったら、答えずに続きを待つ</label>
+    <label class="chk"><input type="checkbox" name="followUp"> 前回の続きから話す（終わりに一言まとめて覚え、次に「昨日の〇〇、どうなった？」と聞く）</label>
     <label class="chk"><input type="checkbox" name="ai"> 端末の中の AI（Chrome の内蔵 AI か、下で入れた AI）があれば使う</label>
     <p class="help">声も会話も端末の外に出しません。AI が無い端末では、カードを1枚ずつ読み上げて「済み・あとで・保留・次」で片づけます。キャラの設定は、つないでいればデータのリポジトリにも置き、PC とスマホで同じになります。</p>
     <fieldset id="memBox">
@@ -333,16 +336,16 @@
 
   // 🎤：ボードの🎤は、会話の欄を開いてすぐ聞く（打つのと同じ流れ。命令ならカードを動かし、そうでなければ会話）。
   // 耳は端末の中の AI の耳も使える voice.js（声は端末の外に出さない）
-  function micGo() {
+  function micGo(via = 'voice') {
     if (!L.ready) return;
     if (!window.Voice?.supported) {
       const box = $('#voice'), vs = $('#vstatus'); if (box) box.hidden = false;
       if (vs) vs.textContent = '🎤は、この端末では使えません。「⋯ → 🎤と会話・AI の設定」で AI の部品を入れると使えます。打って話すなら💬から。';
       drawWhy(); return;
     }
-    openTalk('voice');
+    openTalk(via);
   }
-  $('#micBtn')?.addEventListener('click', e => { e.stopImmediatePropagation(); micGo(); }, true);
+  holdable($('#micBtn'), () => micGo('hold'), e => { e.stopImmediatePropagation(); micGo(); });
 
   // ---------- URL・共有・ショートカットから来た操作（つながってから1回だけ） ----------
   function runEntry() {
@@ -401,7 +404,7 @@
     if (!window.Talk || !L.ready) return;
     if (talk?.on) {
       if (!$('#talkDlg').open) $('#talkDlg').showModal();
-      if (via === 'voice' && !talk.listening) talk.listen(); else if (via === 'text') $('#talkIn').focus();
+      if (via === 'hold') talk.hold(); else if (via === 'voice' && !talk.listening) talk.listen(); else if (via === 'text') $('#talkIn').focus();
       return;
     }
     { const t = talkSettings(); try { for (const k of ['rate', 'pitch']) t[k] ? localStorage.setItem('voice.' + k, String(t[k])) : localStorage.removeItem('voice.' + k); } catch {} } // 速さ・高さはほかの端末で決めたものも使う
@@ -412,6 +415,7 @@
       // AI に渡すのは題・列・期限だけ（補足・履歴・リンクは渡さない）
       board: () => live().filter(c => c.lane !== 'done').sort((a, b) => order(a.lane) - order(b.lane) || (a.order || 0) - (b.order || 0)).map(c => ({ title: c.title, lane: c.lane, due: c.due || '' })),
       queue: () => ['now', 'next'].flatMap(laneCards),
+      card: title => live().find(c => c.title === title && c.lane !== 'done') || null, // 前回あとに回したカード（今やる・次にやる以外の列にあるとき）
       memory: L.memory,
       // 会話で動かしたものは、履歴に「ポチ」と残す
       run: t => L.as('ポチ', () => runCommand(t)),
@@ -420,7 +424,7 @@
       pending: () => !!pending,
       onLine: talkLine,
       onState: st => {
-        $('#talkState').textContent = TALK_STATE[st] ?? ''; $('#talkDlg').classList.toggle('speaking', st === 'speaking');
+        $('#talkState').textContent = st === 'listening' && talk?.holding ? '聞いてるよ（離したら答えるね）' : TALK_STATE[st] ?? ''; $('#talkDlg').classList.toggle('speaking', st === 'speaking');
         $('#talkDlg').dataset.state = st;
         const m = $('#talkMic'); if (m) { const on = st === 'listening' || !!talk?.listening; m.setAttribute('aria-pressed', String(on)); m.classList.toggle('on', on); m.hidden = !window.Voice?.supported; }
         if (st === 'listening') setMood('listen', 0); else if (st === 'thinking') setMood('think', 0); else if (st !== 'speaking' && !moodTimer) setMood('normal', 0);
@@ -442,14 +446,31 @@
     talk.start(via);
   }
   $('#talkBtn').onclick = () => openTalk('talk');
-  $('#talkMic').onclick = () => talk?.listen();
+  // 🎤：押すと聞き続ける（もう一度押すと止める）。長押しなら離すまで聞く（考えながら話しても途中で切らない）
+  const HOLD_MS = 350;
+  function holdable(el, onHold, onTap) {
+    if (!el) return;
+    let t = 0, held = false;
+    const up = () => { clearTimeout(t); if (held) talk?.release(); };
+    el.addEventListener('pointerdown', e => {
+      if (e.button) return;
+      held = false; clearTimeout(t);
+      try { el.setPointerCapture(e.pointerId); } catch {}
+      t = setTimeout(() => { held = true; onHold(); }, HOLD_MS);
+    });
+    for (const k of ['pointerup', 'pointercancel']) el.addEventListener(k, up);
+    addEventListener('pointerup', up); // 開いた会話の画面の上で離しても止める
+    el.addEventListener('contextmenu', e => e.preventDefault()); // 長押しでメニューを出さない
+    el.addEventListener('click', e => { if (held) { held = false; e.preventDefault(); e.stopImmediatePropagation(); return; } onTap?.(e); }, true);
+  }
+  holdable($('#talkMic'), () => talk?.hold(), () => talk?.listen());
   $('#talkEnd').onclick = () => { talk?.stop(); if ($('#talkDlg').open) $('#talkDlg').close(); };
   $('#talkDlg').addEventListener('cancel', () => talk?.stop());
   $('#talkForm').onsubmit = e => { e.preventDefault(); const t = $('#talkIn').value; $('#talkIn').value = ''; talk?.hear(t, { voice: false }); };
   function openTalkSet() {
     if (!window.Talk) { setStatus('会話の部品（talk.js）を読めませんでした。開き直してみてください。', 'err'); return; }
     const f = $('#talkSetForm'), t = talkSettings();
-    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.rate.value = t.rate || 1; f.pitch.value = t.pitch || 1.05; f.ai.checked = t.ai !== 'off'; f.reply.value = t.reply || 'match'; f.tidy.checked = t.tidy !== false;
+    f.name.value = t.name; f.persona.value = t.persona; f.color.value = t.color; f.bargeIn.checked = !!t.bargeIn; f.rate.value = t.rate || 1; f.pitch.value = t.pitch || 1.05; f.ai.checked = t.ai !== 'off'; f.reply.value = t.reply || 'match'; f.tidy.checked = t.tidy !== false; f.cue.checked = t.cue !== false; f.waitMore.checked = t.waitMore !== false; f.followUp.checked = t.followUp !== false;
     $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{ maru: 'まる', kaku: 'しかく', shizuku: 'しずく' }[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
     const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
     f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
@@ -580,7 +601,7 @@
   $('#talkSetForm').onsubmit = e => {
     if (e.submitter?.value !== 'ok') return;
     const f = e.target;
-    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value, bargeIn: f.bargeIn.checked, reply: f.reply.value, tidy: f.tidy.checked, ai: f.ai.checked ? 'auto' : 'off' };
+    const t = { name: f.name.value.trim() || Talk.DEFAULTS.name, persona: f.persona.value.trim() || Talk.DEFAULTS.persona, icon: f.icon.value || 'maru', color: f.color.value, voice: f.voice.value, rate: +f.rate.value, pitch: +f.pitch.value, bargeIn: f.bargeIn.checked, reply: f.reply.value, tidy: f.tidy.checked, cue: f.cue.checked, waitMore: f.waitMore.checked, followUp: f.followUp.checked, ai: f.ai.checked ? 'auto' : 'off' };
     try { localStorage.setItem('lk.talk', JSON.stringify(t)); } catch {} // localStorage へ直に書くと、PC とスマホで同じになる（shim.js が見ている）
     voicePrefs(t);
     if (talk) talk.settings = t;

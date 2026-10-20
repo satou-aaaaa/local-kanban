@@ -14,9 +14,22 @@
 (function (g) {
   'use strict';
 
+  // ---------- キャラ設定書（ポチの人物像の正。決まった返事・AI への指示・見本の会話はこれに合わせる） ----------
+  // Google の会話デザインの手引き（Create a persona）：性格を4〜6語にしぼり、1段落の人物像を書き、「この人ならどう言う？」で台詞を書く。
+  // 言わないこと（never）は、決まった返事と見本の会話に入っていないかを QA が見る（qa/run.mjs）
+  const PERSONA = {
+    first: 'ぼく',
+    traits: ['明るい', 'せかさない', 'ほめ上手', 'ちょっと食いしん坊', '犬っぽく素直'],
+    about: 'ボードの相棒の子犬。タメ口で、明るく短く話す。一緒に片づけるのが好きで、できたらちゃんとほめる。急かさず、疲れた日は休ませる。たまに食べものの話をする。',
+    habits: ['次に進むときは「よし、」', 'うれしいときは「やったね！」', '語尾はときどき「〜だね」「〜しよっか」'],
+    never: ['説教（「〜すべき」「〜しないと」）', '長い説明や箇条書き', '「〜しましょう」「〜してください」などのかしこまった言い方', '「承知しました」などの決まり文句'],
+    neverRe: /しましょう|すべき|しないとだめ|してください|承知しました|かしこまりました/,
+  };
+  // 前の版の決まった人物像（設定に保存されたまま残っている人は、新しい人物像に置きかえる）
+  const OLD_PERSONA = ['気さくな相棒。タメ口で、明るく短く話す。「今日どれからやる？」と一緒に進める友達のように。できたらちゃんとほめる。説教はしない。'];
   const DEFAULTS = {
     name: 'ポチ',
-    persona: '気さくな相棒。タメ口で、明るく短く話す。「今日どれからやる？」と一緒に進める友達のように。できたらちゃんとほめる。説教はしない。',
+    persona: PERSONA.about,
     icon: 'maru',
     color: '#f59e0b',
     voice: '',
@@ -24,16 +37,20 @@
     reply: 'match', // match = 声で話しかけたら声でも返し、打ったら文字だけ / voice = いつも声でも / text = いつも文字だけ
     tidy: true, // 話し始めたら、ポチがボードを自分で整理して報告する（host.tidy。「戻す」で戻せる）
     ai: 'auto', // auto = 端末の中の AI（内蔵 AI か、入れた WebLLM）があれば使う / off = 使わない
+    cue: true, // 聞き始め「ポン」・聞き終わり「ポロン」の音と短い振動（音は端末の中で作る。ファイルも通信も無し）
+    waitMore: true, // 言いかけ（〜て・〜けど・〜から・えっと）で終わったら、答えずに続きを聞いてつなげる
+    followUp: true, // 会話の終わりに一言まとめて覚え、次に開いたとき「昨日の〇〇、どうなった？」から始める
   };
+  const settingsOf = (v) => { const s = { ...DEFAULTS, ...(v || {}) }; if (!s.persona || OLD_PERSONA.includes(s.persona)) s.persona = PERSONA.about; return s; };
   const END = /^(終わり|おわり|おしまい|終わる|またね|バイバイ|ばいばい|ストップ|やめる|もういい)$/;
 
   // ---------- 返事の言い回し（AI なしのとき）。同じ文を続けて言わないように、毎回この中から選ぶ ----------
   // 人の会話のように言い回しを変えると機械っぽさが減る（Google の会話デザインの指針「Randomize prompts」）
   const PHRASES = {
     greet: { morning: ['おはよう！', 'おはよ〜！', '朝からえらいね！'], day: ['やっほー！', 'おつかれ！', 'こんにちは！'], evening: ['おつかれさま！', '今日もおつかれ！'], night: ['こんばんは！', '夜もおつかれさま。'] },
-    hi: ['{name}だよ。今日どれからやる？', '{name}です。一緒に片づけよっか。', '待ってたよ、{name}です。さっそく見ていこう。', '{name}だよ。ちゃちゃっと見ていこう！'],
+    hi: ['{name}だよ。今日どれからやる？', '{name}です。一緒に片づけよっか。', '待ってたよ、{name}です。さっそく見ていこう。', '{name}だよ。ちゃちゃっと見ていこう！', 'ぼく、{name}。今日もいっしょに片づけよっか。'],
     ask: ['次は「{t}」。済み？あとで？', '「{t}」はどうする？ 終わってる？', 'じゃあ「{t}」。済んだ？ まだなら「あとで」でもいいよ。', '「{t}」いってみよう。済み、あとで、保留、どれ？'],
-    done: ['やったね！', 'えらい！', 'ナイス！', 'いいね、1枚へった！', 'さすが！', 'おお、早い！'],
+    done: ['やったね！', 'えらい！', 'ナイス！', 'いいね、1枚へった！', 'さすが！', 'おお、早い！', 'やったね！ ごほうびのおやつ気分！'],
     later: ['りょうかい、あとでにしとくね。', 'オッケー、後回しね。', '無理しなくていいよ、あとでにしとく。'],
     hold: ['保留にしたよ。', '止めておくね。', 'いったん保留ね。'],
     now: ['今やるに入れたよ。', 'オッケー、今やるね。'],
@@ -47,7 +64,7 @@
     // 命令をやったときの最初の一言
     ack: ['オッケー、', 'うん、', '了解、', 'はーい、', 'よし、', 'わかった、'],
     thanks: ['どういたしまして！', 'いえいえ、こっちこそ！', 'どういたしまして。続けよっか。'],
-    tired: ['おつかれ。ひと息ついてもいいよ。', '無理しないでね。あと1枚だけやってみる？', 'がんばってるね。休んでも大丈夫だよ。'],
+    tired: ['おつかれ。ひと息ついてもいいよ。', '無理しないでね。あと1枚だけやってみる？', 'がんばってるね。休んでも大丈夫だよ。', 'おつかれ。ぼくもおやつ休憩したいな。ひと息つこ？'],
     bye: ['オッケー、またね！', 'おつかれさま！また呼んでね。', '今日もありがとう、またね！'],
   };
   // 同じ種類の言い回しを続けて選ばない
@@ -200,6 +217,8 @@
   function systemPrompt(s, lanes, memo = []) {
     return [
       `あなたは「${s.name}」。${s.persona}`,
+      `一人称は「${PERSONA.first}」。性格：${PERSONA.traits.join('・')}。口ぐせ：${PERSONA.habits.join('／')}。`,
+      `言わないこと：${PERSONA.never.join('・')}。`,
       ...(memo.length ? ['覚えていること（ユーザーが教えてくれたこと・よくあること。自然に活かす。毎回は口に出さない）:', ...memo.map((m) => '- ' + m)] : []),
       'ユーザーと声で話しながら、カンバンのカードを一緒に片づける相棒。電話で友だちと話すように、自然な話し言葉で返す。',
       '話し方：1〜2文で短く。まず相手の言ったことに「うん」「そっか」「なるほど」などの相槌か一言の反応をしてから続ける。直前と同じ言い出しや言い回しを繰り返さない。分からないときは短く聞き返す。質問は1回に1つ。説明や箇条書きはしない。',
@@ -236,6 +255,7 @@
       else if (m.kind === 'word' && (m.count || 0) >= WORD_MIN) out.push(`「${m.word}」は「${SHORT_LABEL[m.means] || m.means}」の意味`);
       else if (m.kind === 'habit' && m.text) out.push(m.text);
       else if (m.kind === 'note') out.push(m.text);
+      else if (m.kind === 'last' && m.text) out.push(`前回の会話：${m.text}`);
     }
     return out.slice(-15);
   }
@@ -245,11 +265,70 @@
     return total >= 5 && n / total >= 0.5 ? `${PART_LABEL[top]}によく片づける` : '';
   }
 
+  // ---------- 言いかけ：聞き取った文が話の途中で終わっていたら、答えずに続きを聞く ----------
+  // 声の AI の部品 LiveKit は、聞き取った文から「話し終わったか」を見て、終わっていなさそうなら待ちを延ばす（英語用なので、日本語は語尾の決まりで作る）。
+  // 「〜して」「〜を追加して」のような頼みごと（命令の文型に当たるもの・覚えて・忘れて など）は言い終わりとみなす
+  const ASK_END = /(覚えて|忘れて|呼んで|待って|やめて|止めて|教えて|聞いて|見せて|読んで|やって|やらせて|回して|任せて|足して|入れて|消して|戻して|動かして|して|といて|ておいて|どいて)$/;
+  const FILLER = /(えっと|えーと|えーっと|ええと|あのー?|あの〜|うーん|んーと|それで|でね)$/;
+  function unfinished(text, isCommand = () => false) {
+    const t = String(text || '').trim();
+    if (!t || t.length > 80 || END.test(t)) return false;
+    if (/[、,…]$/.test(t)) return true;
+    const u = t.replace(/[。．！？!?\s]+$/, '');
+    if (FILLER.test(u)) return true;
+    if (!/(けど|けれど|けども|から|ので|て|んで|いで)$/.test(u)) return false; // 「あとで」「これで」のような「で」は言い終わり
+    return !ASK_END.test(u) && !isCommand(u);
+  }
+  // 言いかけと続きをつなぐ（最後の「えっと」「、」は落とす）
+  function joinHeard(a, b) {
+    const head = String(a || '').trim().replace(/[、,…\s]+$/, '').replace(FILLER, '').replace(/[、,…\s]+$/, '');
+    return head ? (head + (/[てでどらの]$/.test(head) ? '、' : '') + String(b || '').trim()) : String(b || '').trim();
+  }
+
+  // ---------- 合図の音（B4）。「ポン」＝聞くよ、「ポロン」＝聞いたよ。音は WebAudio でその場で作る（ファイルも通信も無し） ----------
+  // Google の手引き（Earcons）：合図の音は意味がすぐ分かるものを少しだけ、短く、いつも同じ場面で
+  const cueLog = []; // 検査用（鳴らした合図の種類。最新 10 個）
+  let cueAc = null;
+  function playCue(kind) {
+    cueLog.push(kind); if (cueLog.length > 10) cueLog.shift();
+    try { g.navigator?.vibrate?.(kind === 'start' ? 15 : [10, 60, 10]); } catch { /* 震えない端末もある */ }
+    try {
+      const AC = g.AudioContext || g.webkitAudioContext;
+      if (!AC) return Promise.resolve();
+      cueAc = cueAc || new AC();
+      if (cueAc.state === 'suspended') cueAc.resume().catch(() => {});
+      const t0 = cueAc.currentTime + 0.01;
+      const notes = kind === 'start' ? [[880, 0]] : [[660, 0], [990, 0.09]];
+      for (const [f, d] of notes) {
+        const o = cueAc.createOscillator(), v = cueAc.createGain();
+        o.type = 'sine'; o.frequency.value = f;
+        v.gain.setValueAtTime(0.0001, t0 + d);
+        v.gain.exponentialRampToValueAtTime(0.12, t0 + d + 0.012);
+        v.gain.exponentialRampToValueAtTime(0.0001, t0 + d + 0.14);
+        o.connect(v); v.connect(cueAc.destination);
+        o.start(t0 + d); o.stop(t0 + d + 0.16);
+      }
+    } catch { /* 鳴らなくても会話は続ける */ }
+    // 聞き始めは音が鳴り終わってからマイクを開く（自分の合図を声と取り違えない）
+    return new Promise((r) => setTimeout(r, kind === 'start' ? 180 : 0));
+  }
+
+  // ---------- 前回の続き（C1）。会話の終わりに一言まとめて覚え、次は「昨日の〇〇、どうなった？」から ----------
+  const md = (d) => `${d.getMonth() + 1}/${d.getDate()}`;
+  function dayWord(at, now = new Date()) {
+    const d = new Date(at); if (isNaN(d)) return 'この前の';
+    const day = (x) => Math.floor((new Date(x.getFullYear(), x.getMonth(), x.getDate())) / 864e5);
+    const diff = day(now) - day(d);
+    return diff <= 0 ? 'さっきの' : diff === 1 ? '昨日の' : 'この前の';
+  }
+
   // 1回ごとの速さ（聞き取り・考え・話し始めの秒数）。会話の中身は入れない。「この端末の診断」で使う（最新 20 回）
   const metrics = [];
   function create(host) {
-    let s = { ...DEFAULTS, ...(host.settings || {}) };
+    let s = settingsOf(host.settings);
     let on = false, speaking = false, stopVad = () => {}, stream = null, session = null, mode = 'script', brain = '', idx = 0, cur = null, doneCount = 0, fails = 0;
+    let turns = 0, follow = '', extra = false; // 前回の続き：この会話で話した回数・あとに回したカード・いま聞いているのが前回のカードか
+    const cue = (kind) => (s.cue === false ? Promise.resolve() : playCue(kind));
     const pick = picker();
     const log = (who, text) => host.onLine?.(who, text);
     const mood = (m) => host.onMood?.(m);
@@ -390,7 +469,11 @@
         if (host.pending()) return; // 前の命令で聞き返しが始まったら、そこで止める
         const list = lists[i];
         const got = list && list.length > 1 ? list.map((c) => host.act(c)) : [cmds.length > 1 ? host.act(cmd) : host.run(text)];
-        for (const r of got) { rs.push(r); if (cmd.type === 'done' && !trouble(r) && !host.pending()) { doneCount++; learnHabit(); mood('happy'); } }
+        for (const r of got) {
+          rs.push(r);
+          if (cmd.type === 'done' && !trouble(r) && !host.pending()) { doneCount++; learnHabit(); mood('happy'); }
+          if (cmd.type === 'move' && ['later', 'hold', 'wait'].includes(cmd.lane) && !trouble(r) && !host.pending()) follow = (r.match(/「([^」]+)」/) || [])[1] || follow;
+        }
       });
       const r = rs.join(' ');
       if (rs.some(trouble) || host.pending() || cmds.every((c) => c.type === 'read' || c.type === 'status')) return r;
@@ -417,14 +500,17 @@
           const k = short[1];
           if (lastUnknown) { learnWord(lastUnknown, k); lastUnknown = ''; }
           let r = '';
-          if (k === 'skip') { idx++; r = pick('skip', PHRASES.skip); }
+          if (k !== 'done') follow = cur.title;
+          else if (follow === cur.title) follow = '';
+          if (k === 'skip') { if (!extra) idx++; r = pick('skip', PHRASES.skip); }
           else {
             const got = host.act(k === 'done' ? { type: 'done', card: cur } : { type: 'move', card: cur, lane: k });
             if (trouble(got)) return got;
             if (k === 'done') { doneCount++; learnHabit(); mood('happy'); r = pick('done', PHRASES.done) + (doneCount >= 3 ? ` これで${doneCount}枚目！` : ''); }
             else r = pick(k, PHRASES[k]);
-            if (cur.lane === 'now' || cur.lane === 'next') idx++; // 列から外れたときは同じ番号のまま（次のカードが繰り上がる）
+            if (!extra && (cur.lane === 'now' || cur.lane === 'next')) idx++; // 列から外れたときは同じ番号のまま（次のカードが繰り上がる）
           }
+          extra = false;
           return r + ' ' + askCard();
         }
       }
@@ -495,6 +581,7 @@
         if (bad) return said ? (out.say ? '' : bad) : (out.say || bad);
         r = host.act(cmd);
         if (a.type === 'done' && !trouble(r)) { doneCount++; learnHabit(); mood('happy'); doneNow = true; }
+        if (a.type === 'move' && ['later', 'hold', 'wait'].includes(cmd.lane) && !trouble(r)) follow = (r.match(/「([^」]+)」/) || [])[1] || cmd.query;
       }
       const sayText = short(String(out.say || ''));
       if (doneNow) { /* 済みにできたときは笑顔のまま（「おつかれさま」で悲しい顔にしない） */ }
@@ -555,13 +642,17 @@
     let ready = Promise.resolve();
     async function start(via = 'talk') {
       if (on) return;
-      on = true; idx = 0; cur = null; doneCount = 0; fails = 0; cut = false; lastOpen = '';
+      on = true; idx = 0; cur = null; doneCount = 0; fails = 0; cut = false; lastOpen = ''; turns = 0; follow = ''; extra = false; letGo = false;
       state('starting');
       watch(true);
       ready = prepare();
       // ポチの整理（期限すぎを今やるへ・今やるは3枚まで・Claude ができそうなものは Claude へ）。やったことは一言で報告する
       let tidied = null;
       try { tidied = s.tidy !== false && host.tidy ? host.tidy() : null; } catch { tidied = null; }
+      if (via === 'hold') { // 🎤の長押し：あいさつも整理の報告の声も出さず、すぐ離すまで聞く
+        if (tidied?.text) { log('ai', tidied.text); ready.then(() => note('', tidied.text)); }
+        hold(); return;
+      }
       if (via === 'voice' || via === 'text') {
         if (tidied?.text) { await say(tidied.text, via === 'voice' && s.reply !== 'text'); ready.then(() => note('', tidied.text)); }
         if (via === 'voice') { await speech; loop(); } else state(idle());
@@ -574,9 +665,12 @@
       const you = nameOf();
       const hi = pick('greet', PHRASES.greet[partOfDay()]).replace(/[！!]$/, you ? `、${you}！` : '！') + pick('hi', PHRASES.hi, { name: s.name });
       const nowN = host.board().filter((c) => c.lane === 'now').length;
-      const first = tidied?.changed ? `${hi} ${tidied.text}` : (mode === 'ai'
-        ? `${hi} 今やるは${nowN}枚${q[0] ? `、まずは「${q[0].title}」から？` : '。'}`
-        : `${hi} ${askCard()}`) + (tidied?.text ? ' ' + tidied.text : '');
+      const back = followUp();
+      const first = tidied?.changed ? `${hi} ${tidied.text}` : (back
+        ? `${hi} ${back}`
+        : mode === 'ai'
+          ? `${hi} 今やるは${nowN}枚${q[0] ? `、まずは「${q[0].title}」から？` : '。'}`
+          : `${hi} ${askCard()}`) + (tidied?.text && !tidied.changed ? ' ' + tidied.text : '');
       await say(first, s.reply !== 'text');
       note('', first);
       await speech;
@@ -601,6 +695,8 @@
       await mic();
       while (on && my === gen) {
         state('listening');
+        await cue('start');
+        if (!on || my !== gen) break;
         let text; const t0 = performance.now();
         try { text = (await g.Voice.listen()).text; miss = 0; }
         catch (e) {
@@ -613,6 +709,13 @@
           continue; // 聞き取れなかった → もう一度
         }
         if (!on || my !== gen) break;
+        // 言いかけ（〜て・〜けど・えっと）なら、答えずにもう一度聞いてつなげる（1回まで。何も来なければそのまま答える）
+        if (s.waitMore !== false && unfinished(text, isCommand)) {
+          log('sys', `「${text}」…続けてどうぞ`);
+          try { const more = (await g.Voice.listen({ waitMs: 3000 })).text; if (more) text = joinHeard(text, more); } catch { /* 続きが無ければそのまま */ }
+          if (!on || my !== gen) break;
+        }
+        cue('end');
         await hear(text, { voice: true, listenS: (performance.now() - t0) / 1000 });
       }
       if (my === gen) { listening = false; if (on) state(idle()); }
@@ -624,6 +727,32 @@
       g.Voice?.cancelListen?.();
     }
     const listen = () => { if (!on) return; if (listening) { pause(); state(idle()); } else { cut = false; loop(); } };
+    const isCommand = (t) => { try { const c = g.Voice.parse(t, host.laneWords); return !!c && !SKIP.includes(c.type); } catch { return false; } };
+
+    // 押している間だけ聞く（🎤の長押し）。離したら聞き終わり。考えながらゆっくり話しても途中で切らない
+    // Gemini Live は「押して話す」を外したあと、考えながら話すと間で切られるという声が多かった
+    let letGo = false, holding = false;
+    async function hold() {
+      if (!on || holding) return;
+      pause(); cut = true; letGo = false;
+      try { g.Voice?.stop ? g.Voice.stop() : g.speechSynthesis?.cancel(); } catch { /* なくてよい */ }
+      if (!g.Voice.supported) { state('typing'); return; }
+      holding = true; listening = true; const my = ++gen;
+      state('listening');
+      await mic();
+      await cue('start');
+      let text = '';
+      if (on && my === gen && !letGo) {
+        try { text = (await g.Voice.listen({ hold: true })).text; }
+        catch (e) { const msg = String(e?.message || e || ''); if (on && my === gen && !/聞き取れませんでした/.test(msg)) log('sys', '聞き取れなかった：' + msg); }
+      }
+      holding = false;
+      if (my !== gen || !on) return;
+      listening = false;
+      if (text) { cue('end'); await hear(text, { voice: true }); }
+      if (on && !listening) state(idle());
+    }
+    function release() { letGo = true; if (holding) g.Voice?.release?.(); }
 
     // 1回分の言葉を受け取って返事する（声でも、打った文字でも同じ流れ）
     async function hear(text, opts = {}) {
@@ -638,7 +767,8 @@
       turnAt = performance.now(); firstAt = 0;
       const speak = s.reply === 'voice' ? true : s.reply === 'text' ? false : voice;
       log('you', text);
-      if (END.test(g.Voice.norm(text))) { await say((doneCount ? `今日は${doneCount}枚片づけたね。` : '') + pick('bye', PHRASES.bye), speak); await speech; stop(); return; }
+      turns++;
+      if (END.test(g.Voice.norm(text))) { await say(wrapUp() + pick('bye', PHRASES.bye), speak); await speech; stop(); return; }
       state('thinking');
       let r = memoryTalk(text), viaAi = false;
       if (r == null && host.pending()) r = host.run(text);
@@ -660,8 +790,35 @@
       if (on && !listening) state(idle());
     }
 
+    // 終わりの一言まとめ（「今日は3枚。〇〇はまた聞くね」）
+    function wrapUp() {
+      const f = follow && host.board().some((c) => c.title === follow) ? follow : '';
+      return (doneCount ? `今日は${doneCount}枚片づけたね。` : '') + (f && s.followUp !== false ? `「${f}」はまた今度聞くね。` : '');
+    }
+    // まとめを覚える（話したときだけ。「前回の会話」として次の会話の始めと AI への指示に使う。設定の「ポチが覚えたこと」から消せる）
+    function saveLast() {
+      if (!M || !turns || s.followUp === false) return;
+      const f = follow && host.board().some((c) => c.title === follow) ? follow : '';
+      const text = `${md(new Date())}に${doneCount}枚片づけた` + (f ? `。「${f}」はあとに回した` : '');
+      remember({ id: 'last', kind: 'last', text, done: doneCount, follow: f });
+    }
+    // 前回の続きのひとこと。前回あとに回したカードがまだボードにあれば聞く（30分以内に開き直したときは聞かない）
+    function followUp() {
+      if (s.followUp === false) return '';
+      const last = mem().find((m) => m.id === 'last');
+      if (!last?.follow || !last.at || Date.now() - Date.parse(last.at) < 30 * 60e3) return '';
+      const q = host.queue(), i = q.findIndex((c) => c.title === last.follow);
+      const c = i >= 0 ? q[i] : host.card?.(last.follow);
+      if (!c) return '';
+      if (i >= 0) { idx = i; cur = c; extra = false; } else { cur = c; extra = true; }
+      follow = last.follow;
+      return `${dayWord(last.at)}「${c.title}」、どうなった？` + (mode === 'ai' ? '' : ' 済み？あとで？');
+    }
+
     function stop() {
-      on = false; listening = false; gen++;
+      if (on) { try { saveLast(); } catch { /* 覚えられなくても閉じる */ } }
+      on = false; listening = false; gen++; holding = false;
+      try { cueAc?.close(); } catch { /* なくてよい */ } cueAc = null;
       watch(false);
       try { g.Voice?.cancelListen?.(); } catch { /* なくてよい */ }
       try { g.Voice?.stop ? g.Voice.stop() : g.speechSynthesis?.cancel(); } catch { /* なくてよい */ }
@@ -672,8 +829,8 @@
       state('off');
     }
 
-    return { start, stop, hear, listen, get on() { return on; }, get speaking() { return speaking; }, get listening() { return listening; }, set settings(v) { s = { ...DEFAULTS, ...v }; } };
+    return { start, stop, hear, listen, hold, release, get holding() { return holding; }, get on() { return on; }, get speaking() { return speaking; }, get listening() { return listening; }, set settings(v) { s = settingsOf(v); } };
   }
 
-  g.Talk = { metrics, create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, PHRASES, picker, partOfDay, dueWords, dueShort, BOARD_MAX, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
+  g.Talk = { metrics, cueLog, PERSONA, settingsOf, unfinished, joinHeard, create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, PHRASES, picker, partOfDay, dueWords, dueShort, BOARD_MAX, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
 })(typeof window !== 'undefined' ? window : globalThis);

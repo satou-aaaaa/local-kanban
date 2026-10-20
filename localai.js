@@ -318,9 +318,27 @@
   }
 
   // 1回分を聞き取って文字にする（Voice.listen から呼ばれる）。cancel() で途中でやめる（打つほうに切り替えたとき）
-  let cancelCur = null;
+  let cancelCur = null, releaseCur = null;
   const cancel = () => { try { cancelCur?.(); } catch { /* 止められなくてもよい */ } };
-  async function listen({ waitMs = 8000, maxMs = 15000, endMs = 700 } = {}) {
+  const release = () => { try { releaseCur?.(); } catch { /* なくてよい */ } };
+
+  // Whisper の作り話（聞こえていないのに出る決まり文句）。動画の字幕で学んだため、静かなときに「ご視聴ありがとうございました」などを返す
+  // （Whisper の hallucination として広く知られている。openai/whisper Discussions #928 など）。
+  // 強い：カンバンに向かって言うことがまず無い文。声が短い（3秒未満）か小さいときは捨てる
+  // 弱い：本当に言うこともある文（「おやすみなさい」など）。声がとても短い（0.8秒未満）か小さいときだけ捨てる
+  const PHANTOM_STRONG = /^(ご視聴|ご清聴|最後までご覧|ご覧いただき).*ありがとうございま(した|す)|チャンネル登録|高評価|字幕|次回もお楽しみに|^(提供|作成|翻訳)[:：]/;
+  const PHANTOM_WEAK = /^(おやすみなさい|ありがとうございました|ありがとうございます|お疲れ様でした|おつかれさまでした|さようなら|では、?また)$/;
+  function phantom(text, { speechMs = 0, rms = 1 } = {}) {
+    const t = String(text || '').replace(/[\s。、．！？!?♪…「」]/g, '');
+    if (!t) return true;
+    const quiet = rms < 0.015;
+    if (PHANTOM_STRONG.test(t)) return quiet || speechMs < 3000;
+    if (PHANTOM_WEAK.test(t)) return quiet || speechMs < 800;
+    return false;
+  }
+  // hold: release() まで聞き続ける（間があっても切らない。Whisper は 30 秒ずつなので 28 秒で区切る）
+  async function listen({ waitMs = 8000, maxMs = 15000, endMs = 700, hold = false } = {}) {
+    if (hold) { maxMs = 28000; waitMs = 28000; }
     await loadEar();
     const md = g.navigator?.mediaDevices;
     if (!md?.getUserMedia) throw new Error('マイクが使えません');
@@ -329,12 +347,14 @@
     catch { throw new Error('マイクが許可されていません'); }
     const prob = earVad ? sileroProb() : loudnessProb();
     const t0 = Date.now(), block0 = blocked.total;
+    let said = [];
     try {
       const audio = await new Promise((ok, ng) => {
-        const pre = [], said = [];
+        const pre = [];
         let talking = false, quiet = 0, done = false, chain = Promise.resolve();
-        const end = (err) => { if (done) return; done = true; cancelCur = null; clearTimeout(t1); clearTimeout(t2); stop(); stream.getTracks().forEach((t) => t.stop()); err ? ng(err) : ok([...pre, ...said]); };
+        const end = (err) => { if (done) return; done = true; cancelCur = null; releaseCur = null; clearTimeout(t1); clearTimeout(t2); stop(); stream.getTracks().forEach((t) => t.stop()); err ? ng(err) : ok([...pre, ...said]); };
         cancelCur = () => end(new Error('聞き取れませんでした'));
+        releaseCur = () => end(talking ? null : new Error('聞き取れませんでした'));
         // 音が届かないときも止まらないように、時間でも区切る
         const t1 = setTimeout(() => { if (!talking) end(new Error('聞き取れませんでした')); }, waitMs + 500);
         const t2 = setTimeout(() => end(talking ? null : new Error('聞き取れませんでした')), maxMs + 500);
@@ -344,15 +364,17 @@
             const p = await prob(f);
             if (p > 0.5) { talking = true; quiet = 0; } else if (talking) quiet += 32;
             if (talking) said.push(f); else { pre.push(f); if (pre.length > 10) pre.shift(); } // 話し始めの手前 0.3 秒も残す
-            if ((talking && quiet >= endMs) || Date.now() - t0 > maxMs) end();
+            if ((talking && quiet >= endMs && !hold) || Date.now() - t0 > maxMs) end();
             else if (!talking && Date.now() - t0 > waitMs) end(new Error('聞き取れませんでした'));
           }).catch((e) => end(e));
         });
       });
       const all = new Float32Array(audio.length * 512);
       audio.forEach((f, i) => all.set(f, i * 512));
+      let sum = 0; for (const f of said) for (const v of f) sum += v * v;
+      const heard = { speechMs: said.length * 32, rms: Math.sqrt(sum / Math.max(1, said.length * 512)) };
       const { text } = await call('asr', { audio: all }, [all.buffer]);
-      if (!text) throw new Error('聞き取れませんでした');
+      if (!text || phantom(text, heard)) throw new Error('聞き取れませんでした');
       return { text };
     } finally { prob.end?.(); lastListen = { ms: Date.now() - t0, blockedMs: Math.round(blocked.total - block0) }; }
   }
@@ -497,7 +519,7 @@
   }
 
   const LocalAI = {
-    EAR_LIMIT, MODELS, CPU, JA, CPU_MODELS, brainPick, setBrain, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, safeInstall, present, info, friendly, SAMPLING, KEEP, CTX, BUDGET, recent, userPart, messages, plan, status, install, remove, session, listen, bargeIn,
+    EAR_LIMIT, MODELS, CPU, JA, CPU_MODELS, brainPick, setBrain, EAR, VAD, VENDOR, TRIES, gpu, earNeeded, safeInstall, present, info, friendly, SAMPLING, KEEP, CTX, BUDGET, recent, userPart, messages, plan, status, install, remove, session, listen, release, phantom, bargeIn,
     llmReady: () => !!load().llm,
     earReady: () => !!load().ear,
     // 耳の部品（ONNX Runtime）が作業場で本物の wasm で動くか（モデルは使わない。検査と診断用）
@@ -506,5 +528,5 @@
   };
   g.LocalAI = LocalAI;
   // 端末内の音声認識が無い端末では、入れた Whisper を🎤と会話モードの耳にする
-  g.Voice?.useEar?.({ ready: () => !!load().ear, listen: () => listen(), cancel });
+  g.Voice?.useEar?.({ ready: () => !!load().ear, listen: (o) => listen(o), cancel, release });
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -573,7 +573,12 @@ try {
       if (sr) {
         class FakeSR {
           static available() { return Promise.resolve('available'); }
-          start() { const t = window.__heard.shift(); setTimeout(() => { if (t) this.onresult({ results: [[{ transcript: t }]] }); this.onend(); }, t ? 80 : 400); }
+          start() {
+            // 押している間だけ聞く（continuous）：stop()（離した）で聞いた分を返す
+            if (this.continuous) { window.__srHold = (window.__srHold || 0) + 1; this.stop = () => { const t = window.__heard.shift(); setTimeout(() => { if (t) this.onresult({ resultIndex: 0, results: [Object.assign([{ transcript: t }], { isFinal: true })] }); this.onend(); }, 30); }; return; }
+            const t = window.__heard.shift(); setTimeout(() => { if (t) this.onresult({ results: [[{ transcript: t }]] }); this.onend(); }, t ? 80 : 400);
+          }
+          abort() {}
         }
         window.webkitSpeechRecognition = FakeSR;
       } else delete window.webkitSpeechRecognition;
@@ -738,6 +743,90 @@ try {
     const h = await again.pg.evaluate(() => [Talk.habitText({ morning: 4, night: 1 }), Talk.habitText({ morning: 2, night: 1 }), Talk.habitText({ morning: 2, day: 2, evening: 2 })]);
     check(h[0] === '朝によく片づける' && h[1] === '' && h[2] === '', `ポチが覚える：よく片づける時間帯は5回以上・半分以上のときだけ覚える（${h.join('|')}）`);
     await again.pg.close();
+  }
+
+  // ポチと声の改善（2026-10-21 の案の★）：キャラ設定書・言いかけ待ち・合図の音・Whisper の作り話を捨てる・長押し・前回の続き
+  {
+    const { pg, outside } = await talkPage({ heard: ['えっと', '済み', 'あとで', '終わり'] }, 'ポチの改善');
+    // A6 キャラ設定書：決まった返事・見本の会話に「言わないこと」が入っていない。AI への指示に一人称・口ぐせ・言わないことを入れる。前の版の人物像は新しいものに置きかえる
+    const per = await pg.evaluate(() => {
+      const P = Talk.PERSONA, all = [];
+      for (const v of Object.values(Talk.PHRASES)) for (const x of Array.isArray(v) ? v : Object.values(v).flat()) all.push(x);
+      for (const [, a] of Talk.EXAMPLES) all.push(JSON.parse(a).say);
+      const bad = all.filter((x) => P.neverRe.test(x));
+      const sys = Talk.systemPrompt(Talk.settingsOf({}), { now: '今やる' });
+      const old = Talk.settingsOf({ persona: '気さくな相棒。タメ口で、明るく短く話す。「今日どれからやる？」と一緒に進める友達のように。できたらちゃんとほめる。説教はしない。' }).persona;
+      return { bad, n: P.traits.length, sys, renew: old === P.about, mine: Talk.settingsOf({ persona: '自分で書いた人物像' }).persona };
+    });
+    check(per.bad.length === 0, `キャラ設定書：決まった返事と見本の会話に「言わないこと」が無い${per.bad.length ? '（' + per.bad.join(' / ') + '）' : ''}`);
+    check(per.n >= 4 && per.n <= 6 && /一人称は「ぼく」/.test(per.sys) && /言わないこと/.test(per.sys) && /口ぐせ/.test(per.sys), 'キャラ設定書：性格は4〜6語、AI への指示に一人称・口ぐせ・言わないことを入れる');
+    check(per.renew && per.mine === '自分で書いた人物像', 'キャラ設定書：前の版の決まった人物像は新しいものに置きかえ、自分で書いた人物像はそのまま');
+    // B2 言いかけ：語尾で判断する（頼みごと・「あとで」は言い終わり）
+    const uf = await pg.evaluate(() => ['牛乳買ってきて', '今日は疲れたけど', '明日やるから', 'えっと', '会議があるので、', 'あとで', '済み', '保留にしといて', '牛乳を追加して', '覚えて', '終わり'].map((t) => (Talk.unfinished(t) ? 1 : 0)).join(''));
+    check(uf === '11111000000', `言いかけ：〜て・〜けど・〜から・えっと・「、」で終わったら続きを待ち、頼みごとや短い答えは待たない（${uf}）`);
+    check(await pg.evaluate(() => Talk.joinHeard('えっと、', '済み') === '済み' && Talk.joinHeard('疲れたけど', 'もう1枚やる') === '疲れたけど、もう1枚やる'), '言いかけ：続きとつなぐ（最後の「えっと」は落とす）');
+    // 会話：「えっと」→「済み」をつないで1回の返事にし、聞き始め・聞き終わりに合図の音を鳴らす
+    await pg.click('#talkBtn');
+    await waitTalkEnd(pg);
+    const you = await pg.evaluate(() => [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent));
+    check(you[0] === '済み' && /続けてどうぞ/.test(await pg.textContent('#talkLog')), `言いかけ：「えっと」で答えずに続きを聞き、つないで1回で答えた（${you.join('|')}）`);
+    const cues = await pg.evaluate(() => Talk.cueLog.join(','));
+    check(/start/.test(cues) && /end/.test(cues), `合図の音：聞き始め「ポン」と聞き終わり「ポロン」を鳴らした（${cues}）`);
+    // C1 前回の続き：終わりに一言まとめ、あとに回したカードを覚える
+    const sp = await pg.evaluate(() => window.__spoken.join(''));
+    const last = await pg.evaluate(() => LK.memory.all().find((m) => m.id === 'last'));
+    check(/今日は1枚片づけたね/.test(sp) && /また今度聞くね/.test(sp), '前回の続き：「終わり」で今日の枚数とあとに回したカードを一言でまとめた');
+    check(last?.kind === 'last' && last.done === 1 && !!last.follow && /1枚片づけた/.test(last.text), `前回の続き：まとめを覚えた（${JSON.stringify(last)}）`);
+    await pg.waitForTimeout(1600);
+    check(/"kind": "last"/.test(files['local-board/pochi-memory.json'] || ''), '前回の続き：まとめはデータのリポジトリの pochi-memory.json に置く');
+    // 次の会話：「昨日の〇〇、どうなった？」から始め、「済み」でそのカードを済みにする（30分以内に開き直したときは聞かない）。設定で切れる
+    const fu = await pg.evaluate(async () => {
+      const yest = new Date(Date.now() - 864e5).toISOString();
+      const run = async (settings, at, answer) => {
+        const store = [{ id: 'last', kind: 'last', text: '昨日', follow: '見本B', at }], acts = [], said = [];
+        const mem = { all: () => store, put: (it) => { store.push({ ...it, at: new Date().toISOString() }); return it; }, forget() {}, forgetAll() {} };
+        const cards = [{ title: '見本A', lane: 'now' }, { title: '見本C', lane: 'next' }], later = { title: '見本B', lane: 'later' };
+        const t = Talk.create({ settings: { ai: 'off', bargeIn: false, reply: 'text', ...settings }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']], memory: mem,
+          board: () => [...cards, later], queue: () => cards, card: (x) => (x === later.title ? later : null), run: () => '', act: (c) => { acts.push(c.type + ':' + c.card?.title); return 'ok'; }, pending: () => false, onLine: (w, x) => { if (w === 'ai') said.push(x); }, onState() {} });
+        await t.start(); if (answer) await t.hear(answer); t.stop();
+        return { first: said[0] || '', acts };
+      };
+      return { ask: await run({}, yest, '済み'), soon: await run({}, new Date().toISOString()), off: await run({ followUp: false }, yest) };
+    });
+    check(/昨日の「見本B」、どうなった/.test(fu.ask.first) && fu.ask.acts[0] === 'done:見本B', `前回の続き：次の会話は「昨日の〇〇、どうなった？」から始め、「済み」でそのカードを済みにする（${fu.ask.first}・${fu.ask.acts.join(',')}）`);
+    check(!/どうなった/.test(fu.soon.first) && !/どうなった/.test(fu.off.first), '前回の続き：30分以内に開き直したとき・設定で切ったときは聞かない');
+    // B6 Whisper の作り話：短い・小さい声のときの決まり文句だけ捨てる
+    const ph = await pg.evaluate(async () => {
+      if (!window.LocalAI) await new Promise((ok) => { const sc = document.createElement('script'); sc.src = './localai.js'; sc.onload = ok; sc.onerror = ok; document.head.append(sc); });
+      const f = window.LocalAI?.phantom; if (!f) return 'なし';
+      return [f('ご視聴ありがとうございました', { speechMs: 1200, rms: 0.1 }), f('チャンネル登録お願いします', { speechMs: 2000, rms: 0.1 }), f('おやすみなさい', { speechMs: 500, rms: 0.1 }), f('おやすみなさい', { speechMs: 1500, rms: 0.1 }), f('ありがとうございました', { speechMs: 1500, rms: 0.005 }), f('牛乳を済み', { speechMs: 300, rms: 0.001 }), f('はい', { speechMs: 300, rms: 0.1 })].map((x) => (x ? 1 : 0)).join('');
+    });
+    check(ph === '1110100', `Whisper の作り話：「ご視聴ありがとうございました」などを、声が短い・小さいときだけ捨てる（${ph}）`);
+    await pg.close();
+    check(outside.length === 0, 'ポチの改善：自分のサイトと GitHub 以外へ通信していない');
+  }
+  // B1 押している間だけ聞く：🎤を長押しすると離すまで聞き、離したら答える。今までの「押すと聞き続ける」も残す。合図の音は設定で消せる
+  {
+    const { pg, outside } = await talkPage({ heard: [] }, '長押し');
+    await pg.evaluate(() => localStorage.setItem('lk.talk', JSON.stringify({ ...Talk.DEFAULTS, cue: false })));
+    await pg.click('#talkBtn');
+    await pg.waitForFunction(() => /打つか/.test(document.querySelector('#talkState').textContent), null, { timeout: 15000 }).catch(() => {});
+    await pg.evaluate(() => { Talk.cueLog.length = 0; window.__heard.length = 0; });
+    const b = await pg.locator('#talkMic').boundingBox();
+    await pg.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await pg.evaluate(() => { window.__heard.push('見本のカード（次にやる・毎週）を保留に'); });
+    await pg.mouse.down();
+    await pg.waitForTimeout(700);
+    const mid = await pg.evaluate(() => ({ st: document.querySelector('#talkState').textContent, on: document.querySelector('#talkMic').getAttribute('aria-pressed'), hold: window.__srHold || 0 }));
+    await pg.mouse.up();
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold', '🎤の長押しで話した「保留に」');
+    check(mid.hold >= 1 && /離したら/.test(mid.st) && mid.on === 'true', `🎤の長押し：押している間は「離したら答えるね」と聞き続け、🎤の印も付く（${mid.st}・${mid.on}）`);
+    check(await pg.evaluate(() => [...document.querySelectorAll('#talkLog .you')].some((d) => /保留に/.test(d.textContent))), '🎤の長押し：離したら、聞いたことを同じ流れに文字で残して動かす');
+    check(await pg.evaluate(() => Talk.cueLog.length === 0), '合図の音：設定で切ると鳴らさない');
+    const f = await pg.evaluate(() => { const f = document.querySelector('#talkSetForm'); return !!(f.cue && f.waitMore && f.followUp); });
+    check(f, 'キャラの設定：合図の音・言いかけ待ち・前回の続きを設定で切りかえられる');
+    await pg.close();
+    check(outside.length === 0, '長押し：自分のサイトと GitHub 以外へ通信していない');
   }
 
   // キャラの見た目：どの形にも まばたき・表情の口・演出の部品がある。動きを減らす設定では動かさない
