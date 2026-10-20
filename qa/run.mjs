@@ -986,7 +986,7 @@ try {
       out.seasonWear = ['muffler', 'sakura', 'pumpkin', 'santa', 'oni', 'kagami', 'uchiwa'].filter((k) => box.querySelector('.w-' + k)).length; box.remove();
       out.seasonSay = days.map(([y, mo, da]) => T.seasonOf(new Date(y, mo, da)).say).filter((x) => x && T.PERSONA.neverRe.test(x));
       // B7 題に寄せる
-      out.fix = [T.fixTitles('牛乳を買たを済み', ['牛乳を買った']), T.fixTitles('今日はいい天気', ['今日の天気予報']), T.fixTitles('牛乳を済み', ['牛乳'])];
+      out.fix = [T.fixTitles('牛乳を買たを済み', ['牛乳を買った']), T.fixTitles('今日はいい天気', ['今日の天気予報']), T.fixTitles('牛乳を済み', ['牛乳']), T.fixTitles('本を返した', ['本を返す']), T.fixTitles('本お返した', ['本を返す'])];
       // A2 しぐさと寝る
       const g = LK.pochiIdle.tick(), b = document.querySelector('#lkPochi');
       out.gesture = { g, on: b.classList.contains(g) };
@@ -1027,7 +1027,7 @@ try {
     check(/^[aiueo]$/.test(r.mouth.m || '') && r.mouth.shown.length === 1 && /v-[aiueo]/.test(r.mouth.shown[0]), `口の形：話している間、母音の口を1つだけ見せる（${JSON.stringify(r.mouth)}）`);
     check(r.level.lv === '1' && r.level.v === '0.8' && r.level.nod, `聞いている間：声の大きさで耳と輪を動かし、話の切れ目でうなずく（${JSON.stringify(r.level)}）`);
     check(r.season.join(',') === 'newyear:kagami,setsubun:oni,hanami:sakura,natsu:uchiwa,halloween:pumpkin,xmas:santa,-:muffler,-:' && r.seasonWear === 7 && r.seasonSay.length === 0, `季節と行事：その日だけ小物とひとことが変わる（${r.season.join(',')}・小物 ${r.seasonWear}）`);
-    check(r.fix[0] === '牛乳を買ったを済み' && r.fix[1] === '今日はいい天気' && r.fix[2] === '牛乳を済み', `聞き取りの手がかり：Whisper の聞き違いをカードの題に寄せる（少しだけ違うときだけ）（${r.fix.join(' / ')}）`);
+    check(r.fix[0] === '牛乳を買ったを済み' && r.fix[1] === '今日はいい天気' && r.fix[2] === '牛乳を済み' && r.fix[3] === '本を返した' && r.fix[4] === '本を返した', `聞き取りの手がかり：Whisper の聞き違いをカードの題に寄せる（少しだけ違うときだけ。「〜した」の活用は壊さない）（${r.fix.join(' / ')}）`);
     check(r.gesture.on && r.sleep === '1' && r.awake, `しぐさ：何もしていないときにしぐさをまぜ、長く放っておくと寝て、さわると起きる（${r.gesture.g}）`);
     check(r.ear.endMs === 1200 && r.ear.hint && r.ear.noisy === 1 && r.ear.fixed, `耳：待ち時間「ゆっくり」は1.2秒、カードの題を手がかりに渡し、うるさいときは1回だけ一言、Whisper の聞き違いは題に寄せる（${JSON.stringify(r.ear)}）`);
     check(r.resume, '割り込み：物音で止まって何も言われなければ「ごめん、続けるね」と続きを話す');
@@ -1809,6 +1809,45 @@ try {
         for (const v of ['list', 'stats', 'board']) { await pg.locator('button[data-v=' + v + ']').click(); await pg.waitForTimeout(200); }
         return (await pg.locator('#lane-now .card').count()) ? '' : 'ボードに戻らない';
       });
+      // ボード版50：ひと押しの返事・寝かせる（snooze_until）・返事の印をまとめて消す（reply_ack_at）
+      if (await pg.evaluate(() => typeof snoozed === 'function')) {
+        await step('ひと押しの返事が保存に届く', async () => {
+          if (!(await openC('見本のカード（今やる）'))) return '詳細が開かない';
+          const b = pg.locator('#detail .qreply button', { hasText: 'それで進めて' });
+          if (!(await b.count())) return 'ひと押しの返事のボタンが無い';
+          await b.click();
+          return (await saved((cs) => cs.some((c) => c.doc_id === 's1' && (c.history || []).some((x) => /you|satou/.test(x.who) && x.text === 'それで進めて')))) ? '' : '履歴に書かれない';
+        });
+        await step('寝かせると列から消え、保存に届き、やめると戻る', async () => {
+          const t = '見本のカード（エージェント）';
+          await card(t).locator('details.menu summary').click();
+          await card(t).locator('.pop button', { hasText: '明日まで寝かせる' }).click();
+          if (!(await saved((cs) => cs.some((c) => c.doc_id === 's4' && c.snooze_until)))) return 'snooze_until が保存されない';
+          await pg.waitForTimeout(200);
+          if (await pg.locator('#board .card', { hasText: t }).count()) return '寝かせても列に残る';
+          await pg.locator('#focus .linkish', { hasText: '寝かせ中' }).click(); await pg.waitForTimeout(200);
+          await card(t).locator('details.menu summary').click();
+          await card(t).locator('.pop button', { hasText: '寝かせをやめる' }).click();
+          if (!(await saved((cs) => cs.some((c) => c.doc_id === 's4' && !c.snooze_until)))) return 'やめても snooze_until が残る';
+          const hide = pg.locator('#focus .linkish', { hasText: '隠す' }); if (await hide.count()) await hide.click();
+          await pg.waitForTimeout(200);
+          return (await pg.locator('#board .card', { hasText: t }).count()) ? '' : 'やめても列に戻らない';
+        });
+        await step('返事の印をまとめて消すと保存に届く', async () => {
+          // ボタンは返事ありが3枚以上のときに出る
+          await pg.evaluate(async () => {
+            const db = await window.claude.use('db'), at = new Date().toISOString();
+            for (const c of cards.filter((x) => !x.deleted && x.lane !== 'done' && x.owner !== 'agent').slice(0, 3)) await db.collection('cards').doc(c.id).update({ history: [...(c.history || []), { at, who: 'you', text: '?' }, { at, who: 'claude', text: '見本の返事' }] });
+          });
+          await pg.waitForTimeout(400);
+          const ab = pg.locator('#focus .linkish', { hasText: 'まとめて読んだ' });
+          if (!(await ab.count())) return 'まとめて消すボタンが無い';
+          await ab.click();
+          if (!(await saved((cs) => cs.filter((c) => c.reply_ack_at).length >= 3))) return 'reply_ack_at が保存されない';
+          await pg.waitForTimeout(200);
+          return (await pg.locator('#board .card.replied').count()) ? 'まとめて消しても印が残る' : '';
+        });
+      }
       await pg.close();
     }
   }
