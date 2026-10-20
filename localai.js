@@ -70,7 +70,9 @@
     cpuLib = cpuLib || await import(here(VENDOR.cpu));
     const w = new cpuLib.Wllama({ default: here(VENDOR.cpuWasm) }, { allowOffline: true, suppressNativeLog: true });
     // WebGPU は使わない（使えない端末のための頭）。スレッドは COOP/COEP が無い GitHub Pages では1本になる
-    await w.loadModelFromUrl(CPU.url, { n_gpu_layers: 0, n_ctx: 2048, progressCallback: ({ loaded, total }) => onProgress?.(total ? loaded / total : 0, 'qwen2.5-0.5b-instruct-q4_0.gguf') });
+    try {
+      await w.loadModelFromUrl(CPU.url, { n_gpu_layers: 0, n_ctx: 2048, progressCallback: ({ loaded, total }) => onProgress?.(total ? loaded / total : 0, 'qwen2.5-0.5b-instruct-q4_0.gguf') });
+    } catch (e) { try { await w.exit(); } catch { /* 片づけられなくてもよい */ } throw e; } // 失敗したら worker と wasm を放す（入れ直しのたびに残らない）
     // WebLLM と同じ形（chat.completions.create）にそろえる
     cpuEngine = {
       chat: { completions: { create: (req) => w.createChatCompletion(cpuReq(req)) } },
@@ -281,7 +283,12 @@
         await engineFor(id, step(0, ear ? 0.8 : 1));
         from = [`huggingface.co/mlc-ai/${id}`, 'raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs'];
         save({ llm: id, engine: 'webllm' });
-      } catch (e) { why = String(e?.message || e); id = ''; engine = null; engineId = ''; }
+      } catch (e) {
+        why = String(e?.message || e);
+        // 途中まで取った WebLLM のモデルを消してから CPU 版へ（端末に残さない。消すボタンは CPU 版しか消さないため）
+        try { await (await webllm()).deleteModelAllInfoInCache?.(id); } catch { /* 消せなくても CPU 版へ進む */ }
+        id = ''; engine = null; engineId = '';
+      }
     }
     if (!id) {
       onProgress?.(0, why ? 'この端末では WebGPU の AI が動かなかったので、CPU で動く AI を入れます（返事はゆっくり）。' : CPU_NOTE);
