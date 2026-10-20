@@ -73,7 +73,7 @@
   </form>
 </dialog>
 <dialog id="talkDlg" class="lk" aria-labelledby="talkName">
-  <div class="who"><span id="talkAva"></span><div><p id="talkName"></p><div id="talkState"></div><div id="talkMode" class="help"></div></div></div>
+  <div class="who"><span id="talkAva"></span><div><p id="talkName"></p><div id="talkState"></div><div id="talkMode" class="help"></div><button type="button" id="talkAiGet" hidden>🧠 AI を入れて自由に話す</button></div></div>
   <div id="talkLog" aria-live="polite"></div>
   <form id="talkForm"><input id="talkIn" autocomplete="off" placeholder="打って話す（例：済み・あとで・保留・次）"><button class="primary">送る</button></form>
   <div class="lk-actions"><button type="button" id="talkSetBtn">⚙ キャラの設定</button><button type="button" id="talkEnd">終わる</button></div>
@@ -249,7 +249,7 @@
   function openTalk() {
     if (!window.Talk || !L.ready) return;
     if (talk?.on) { if (!$('#talkDlg').open) $('#talkDlg').showModal(); return; }
-    drawTalkHead(); $('#talkLog').innerHTML = ''; $('#talkMode').textContent = '';
+    drawTalkHead(); $('#talkLog').innerHTML = ''; $('#talkMode').textContent = ''; $('#talkAiGet').hidden = true;
     talk = Talk.create({
       settings: talkSettings(),
       lanes: LANE_LABEL, laneWords: WORDS,
@@ -261,7 +261,14 @@
       pending: () => !!pending,
       onLine: talkLine,
       onState: st => { $('#talkState').textContent = TALK_STATE[st] ?? ''; $('#talkDlg').classList.toggle('speaking', st === 'speaking'); if (st === 'off' && $('#talkDlg').open) $('#talkDlg').close(); },
-      onMode: (m, brain) => { $('#talkMode').textContent = m !== 'ai' ? '頭：AI なし（1枚ずつ読み上げ）' : brain === 'webllm' ? '頭：端末の中の AI（入れた WebLLM）' : '頭：端末の中の AI（Chrome の内蔵 AI）'; },
+      onMode: (m, brain, why) => {
+        $('#talkMode').textContent = m === 'ai'
+          ? '🧠 AI と話しています（' + (brain === 'webllm' ? '入れた WebLLM' : 'Chrome の内蔵 AI') + '・端末の中だけ）'
+          : why === 'off' ? '📋 AI なし：設定で切っています（決まった返事で1枚ずつ聞きます）' : '📋 AI なし：決まった返事で1枚ずつ聞きます';
+        $('#talkMode').dataset.ai = m === 'ai' ? 'on' : 'off';
+        // AI なしで、入れれば使える端末（WebGPU がある）なら、入れる場所への近道を出す
+        $('#talkAiGet').hidden = m === 'ai' || why === 'off' || !window.LocalAI || !navigator.gpu || LocalAI.llmReady();
+      },
     });
     $('#talkDlg').showModal();
     talk.start();
@@ -281,6 +288,7 @@
     $('#talkSet').showModal();
   }
   $('#talkSetBtn').onclick = openTalkSet;
+  $('#talkAiGet').onclick = () => { openTalkSet(); $('#aiBox')?.scrollIntoView({ block: 'center' }); $('#aiGet')?.focus(); };
   function drawAi() {
     const A = window.LocalAI; if (!A) { $('#aiBox').hidden = true; return; }
     const st = A.status(), p = A.plan();
