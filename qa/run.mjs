@@ -526,7 +526,7 @@ try {
   check(picked.length === 1, `🎤「2番」で選んだカードが済みになった（${picked.map((c) => c.title).join('・') || 'なし'}）`);
   await mic.waitForFunction(() => window.__spoken.some((t) => /済みにした/.test(t)), null, { timeout: 3000 }).catch(() => {});
   check((await mic.evaluate(() => window.__spoken)).some((t) => /済みにした/.test(t)), '🎤 結果を読み上げた');
-  check(await mic.evaluate(() => document.querySelector('#talkDlg').open && [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent).join('|') === '見本のカードを済み|2番'), '🎤 ボードの🎤も会話と同じ欄を開き、話したことを文字で同じ流れに残す');
+  check(await mic.evaluate(() => document.querySelector('#talkDlg').open && [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent.replace(/^あなた：/, '')).join('|') === '見本のカードを済み|2番'), '🎤 ボードの🎤も会話と同じ欄を開き、話したことを文字で同じ流れに残す');
   check(await mic.evaluate(() => Voice.localVoice()?.name === '端末の声'), '🎤 読み上げは端末の中の声を選ぶ（ネット経由の声は使わない）');
   check(await mic.evaluate(() => { const g = speechSynthesis.getVoices; speechSynthesis.getVoices = () => [{ name: 'ネットの声', lang: 'ja-JP', localService: false }]; const n = Voice.localVoice(); speechSynthesis.getVoices = g; return n === null; }), '🎤 端末の中の声が無ければ読み上げない');
   check(await mic.evaluate(() => window.__local), '🎤 端末の中だけで聞き取る設定（processLocally = true）で聞いた');
@@ -661,6 +661,44 @@ try {
     await say('戻す');
     await say('終わり');
     check(outside.length === 0, '会話（AI なし・打つ）：自分のサイトと GitHub 以外へ通信していない');
+    await pg.close();
+  }
+
+  // A3. AI なしで雑談（2026-10-21 satouさん「普通に人間と喋っているように」）：話題に返事する・毎回カードの話に戻さない・雑談の「うん」でカードを動かさない
+  {
+    const { pg, outside } = await talkPage({ sr: false }, '会話 AI なし・雑談');
+    await pg.click('#talkBtn');
+    await pg.waitForFunction(() => document.querySelectorAll('#talkLog .l.ai').length > 0, null, { timeout: 8000 }).catch(() => {});
+    const say = async (t) => { const n = await pg.$$eval('#talkLog .l.ai', (l) => l.length); await pg.fill('#talkIn', t); await pg.press('#talkIn', 'Enter'); await pg.waitForFunction((k) => document.querySelectorAll('#talkLog .l.ai').length > k, n, { timeout: 5000 }).catch(() => {}); return (await pg.$$eval('#talkLog .l.ai', (l) => l.map((x) => x.textContent))).at(-1) || ''; };
+    await pg.waitForTimeout(1200); // 開いたときのポチの整理の保存が終わるのを待つ
+    const putsAt = puts.length; // この検査で保存したカードだけを見る（前の検査・開いたときの整理の保存は見ない）
+    const putList = () => puts.slice(putsAt).filter((p) => p.path === 'local-board/cards.json').map((p) => p.body?.message || '').join(' / ');
+    const moved = () => puts.slice(putsAt).filter((p) => p.path === 'local-board/cards.json').length;
+    const open1 = (await pg.$$eval('#talkLog .l.ai', (l) => l.map((x) => x.textContent))).at(-1) || '';
+    check(!/済み、あとで、保留、どれ/.test(open1) && (open1.match(/[？?]/g) || []).length <= 1, `雑談：最初のひと言でカードの答えを迫らず、問いは1つ（${open1.slice(0, 80)}）`);
+    const r1 = await say('最近どう？');
+    check(!/カード、見つからない|もう一回|分からな/.test(r1), `雑談：「最近どう？」を探す命令と取らない（${r1.slice(0, 50)}）`);
+    const r2 = await say('今日面接なんだ');
+    check(/面接/.test(r2) && !/「見本のカード/.test(r2), `雑談：話題（面接）に返事し、カードの話に戻さない（${r2.slice(0, 50)}）`);
+    const r3 = await say('ちょっと緊張してる');
+    check(!/「見本のカード/.test(r3), `雑談：気持ちを話した直後にカードの話をしない（${r3.slice(0, 50)}）`);
+    const r4 = await say('昨日ラーメン食べた');
+    check(/ラーメン/.test(r4), `雑談：言葉を拾って返す（${r4.slice(0, 50)}）`);
+    const r5 = await say('うん');
+    await pg.waitForTimeout(600);
+    check(moved() === 0 && !/済みにした|1枚へった/.test(r5), `雑談：雑談のあとの「うん」でカードを済みにしない（「カードも見る？」への「うん」はカードを出すだけ）（${r5.slice(0, 50)}｜${putList()}）`);
+    const r6 = await say('ありがとう');
+    check(!/「見本のカード/.test(r6), `雑談：お礼のあとにすぐ次のカードを聞かない（${r6.slice(0, 50)}）`);
+    const r8 = await say('今日は何からやる？');
+    const r9 = await say('うん');
+    for (let i = 0; i < 50 && !moved(); i++) await pg.waitForTimeout(100); // 保存は少し遅れて届く
+    check(/「[^」]+」/.test(r8) && moved() > 0 && /済|へった|早い|おお|やった|えらい/.test(r9), `雑談：カードを聞いたあとの「うん」は済みにする（${r9.slice(0, 50)}）`);
+    await say('戻す');
+    const n0 = moved();
+    await say('おやすみ');
+    await pg.waitForTimeout(800);
+    check(moved() === n0 && !(await pg.evaluate(() => document.querySelector('#talkDlg').open)), '雑談：「おやすみ」で会話を終え、カードは動かさない');
+    check(outside.length === 0, '会話（AI なし・雑談）：自分のサイトと GitHub 以外へ通信していない');
     await pg.close();
   }
 
@@ -807,7 +845,7 @@ try {
     // 会話：「えっと」→「済み」をつないで1回の返事にし、聞き始め・聞き終わりに合図の音を鳴らす
     await pg.click('#talkBtn');
     await waitTalkEnd(pg);
-    const you = await pg.evaluate(() => [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent));
+    const you = await pg.evaluate(() => [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent.replace(/^あなた：/, '')));
     check(you[0] === '済み' && /続けてどうぞ/.test(await pg.textContent('#talkLog')), `言いかけ：「えっと」で答えずに続きを聞き、つないで1回で答えた（${you.join('|')}）`);
     const cues = await pg.evaluate(() => Talk.cueLog.join(','));
     check(/start/.test(cues) && /end/.test(cues), `合図の音：聞き始め「ポン」と聞き終わり「ポロン」を鳴らした（${cues}）`);
@@ -971,18 +1009,18 @@ try {
       const ai = Talk.create({ settings: { ai: 'auto', bargeIn: false, reply: 'text', tidy: false }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']], memory: mem, board: () => [{ title: '一', lane: 'now' }], queue: () => [], weekDone: () => [],
         run: () => '', act: () => 'ok', pending: () => false, onLine: (k, x) => logs.push(k + ':' + x), onState() {} });
       await ai.start('text');
-      for (const x of ['今日はいい天気', 'カフェ行った', 'ケーキおいしかった']) await ai.hear(x);
-      const hint3 = /雑談が続いている/.test(prompts[2] || ''), hint1 = /雑談が続いている/.test(prompts[0] || '');
+      for (const x of ['今日はいい天気', 'カフェ行った', 'ケーキおいしかった', '友だちと話した', '楽しかった']) await ai.hear(x);
+      const hint3 = /雑談が続いている/.test(prompts[4] || ''), hint1 = /雑談が続いている/.test(prompts[2] || '');
       await ai.hear('なんか疲れた');
       await ai.hear('映画見たい');
-      const tiredNoBack = /疲れているので/.test(prompts[4] || '') && !/雑談が続いている/.test(prompts[4] || '');
+      const tiredNoBack = /疲れているので/.test(prompts[6] || '') && !/雑談が続いている/.test(prompts[6] || '');
       slow = 5600; await ai.hear('うーん');
       ai.stop();
       window.LanguageModel = keep;
       out.chat = { hint3, hint1, tiredNoBack, slow: logs.some((x) => /ちょっと考えさせて/.test(x)) };
       return out;
     });
-    check(r.ex.all === 20 && r.ex.n === 6 && r.ex.acts === 3 && r.ex.diff > 1, `見本の会話：20個から毎回入れ替え、動かす見本と会話だけの見本を半分ずつ入れる（${JSON.stringify(r.ex)}）`);
+    check(r.ex.all === 22 && r.ex.n === 6 && r.ex.acts === 3 && r.ex.diff > 1, `見本の会話：22個から毎回入れ替え、動かす見本と会話だけの見本を半分ずつ入れる（${JSON.stringify(r.ex)}）`);
     check(/見つからないや/.test(r.kind[0]) && /つながってないのかも/.test(r.kind[1]) && /ぼくには分からなかった/.test(r.kind[2]), `困ったときの返事：キャラの言葉で、理由と次にどうするかを言う（${r.kind.join(' / ')}）`);
     check(r.recent, '言い回し：日をまたいでも最近言った文を避ける');
     check(/今週は2枚/.test(r.week[0]) && /古いカード/.test(r.week[0]) && !r.week[1] && !r.week[2] && /今週は2日/.test(r.week[3]) && !r.week[4], `週のふりかえり：日曜の夕方だけ・済みが無い週は言わない／週の連続は2日から（${r.week.join(' | ')}）`);
@@ -990,7 +1028,7 @@ try {
     check(r.quiet.quietSet && r.quiet.quietSaid === 0 && r.quiet.back, `「今日は静かにして」：その日は自分から話しかけず、「もう話していいよ」で戻る（${JSON.stringify(r.quiet)}）`);
     check(r.reject.asked && r.reject.until && !r.reject.again, `断られた提案：前回の続きを断られたら、しばらく聞かない（${JSON.stringify(r.reject)}）`);
     check(!r.mood.offAsk && r.mood.onAsk && r.mood.one && r.mood.enough && !r.mood.twice && r.mood.defaults.join() === 'false,false', `今日の調子：最初は聞かない。設定で入れると1日1回だけ聞き、しんどい日は1枚で「今日の分はおしまい」（${JSON.stringify(r.mood)}）`);
-    check(r.chat.hint3 && !r.chat.hint1 && r.chat.tiredNoBack, `雑談の決まり：3往復目でそっとカードに戻す。疲れた日は戻さない（${JSON.stringify(r.chat)}）`);
+    check(r.chat.hint3 && !r.chat.hint1 && r.chat.tiredNoBack, `雑談の決まり：4往復までは付き合い、5往復目からそっとカードに戻す（毎回戻さない）。疲れた日は戻さない（${JSON.stringify(r.chat)}）`);
     check(r.chat.slow, '考え中：5秒たっても考えていたら「ちょっと考えさせて」と一言');
     const f = await pg.evaluate(() => { const f = document.querySelector('#talkSetForm'); return !!(f.streak && f.moodAsk); });
     check(f, 'キャラの設定：週の連続・今日の調子を設定で入れられる');
@@ -1142,7 +1180,7 @@ try {
     const n0 = a.spoken.length;
     await pg.fill('#talkIn', '今日はいい天気だね'); await pg.press('#talkIn', 'Enter');
     await pg.waitForFunction(() => /その調子/.test(document.querySelector('#talkLog').textContent), null, { timeout: 5000 }).catch(() => {});
-    const b = await pg.evaluate(() => ({ you: [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent), log: document.querySelector('#talkLog').textContent, spoken: window.__spoken.length, prompts: window.__prompts.length }));
+    const b = await pg.evaluate(() => ({ you: [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent.replace(/^あなた：/, '')), log: document.querySelector('#talkLog').textContent, spoken: window.__spoken.length, prompts: window.__prompts.length }));
     check(b.you.join('|') === '見本のカード（次にやる・毎週）を保留へ|今日はいい天気だね', `一つの欄：話したことも打ったことも、同じ流れに順に文字で残る（${b.you.join('|')}）`);
     check(b.prompts === 1 && /その調子/.test(b.log), '一つの欄：命令でない言葉は会話として AI に渡し、返事を同じ流れに出す');
     check(b.spoken === n0, '一つの欄：打ったときは文字だけで返す（声を出さない）');

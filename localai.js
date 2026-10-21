@@ -31,7 +31,16 @@
   const CPU_MODELS = { qwen: CPU, sarashina: JA };
   // どの頭を入れるか（この端末だけの選択。入れた AI を消しても残す）
   const BRAIN_KEY = 'lk.aiBrain';
-  const brainPick = () => { try { return CPU_MODELS[g.localStorage.getItem(BRAIN_KEY)] ? g.localStorage.getItem(BRAIN_KEY) : 'qwen'; } catch { return 'qwen'; } };
+  // 選んでいないときの標準：入っている頭があればそれ。まだ何も無く WebGPU も無い端末（CPU で動かす）は、同じ大きさで日本語が得意な sarashina（10/21 satouさん「人と喋っているように」）
+  const brainPick = () => {
+    try {
+      const k = g.localStorage.getItem(BRAIN_KEY);
+      if (CPU_MODELS[k]) return k;
+      const was = load();
+      if (was.llm) return was.engine === 'cpu' ? (CPU_MODELS[was.cpuModel] ? was.cpuModel : 'qwen') : 'qwen';
+      return g.navigator?.gpu ? 'qwen' : 'sarashina';
+    } catch { return 'qwen'; }
+  };
   const setBrain = (k) => { try { g.localStorage.setItem(BRAIN_KEY, CPU_MODELS[k] ? k : 'qwen'); } catch { /* 選べなくても標準で動く */ } };
   // 言葉のモデル（日本語が通じる小さなもの）。端末のメモリで選び、WebGPU が16ビットの計算をできなければ f32 版にする
   const MODELS = {
