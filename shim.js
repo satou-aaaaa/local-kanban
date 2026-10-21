@@ -33,10 +33,14 @@
     if (h.has('new')) entry.form = true;
     if (h.has('voice')) entry.voice = true;
     if (h.has('talk')) entry.talk = true;
+    if (h.get('card')) entry.card = h.get('card'); // 知らせを押して開いた（sw.js）
     if (!entry.add && okLane(h.get('lane'))) entry.lane = h.get('lane');
     const [owner, repo] = (h.get('repo') || '').split('/');
     if (owner && repo) entry.repo = { owner, repo, branch: h.get('branch') || 'main' };
     if (location.search || location.hash.length > 1) history.replaceState(null, '', location.pathname);
+    // 新しいボードを取って開き直したとき（下の connect）にも、URL から来た操作をなくさない
+    const kept = sessionStorage.getItem('lk.entry'); sessionStorage.removeItem('lk.entry');
+    if (kept && !Object.keys(entry).length) Object.assign(entry, JSON.parse(kept));
   } catch {}
 
   // ================= 置き場所 =================
@@ -368,6 +372,7 @@
     if (again && !sessionStorage.getItem('lk.reloaded')) {
       sessionStorage.setItem('lk.reloaded', '1');
       if (s.kind === 'file') try { sessionStorage.setItem('lk.file', JSON.stringify({ name: s.label, text: s.text })); } catch {} // 開き直したあと同じファイルでつなぐ
+      try { if (Object.keys(entry).length) sessionStorage.setItem('lk.entry', JSON.stringify(entry)); } catch {}
       location.reload(); return;
     }
     sessionStorage.removeItem('lk.reloaded');

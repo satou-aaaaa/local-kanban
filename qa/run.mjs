@@ -387,6 +387,8 @@ try {
       const after = JSON.parse(sample).map((c) => (c.doc_id === 's4' ? { ...c, owner: 'you', lane: 'now', moves: [{ at: '2099-01-01T00:00:00Z', from: 'agent', to: 'now' }] } : c));
       after.push({ doc_id: 's8', title: '見本の新しい確認', owner: 'you', lane: 'now', decision: { question: '見本の新しい問い', options: [{ label: 'はい', consequence: '' }] } });
       after.push({ doc_id: 's9', title: '見本の今日が期限', owner: 'you', lane: 'next', due: t });
+      after.push({ doc_id: 's10', title: '見本の答え待ち', owner: 'agent', lane: 'agent', live_bucket: 'BLOCKED' });
+      after.push({ doc_id: 's11', title: '見本の済み', owner: 'agent', lane: 'done', done_at: '2099-01-01T00:00:00Z' });
       cardsText = JSON.stringify(after);
       await pg.evaluate(() => LK.reload());
       await pg.waitForTimeout(500);
@@ -394,9 +396,23 @@ try {
       check(notes.some((n) => /ポチ：確認が来てるよ｜見本の新しい問い/.test(n)), `確認が来たら知らせた（${notes.join(' / ') || 'なし'}）`);
       check(notes.some((n) => /ポチ：satouさんの番だよ｜見本のカード（エージェント）/.test(n)), 'エージェントから satouさんの番に戻ったら知らせた');
       check(notes.some((n) => /ポチ：今日までだよ！｜見本の今日が期限/.test(n)), '今日が期限のカードを、ポチの言葉で知らせた');
+      check(notes.some((n) => /ポチ：Claude が待ってるよ｜見本の答え待ち/.test(n)), 'Claude が答えを待っているカード（畳んだ進行中の列の中）を知らせた（ボード v53）');
+      check(!notes.some((n) => /見本の済み/.test(n)), '済んだものは知らせない（ボードの「済み」のまとめで見る）');
       const n1 = notes.length;
       await pg.evaluate(() => LK.reload()); await pg.waitForTimeout(300);
       check(await pg.evaluate(() => window.__notes.length) === n1, '同じことは二度知らせない');
+      // satouさんが答えたあとに、また Claude が待ちになったら、もう一度知らせる（v37 の点検）
+      cardsText = JSON.stringify(after.map((c) => (c.doc_id === 's10' ? { ...c, history: [{ at: '2099-01-02T00:00:00Z', who: 'you', text: '答えた' }] } : c)));
+      await pg.evaluate(() => LK.reload()); await pg.waitForTimeout(400);
+      check((await pg.evaluate(() => window.__notes.slice(-3))).some((n) => /Claude が待ってるよ｜見本の答え待ち/.test(n)) && await pg.evaluate((n) => window.__notes.length, n1) > n1, '答えたあとにまた Claude が待ちになったら、もう一度知らせる');
+      // 知らせを押すとそのカードが開く（sw.js が #card=<id> を付けて開く）
+      await Promise.all([pg.waitForNavigation(), pg.evaluate(() => { history.replaceState(null, '', location.pathname + '#card=s10'); location.reload(); })]); await ready(pg);
+      check(await pg.waitForFunction(() => document.querySelector('dialog#detail')?.open, null, { timeout: 8000 }).then(() => true, () => false) && !(await pg.evaluate(() => location.hash)).includes('card'), '知らせを押すと、そのカードの詳細が開く（#card=<id>）');
+      check(/postMessage\(\{ card: id \}\)/.test(readFileSync(resolve(root, 'sw.js'), 'utf8')), 'sw.js が知らせのカードを開いている画面へ渡す');
+      // 初めての端末ではボードを取って開き直す。そのときも URL から来た操作（#card・#add など）をなくさない
+      await pg.keyboard.press('Escape');
+      await Promise.all([pg.waitForNavigation(), pg.evaluate(() => { sessionStorage.setItem('lk.entry', JSON.stringify({ card: 's1' })); location.reload(); })]); await ready(pg);
+      check(await pg.waitForFunction(() => document.querySelector('dialog#detail')?.open, null, { timeout: 8000 }).then(() => true, () => false) && await pg.evaluate(() => !sessionStorage.getItem('lk.entry')), '開き直しても URL から来た操作をなくさない（開き直す前に取っておいた操作を、開いたあとに行う）');
       cardsText = null;
       await pg.evaluate(() => { localStorage.setItem('lk.notify', 'false'); localStorage.removeItem('lk.notified'); });
       await pg.close();
@@ -1898,9 +1914,19 @@ try {
   }, dx);
   await phone.evaluate(() => document.getElementById('lane-now').scrollIntoView({ block: 'start' }));
   const l0 = await topLane();
-  await swipe(-150); await phone.waitForTimeout(600);
-  const l1 = await topLane();
-  check(l0 !== l1, `左になぞると次の列へ（${l0} → ${l1}）`);
+  await swipe(-150); await phone.waitForTimeout(900);
+  // 移った先の列（下の列が畳まれて短いと、一番上まで送れないことがある＝ボード v53）。列の頭が画面の上半分に来ていればよい
+  const moved = () => phone.evaluate(() => { const id = document.getElementById('board').dataset.swipeLane; const l = id && document.getElementById(id); return l && l.getBoundingClientRect().top < innerHeight / 2 ? id : null; });
+  const idx = (id) => phone.evaluate((id) => [...document.querySelectorAll('#board .lane')].findIndex((l) => l.id === id), id);
+  const l1 = await moved();
+  check(!!l1 && await idx(l1) === await idx(l0) + 1, `左になぞるとちょうど次の列へ（${l0} → ${l1}）`);
+  await swipe(-150); await phone.waitForTimeout(900);
+  const l2 = await moved();
+  check(!!l2 && await idx(l2) === await idx(l0) + 2, `もう一度なぞるとその次の列へ（${l1} → ${l2}。前は畳んだ列があると2つ目で止まった）`);
+  await swipe(150); await phone.waitForTimeout(900);
+  // 間を空けずに続けてなぞっても数え違えない（v37 の点検）
+  await swipe(-150); await phone.waitForTimeout(150); await swipe(150); await phone.waitForTimeout(900);
+  check(await phone.evaluate(() => document.getElementById('board').dataset.swipeLane) === l1, `続けて速くなぞっても数え違えない（左・右ですぐ戻すと ${l1} のまま）`);
   await swipe(150); await phone.waitForTimeout(600);
   check(await topLane() === l0, '右になぞると前の列へ戻る');
 
@@ -1935,6 +1961,8 @@ try {
       await ready(pg);
       await pg.evaluate(() => { const d = document.getElementById('talkDlg'); if (d?.open) d.close(); });
       const card = (t) => pg.locator('#board .card', { hasText: t }).first();
+      // 畳んだ列（ボード v53：進行中・保留・済みは最初は畳む）の中のカードは、列を開いてから触る（satouさんと同じ手順）
+      const reveal = (t) => pg.evaluate((t) => { const c = [...document.querySelectorAll('#board .card')].find((e) => e.textContent.includes(t)); const f = c?.closest('.lane.folded')?.querySelector('h2 button.fold'); if (f) f.click(); return !!f; }, t);
       const shown = () => pg.evaluate(() => { const d = document.getElementById('detail'); return d.open || (getComputedStyle(d).display !== 'none' && d.getBoundingClientRect().height > 0); });
       const openC = async (t) => { await card(t).locator('.ttl').click({ timeout: 3000 }); await pg.waitForTimeout(200); return shown(); };
       const shut = () => pg.evaluate(() => { const d = document.getElementById('detail'); if (d.open) d.close(); });
@@ -2012,12 +2040,14 @@ try {
         });
         await step('寝かせると列から消え、保存に届き、やめると戻る', async () => {
           const t = '見本のカード（エージェント）';
+          await reveal(t); await pg.waitForTimeout(100);
           await card(t).locator('details.menu summary').click();
           await card(t).locator('.pop button', { hasText: '明日まで寝かせる' }).click();
           if (!(await saved((cs) => cs.some((c) => c.doc_id === 's4' && c.snooze_until)))) return 'snooze_until が保存されない';
           await pg.waitForTimeout(200);
           if (await pg.locator('#board .card', { hasText: t }).count()) return '寝かせても列に残る';
           await pg.locator('#focus .linkish', { hasText: '寝かせ中' }).click(); await pg.waitForTimeout(200);
+          await reveal(t); await pg.waitForTimeout(100);
           await card(t).locator('details.menu summary').click();
           await card(t).locator('.pop button', { hasText: '寝かせをやめる' }).click();
           if (!(await saved((cs) => cs.some((c) => c.doc_id === 's4' && !c.snooze_until)))) return 'やめても snooze_until が残る';
