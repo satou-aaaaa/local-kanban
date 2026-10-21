@@ -535,6 +535,20 @@
     const M = host.memory || null;
     const mem = () => { try { return M?.all() || []; } catch { return []; } };
     let lastUnknown = '', lastLearned = '', askForgetAll = false;
+    // 「それ」「これ」「さっきの」が指すカード（最後に話に出たカード）。2026-10-21「それは済みにして」が通じなかった
+    let lastRef = '';
+    const REF = /^(それ|これ|あれ|そっち|こっち|その(カード|やつ|件)|この(カード|やつ|件)|さっきの(カード|やつ|件)?)(?=は|を|も|が|、|,|\s|$)/;
+    const refer = (text) => {
+      const t = String(text || '').trim();
+      if (!lastRef || !REF.test(t) || !host.board().some((c) => c.title === lastRef)) return t;
+      const a = t.replace(REF, lastRef), b = a.replace(lastRef + 'は', lastRef + 'を');
+      const ok = (x) => { const c = g.Voice.parse(x, host.laneWords); return c && c.type !== 'unknown' && !/[はを]$/.test(c.query || ''); };
+      return ok(a) || !ok(b) ? a : b; // 「それは保留にして」→「〇〇を保留にして」（「〇〇は保留にして」は文型に無い）
+    };
+    const lastCardIn = (r) => { const ts = [...String(r || '').matchAll(/「([^」]+)」/g)].map((m) => m[1]).reverse(); for (const t of ts) { const c = host.card?.(t, true); if (c) return c; } return null; };
+    // 「何からやる？」「今日は何する？」：AI なしでも答える（2026-10-21 通じなかった）
+    const WHAT_NOW = /(何から|なにから|どれから|何を|なにを|何|なに)(やる|する|やろう|しよう|やれば|すれば)|今日(は|の)?(予定|やること|何|なに)|やること(は|ある|を教えて)/;
+    const GREET = /^(おはよう|おはよ|こんにちは|こんにちわ|こんばんは|こんばんわ|やあ|やっほー|ただいま|もしもし|ポチ|ねえ)(ございます)?[!！。、\s]*$/;
     const nameOf = () => mem().find((m) => m.kind === 'name')?.text || '';
     function remember(item) { if (!M) return null; try { const r = M.put(item); lastLearned = r?.id || item.id || ''; return r; } catch { return null; } }
     // 言い直しを覚える：分からなかった言葉のすぐあとに短い答えが来たら、その組を数える
@@ -687,6 +701,8 @@
       const t = g.Voice.norm(text);
       if (host.pending()) return host.run(text);
       if (/^(ありがとう|ありがと|サンキュー|助かる|助かった)/.test(t)) return pick('thanks', PHRASES.thanks) + ' ' + (cur ? askCard() : '');
+      if (GREET.test(t)) return (/^おはよ/.test(t) ? 'おはよう！' : /^こんにち/.test(t) ? 'こんにちは！' : /^こんばん/.test(t) ? 'こんばんは！' : /^ただいま/.test(t) ? 'おかえり！' : withName(pick('greet', PHRASES.greet[partOfDay()]), '')) + ' ' + (cur ? askCard() : pick('chat', PHRASES.chat));
+      if (WHAT_NOW.test(t)) { if (cur) return 'まずはこれ。' + askCard(); const r = host.run('今やるを読んで'); return r; }
       if (/(疲れ|つかれ|しんどい|眠い|ねむい|だるい)/.test(t)) { tired = true; mood('sad'); return pick('tired', PHRASES.tired); }
       if (cur) {
         const learned = aliasOf(t);
@@ -999,6 +1015,7 @@
       const speak = s.reply === 'voice' ? true : s.reply === 'text' ? false : voice;
       log('you', text);
       turns++;
+      text = refer(text);
       if (END.test(g.Voice.norm(text))) { await say(wrapUp() + pick('bye', PHRASES.bye), speak); await speech; stop(); return; }
       state('thinking');
       let r = manners(text), viaAi = false;
@@ -1013,6 +1030,7 @@
       }
       const thinkS = (performance.now() - turnAt) / 1000;
       await say(r, speak);
+      { const ref = lastCardIn(r) || cur; if (ref?.title) lastRef = ref.title; }
       if (!viaAi) note(text, r);
       const r1 = (x) => Math.round(x * 10) / 10;
       metrics.push({ at: new Date().toISOString().slice(0, 16), via: voice ? '声' : '打つ', brain: viaAi ? brain : mode === 'ai' ? 'すぐやった命令' : 'AI なし', listen_s: opts.listenS ? r1(opts.listenS) : null, think_s: r1(thinkS), speak_s: firstAt ? r1((firstAt - turnAt) / 1000) : null });
