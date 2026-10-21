@@ -16,15 +16,17 @@
   const hb = document.querySelector('header .hbtns') || document.querySelector('header');
   hb.insertAdjacentHTML('afterbegin', `
     <button type="button" id="talkBtn" hidden title="キャラと話して片づける（T）" aria-label="会話モード">💬</button>
-    <button type="button" id="reloadBtn" hidden title="最新を読み直す" aria-label="読み直す">↻</button>
     <details id="lkMenu"><summary aria-label="アプリのメニュー">⋯</summary><div class="items">
+      <button type="button" id="reloadBtn" hidden>↻ 読み直す</button>
+      <button type="button" data-m="look" hidden>🎨 見た目</button>
+      <button type="button" data-m="theme" hidden>🌓 表示（明るい・暗い）</button>
       <button type="button" data-m="github">GitHub でつなぐ（PC・スマホ）</button>
       <button type="button" data-m="folder">PC のフォルダを開く</button>
       <button type="button" data-m="file">cards.json を選ぶ</button>
-      <button type="button" data-m="cmd" disabled>打って話す・命令（Ctrl+K）</button>
+      <button type="button" data-m="cmd" hidden>打って話す・命令（Ctrl+K）</button>
       <button type="button" data-m="aiset">🎤と会話・AI の設定</button>
       <button type="button" data-m="phone" hidden>スマホでも開く（QR）</button>
-      <button type="button" data-m="download" disabled>ダウンロードで保存</button>
+      <button type="button" data-m="download" hidden>ダウンロードで保存</button>
       <button type="button" data-m="notify" hidden>🔔 知らせを受け取る</button>
       <button type="button" data-m="install" hidden>アプリとしてインストール</button>
     </div></details>`);
@@ -153,15 +155,19 @@
     else if (f && f.id === 'talkIcons') { lb.id = 'talkIconsTtl'; f.setAttribute('role', 'group'); f.setAttribute('aria-labelledby', lb.id); }
   });
 
-  function setStatus(msg, kind = '') { const s = $('#lkStatus'); s.textContent = msg; s.className = kind; }
+  // うまくいった知らせ（ok・ふつう）は少しだけ出して消す。困ったとき（warn・err）だけ残す（ボードの「最新（時刻に受信）」と同じことを言わない。v42 の点検）
+  let statusT = 0;
+  function setStatus(msg, kind = '') { const s = $('#lkStatus'); s.textContent = msg; s.className = kind; clearTimeout(statusT); if (kind !== 'warn' && kind !== 'err') statusT = setTimeout(() => { if (s.textContent === msg) s.classList.add('gone'); }, 6000); }
   L.onStatus(setStatus);
 
   // ---------- つないだあと ----------
   window.addEventListener('lk:connected', e => {
     $('#lkIntro').hidden = true;
     $('#reloadBtn').hidden = e.detail.kind === 'file' || e.detail.kind === 'cache';
-    $('[data-m=download]').disabled = false; $('[data-m=cmd]').disabled = false;
+    $('[data-m=download]').hidden = false; $('[data-m=cmd]').hidden = false;
     $('[data-m=phone]').hidden = e.detail.kind !== 'github';
+    // ボードの「見た目」「表示」は毎日は使わないので ⋯ にしまう（2026-10-21 satouさん「ボタンが増えたことによって、UI/UXに影響」。上の段を1段に）
+    $('[data-m=look]').hidden = !document.getElementById('lookBtn'); $('[data-m=theme]').hidden = !document.getElementById('theme');
     $('#talkBtn').hidden = !window.Talk;
     drawWhy();
     setTimeout(runEntry, 0);
@@ -625,6 +631,8 @@
     f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
     drawEar(); drawAi(); drawMem(); drawKoe();
     $('#talkSet').showModal();
+    // 開いたら名前の欄でなく見出しに（スマホでいきなりキーボードが出ないように。v42 の点検）
+    const h = $('#talkSetTtl'); h.tabIndex = -1; h.focus();
   }
   $('#talkSetBtn').onclick = openTalkSet;
   function drawMem() {
@@ -892,14 +900,15 @@
     if (e.key === 'm' || e.key === 'M') { e.preventDefault(); micGo(); }
     else if (e.key === 't' || e.key === 'T') { e.preventDefault(); openTalk('talk'); }
   });
-  const actions = { notify: toggleNotify, aiset: openTalkSet, github: openGithub, phone: showPhoneQr, cmd: openCmd, folder: openFolder, file: () => $('#fileInput').click(), download,
+  const proxy = id => () => document.getElementById(id)?.click();
+  const actions = { look: proxy('lookBtn'), theme: proxy('theme'), notify: toggleNotify, aiset: openTalkSet, github: openGithub, phone: showPhoneQr, cmd: openCmd, folder: openFolder, file: () => $('#fileInput').click(), download,
     install: async () => { if (installEvt) { installEvt.prompt(); installEvt = null; $('[data-m=install]').hidden = true; } } };
   // メニューから開いた画面を閉じたら ⋯ にキーボードの位置を戻す（閉じた details の中には戻れない。v35 の点検）
   document.querySelectorAll('[data-m]').forEach(b => b.addEventListener('click', () => { const inMenu = $('#lkMenu').contains(b); $('#lkMenu').open = false; if (inMenu) $('#lkMenu summary').focus(); actions[b.dataset.m](); }));
   $('#lkMenu').addEventListener('keydown', e => { if (e.key === 'Escape' && $('#lkMenu').open) { e.preventDefault(); e.stopPropagation(); $('#lkMenu').open = false; $('#lkMenu summary').focus(); } });
   document.addEventListener('click', e => { if (!$('#lkMenu').contains(e.target)) $('#lkMenu').open = false; });
   $('#reopenBtn').onclick = async () => { const h = await loadHandle(); if (h) { try { await useFolder(h); } catch { setStatus('前回のフォルダを開けませんでした。「PC のフォルダを開く」から選び直してください。', 'err'); } } };
-  $('#reloadBtn').onclick = () => L.reload().catch(e => setStatus('読めませんでした: ' + e.message, 'err'));
+  $('#reloadBtn').onclick = () => { $('#lkMenu').open = false; return L.reload().catch(e => setStatus('読めませんでした: ' + e.message, 'err')); };
   $('#fileInput').onchange = async e => {
     const fs = [...e.target.files], f = fs.find(x => !/\.html?$/i.test(x.name)), h = fs.find(x => /\.html?$/i.test(x.name));
     if (!f) { if (fs.length) setStatus('cards.json も一緒に選んでください。', 'err'); e.target.value = ''; return; }

@@ -10,6 +10,7 @@
 (function () {
   const LOCAL = 'local-board/cards.json', BASE = 'board/cards.json', MD = 'local-board/BOARD.md';
   const SETTINGS = 'local-board/settings.json', MEMORY = 'local-board/pochi-memory.json', TODAY = 'board/today.json', BOARD_HTML = 'board/index.html', BOARD_SRC = 'board-src/kanban.html';
+  const INBOX = 'local-board/inbox.json', INBOX_BRANCH = 'app-inbox';
   const LANES = [['now', '今やる'], ['next', '次にやる'], ['wait', '予定待ち'], ['later', '時間があるとき'], ['hold', '保留'], ['agent', 'エージェントが進行中'], ['done', '済み']];
   // PC とスマホで同じにする設定（見た目・カードの文字の量・キャラ）。並べ替え・絞り込み・開いた列などは端末ごと
   const SYNC_KEYS = ['kanban-theme', 'kanban-pal', 'kanban-wp', 'kanban-veil', 'kanban-glass', 'kanban-daily', 'kanban-density', 'lk.talk', 'voice.name'];
@@ -72,8 +73,19 @@
       if (!r.ok) throw new Error('GitHub に書けません（' + r.status + '）');
       shas[p] = (await r.json()).content.sha; delete tags[p];
     }
+    // Claude を起こす印（データ側の app-inbox ブランチの local-board/inbox.json）。中身は時刻と件数だけ。ブランチが無ければ何もしない
+    async function ping(n) {
+      const u = api(INBOX) + '?ref=' + INBOX_BRANCH, h = hdr();
+      const g = await fetch(u, { headers: h, cache: 'no-store' });
+      if (g.status === 404) return false;
+      if (!g.ok) throw new Error('inbox ' + g.status);
+      const sha = (await g.json()).sha;
+      const body = { message: 'アプリから：Claude に届けるものがある', content: enc(JSON.stringify({ pending: true, at: new Date().toISOString(), n }) + '\n'), branch: INBOX_BRANCH, sha };
+      const r = await fetch(api(INBOX), { method: 'PUT', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      return r.ok;
+    }
     return {
-      kind: 'github', canSave: true, label: `GitHub ${cfg.owner}/${cfg.repo}`,
+      kind: 'github', canSave: true, label: `GitHub ${cfg.owner}/${cfg.repo}`, ping,
       async read(p) { return get(p); },
       async write(p, text, why) {
         try { await put(p, text, why); }
@@ -225,6 +237,7 @@
       ops = ops.slice(sent); dirty = ops.length > 0; keepOps(); whys = whys.slice(sentWhys); relabel();
       try { await store.write(MD, boardMd(cards), why); } catch {}
       status(`保存しました（${why}）${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
+      wakeClaude();
     } catch (e) {
       if (e.conflict) {
         // ほかの端末か AI が先に書いていた：読み直して、まだ保存していない変更をその上にかけ直す
@@ -235,11 +248,21 @@
           const n = ops.length, nWhys = whys.length;
           await store.write(LOCAL, JSON.stringify(cards, null, 2) + '\n', why + '（読み直してかけ直した）');
           ops = ops.slice(n); dirty = ops.length > 0; keepOps(); whys = whys.slice(nWhys); relabel(); try { await store.write(MD, boardMd(cards), why); } catch {}
-          status('ほかの端末の変更と合わせて保存しました。', 'ok');
+          status('ほかの端末の変更と合わせて保存しました。', 'ok'); wakeClaude();
         } catch (e2) { status('保存できませんでした（ほかの端末と同時に書いたため）。↻ で読み直してください: ' + (e2.message || e2), 'err'); }
       } else if (!navigator.onLine) status('オフラインのため、まだ保存していません。つながったら自動で保存します。', 'warn');
       else status('保存できませんでした: ' + e.message, 'err');
     } finally { saving = false; if (dirty && navigator.onLine && !saveTimer) saveTimer = setTimeout(flush, 3000); }
+  }
+  // 答え・コメント・依頼・「AI に頼む」がまだ Claude に届いていなければ、保存のあとに Claude を起こす印を置く（毎時の取り込みを待たずに数分で届く）。
+  // 同じものでは1回だけ。印が置けなくても、毎時の取り込みで届く
+  const waiting = () => cards.filter(c => !c.deleted && (DELIVERY.some(k => c[k] === 'local') || c.ai_job?.status === 'new'));
+  async function wakeClaude() {
+    if (!store?.ping) return;
+    const w = waiting(); if (!w.length) return;
+    const sig = w.map(c => c.doc_id + '@' + (c.updated || '')).sort().join(',');
+    if (ls.get('woke') === sig) return;
+    try { if (await store.ping(w.length)) ls.set('woke', sig); } catch {}
   }
   window.addEventListener('online', () => { if (dirty) flush(); });
   window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
@@ -362,8 +385,9 @@
     let again = false;
     // ボードの元（board-src/kanban.html＝マージ済みのボード）を先に読む。毎朝の写し（board/index.html）は翌朝まで古いので、無いときだけ使う
     // 元が壊れていたら（アプリが当てにする部品が無い・開いたら動かなかった）、その版は飛ばして毎朝の写しを使う
-    const sig = t => t.length + ':' + t.slice(-200);
-    const boardBad = window.LKBoot && LKBoot.hasBoard && typeof window.move !== 'function';
+    // 中身全体の指紋（FNV-1a）。直した版を、壊れた版と取り違えない
+    const sig = t => { let h = 0x811c9dc5; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193); } return t.length + ':' + (h >>> 0).toString(36); };
+    const boardBad = window.LKBoot && LKBoot.hasBoard && (typeof window.move !== 'function' || typeof window.openDetail !== 'function');
     if (boardBad && ls.get('board-from') === 'src') ls.set('src-bad', ls.get('board-sig'));
     try {
       // 元が読めなかった（電波など）ときは、取っておいた画面のまま（写しに切り替えると、次に元へ戻って開き直しが行ったり来たりする）

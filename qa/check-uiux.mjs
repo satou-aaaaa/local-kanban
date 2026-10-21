@@ -2,13 +2,14 @@
 // 2026-10-21 satouさん「カンバンにも LAST TELL と同じようなチェック機構を」。手順は reviews/README.md。
 // 使い方: node qa/check-uiux.mjs [--update-baseline] [--show] [--shots <フォルダ>]（点検に使う画面写真を撮る）
 //         LK_BOARD=<ボードの写し> で本物のボードでも測れる（基準は「本物」の欄。写しはこのリポジトリに入れない）
-// 場面：ボード（スマホ 390x844・PC 1366x768・スマホの暗い色）、会話の欄（💬）、🎤と会話・AI の設定。壁紙なし。
+// 場面：ボード（スマホ 390x844・PC 1366x768・スマホの暗い色）、カードの詳細、会話の欄（💬）、🎤と会話・AI の設定。壁紙なし。
 // 見ること:
 //   - 記号だけのボタンに名前がある（aria-label か title）…… 外れ 0（NN/g「アイコンは文字を添える」、WCAG 4.1.2）
 //   - 押す所が 24px 以上（WCAG 2.5.8。アプリの部品だけ）…… 外れ 0
 //   - 文字の大きさ 12px 未満の数 …… 基準（qa/uiux-baseline.json）より増えない
 //   - 文字と背景の明るさの差（4.5:1、大きい字は 3:1）が足りない数 …… 基準より増えない（WCAG 1.4.3）
-//   - 最初の画面で押せる部品の数 …… 基準 +2 まで（ごちゃごちゃ度）
+//   - 押せる部品の数（最初の画面・全部）…… 基準より1つでも増えたら ❌（ごちゃごちゃ度。2026-10-21 satouさん「ボタンが増えたことによって、UI/UXに影響がでている」）。
+//     増やすときは --update-baseline で基準を上げ、reviews/v<版>.md の「## 増やした押す所」に理由と代わりに減らしたものを書く（qa/check-review.mjs が見る）
 //   - カードの中身以外の文字数（見出し・ボタン・札）…… 基準の 1.1 倍まで（10/20 satouさん「文字数が多く見にくい」）
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
@@ -46,8 +47,8 @@ function measure(scopeSel) {
   const noName = ctrls.filter(e => (e.tagName === 'BUTTON' || e.tagName === 'SUMMARY') && !/[\p{L}\p{N}]/u.test(e.textContent || '') && !label(e)).map(e => (e.textContent || '').trim() || e.outerHTML.slice(0, 40));
   // 入力欄の名前（placeholder は名前にならない。WCAG 4.1.2・1.3.1。v35 の点検で見つかった）
   const noField = ctrls.filter(e => /^(INPUT|SELECT|TEXTAREA)$/.test(e.tagName) && !/hidden|file|submit|button/.test(e.type) && !label(e)).map(e => e.name || e.id || e.tagName);
-  // アプリの部品（ボードの外側・ダイアログ）だけ押す所の大きさを見る。ボードの部品はボードの検査が見る
-  const appCtrl = e => scopeSel || e.closest('#lkBar,.lk,#lkMenu,#lkPochi,#talkBtn,#reloadBtn') || e.closest('header')?.querySelector('#lkMenu');
+  // アプリの部品（ボードの外側・アプリのダイアログ）だけ押す所の大きさを見る。ボードの部品（カードの詳細を含む）はボードの検査が見る
+  const appCtrl = e => (scopeSel && !scope.matches('#detail')) || e.closest('#lkBar,.lk,#lkMenu,#lkPochi,#talkBtn,#reloadBtn') || e.closest('header')?.querySelector('#lkMenu');
   const tiny = ctrls.filter(e => appCtrl(e) && !(e.tagName === 'INPUT' && /checkbox|radio/.test(e.type) && e.closest('label'))).filter(e => { const r = e.getBoundingClientRect(); return r.width < 24 || r.height < 24; }).map(e => (e.getAttribute('aria-label') || e.textContent || e.id || e.tagName).trim().slice(0, 14) + `(${Math.round(e.getBoundingClientRect().width)}x${Math.round(e.getBoundingClientRect().height)})`);
   const first = ctrls.filter(e => { const r = e.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth; }).length;
   const texts = []; const tw = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT); let n;
@@ -81,7 +82,7 @@ function measure(scopeSel) {
   const sample = s => [...s].slice(0, 5).map(e => e.tagName.toLowerCase() + (e.id ? '#' + e.id : e.className ? '.' + String(e.className).split(' ')[0] : '') + '「' + (e.textContent || '').trim().slice(0, 12) + '」' + (e.dataset.cr || ''));
   // 上のバーが横にはみ出していないか（v35 の点検：スマホで「見た目」が画面の外に隠れていた）
   const out = scopeSel ? [] : [...document.querySelectorAll('header button, header summary, header a[href]')].filter(vis).filter(e => e.getBoundingClientRect().right > innerWidth + 1).map(e => (e.getAttribute('aria-label') || e.textContent || '').trim().slice(0, 10));
-  return { out, noName, noField, tiny, first, small: small.size, smallEx: sample(small), lowC: lowC.size, lowCEx: sample(lowC), chrome };
+  return { out, noName, noField, tiny, first, taps: ctrls.length, small: small.size, smallEx: sample(small), lowC: lowC.size, lowCEx: sample(lowC), chrome };
 }
 
 const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {});
@@ -113,8 +114,15 @@ for (const [tag, w, h, mobile, scheme] of VIEWS) {
   await p.waitForFunction(() => window.LK?.ready && document.querySelectorAll('#board .card').length > 0, null, { timeout: 30000 });
   await p.evaluate(() => { for (const d of document.querySelectorAll('dialog[open]')) d.close(); });
   await p.waitForTimeout(400);
-  const scenes = [['ボード', null, async () => {}], ['会話', '#talkDlg', async () => {
-    await p.click('#talkBtn');
+  const scenes = [['ボード', null, async () => {}], ['詳細', 'dialog#detail', async () => {
+    // 押す所がいちばん多いカード（Claude の確認があるもの）を、ボードの openDetail で開く
+    const okd = await p.evaluate(() => { const c = cards.find((x) => x.decision && !x.answer && !x.deleted) || cards.find((x) => !x.deleted); if (!c || typeof openDetail !== 'function') return false; openDetail(c.id); return true; });
+    if (!okd) throw new Error('openDetail が無い');
+    await p.waitForFunction(() => document.querySelector('dialog#detail')?.open, null, { timeout: 10000 });
+    await p.waitForTimeout(300);
+  }], ['会話', '#talkDlg', async () => {
+    await p.evaluate(() => { for (const d of document.querySelectorAll('dialog[open]')) d.close(); });
+    await p.click(await p.isVisible('#talkBtn') ? '#talkBtn' : '#lkPochi'); // スマホでポチがいるときは 💬 を隠す（v42）
     await p.waitForFunction(() => document.getElementById('talkDlg')?.open, null, { timeout: 10000 });
     await p.waitForTimeout(800);
   }], ['設定', '#talkSetDlg, dialog:has(#talkSetForm)', async () => {
@@ -129,13 +137,14 @@ for (const [tag, w, h, mobile, scheme] of VIEWS) {
     const scopeSel = sel ? await p.evaluate((s) => { const d = document.querySelector(s.split(',').map(x => x.trim()).find(x => { try { return document.querySelector(x); } catch { return false; } })); const dlg = d?.closest('dialog') || d; if (!dlg) return null; dlg.dataset.qaScope = '1'; return '[data-qa-scope="1"]'; }, sel) : null;
     const m = await p.evaluate(measure, scopeSel);
     if (scopeSel) await p.evaluate(() => document.querySelector('[data-qa-scope]')?.removeAttribute('data-qa-scope'));
-    const key = `${tag}・${scene}`; now[key] = { first: m.first, small: m.small, lowC: m.lowC, chrome: m.chrome }; const bs = baseline[key];
+    const key = `${tag}・${scene}`; now[key] = { first: m.first, taps: m.taps, small: m.small, lowC: m.lowC, chrome: m.chrome }; const bs = baseline[key];
     ok(!m.noName.length, `${key}：記号だけのボタンに名前がある${m.noName.length ? '（名前が無い: ' + m.noName.slice(0, 5).join(' ') + '）' : ''}`);
     ok(!m.out.length, `${key}：上のバーが画面からはみ出していない${m.out.length ? '（はみ出し: ' + m.out.join(' ') + '）' : ''}`);
     ok(!m.noField.length, `${key}：入力欄に名前がある${m.noField.length ? '（名前が無い: ' + m.noField.slice(0, 5).join(' ') + '）' : ''}`);
     ok(!m.tiny.length, `${key}：アプリの押す所が 24px 以上${m.tiny.length ? '（小さい: ' + m.tiny.slice(0, 5).join(' ') + '）' : ''}`);
     if (bs && !update) {
-      if (scene === 'ボード') ok(m.first <= bs.first + 2, `${key}：最初の画面で押せる部品 ${m.first}（基準 ${bs.first}、+2 まで）`);
+      ok(m.first <= bs.first, `${key}：最初の画面で押せる部品 ${m.first}（基準 ${bs.first}。増やすなら点検の記録に理由）`);
+      if (bs.taps != null) ok(m.taps <= bs.taps, `${key}：押せる部品 全部で ${m.taps}（基準 ${bs.taps}。増やすなら点検の記録に理由）`);
       ok(m.small <= bs.small, `${key}：12px 未満の文字 ${m.small}（基準 ${bs.small}）${m.small > bs.small ? ' 例: ' + m.smallEx.join(' ') : ''}`);
       ok(m.lowC <= bs.lowC, `${key}：明るさの差が足りない文字 ${m.lowC}（基準 ${bs.lowC}）${m.lowC > bs.lowC ? ' 例: ' + m.lowCEx.join(' ') : ''}`);
       ok(m.chrome <= Math.round(bs.chrome * 1.1) + 5, `${key}：カードの中身以外の文字 ${m.chrome} 字（基準 ${bs.chrome}、1.1 倍まで）`);
