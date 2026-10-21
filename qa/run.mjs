@@ -163,6 +163,7 @@ const files = {
 };
 let cardsText = null; // ほかの端末・Claude が書いたあとの cards.json（null なら見本のまま）
 let conflictOnce = false;
+let inboxBranch = true; // データ側に app-inbox ブランチがあるか
 let failPuts = false; // true のあいだ保存は失敗する（GitHub に届かない） // true にすると、次の cards.json の保存を 1 回だけ「ほかの端末が先に書いた」にする
 
 // 耳（Whisper）のにせもの：window.__heard を順に「聞こえた」ことにする。localai.js の本物の耳と替わらないよう、Voice ができたときに入れて固定する。
@@ -230,6 +231,7 @@ await context.route('https://api.github.com/**', async (route) => {
   const req = route.request();
   const path = new URL(req.url()).pathname.replace(/^.*\/contents\//, '');
   if (req.method() === 'GET') {
+    if (/\/branches\/app-inbox$/.test(path)) return inboxBranch ? route.fulfill({ json: { name: 'app-inbox' } }) : route.fulfill({ status: 404, json: { message: 'Branch not found' } });
     if (path === 'local-board/cards.json') return route.fulfill({ json: { sha: 'sha-cards', content: Buffer.from(cardsText || sample).toString('base64') } });
     if (path === 'local-board/BOARD.md') return route.fulfill({ json: { sha: 'sha-md', content: Buffer.from('# board\n').toString('base64') } });
     if (path === 'board/index.html') return route.fulfill({ json: { sha: 'sha-board', content: Buffer.from(BOARD).toString('base64') } });
@@ -258,7 +260,8 @@ page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 page.on('console', (m) => {
   if (m.type() !== 'error') return;
   if (/status of (409|503)/.test(m.text())) return; // 保存がぶつかった・届かなかったときの検査でわざと返す
-  if (/status of 404/.test(m.text()) && /pochi-memory\.json/.test(m.location()?.url || '')) return; // まだ何も覚えていない（初めは無いファイル）
+  if (/status of 404/.test(m.text()) && /pochi-memory\.json/.test(m.location()?.url || '')) return;
+  if (/status of 404/.test(m.text()) && /inbox\.json|branches\/app-inbox/.test(m.location()?.url || '')) return; // 印のファイル・ブランチが無いときの検査 // まだ何も覚えていない（初めは無いファイル）
   if (offline && /ERR_INTERNET_DISCONNECTED|Failed to fetch|Failed to load resource/.test(m.text())) return;
   errors.push(`console.error: ${m.text()}`);
 });
@@ -342,6 +345,16 @@ try {
       await page.evaluate(() => LK.update('s3', { note: '印のテスト' }, 'メモ'));
       await page.waitForTimeout(2500);
       check(puts.filter((x) => x.path === 'local-board/inbox.json').length === before, '同じ答えでは印を2回置かない（ほかの変更の保存では置かない）');
+      // ブランチはあるのに印のファイルだけ無い：sha なしで新しく作る。ブランチも無ければ何もしない
+      const keep = files['local-board/inbox.json']; delete files['local-board/inbox.json'];
+      const made = await page.evaluate(() => LK.store.ping(1));
+      const p1 = puts.filter((x) => x.path === 'local-board/inbox.json').at(-1);
+      check(made === true && p1 && !('sha' in p1.body) && p1.body.branch === 'app-inbox', `印のファイルが無くても、ブランチがあれば sha なしで作る（${made}・${p1 && JSON.stringify(Object.keys(p1.body))}）`);
+      inboxBranch = false; const n1 = puts.length;
+      const none = await page.evaluate(() => LK.store.ping(1));
+      check(none === false && puts.length === n1, 'app-inbox ブランチが無ければ印を置かない');
+      inboxBranch = true; files['local-board/inbox.json'] = keep;
+      check(await page.evaluate(() => /^example-owner\/example-data@main\|/.test(LK.ls.get('woke') || '')), '起こした印の記録は、つなぎ先（リポジトリ・ブランチ）ごと');
       await page.evaluate(() => LK.update('s3', { note: '見本の補足（AI に渡さない）' }, 'メモ'));
       await page.waitForTimeout(1500);
     }
@@ -556,6 +569,12 @@ try {
     const ans = await pg.evaluate(() => [LK.planReply('```json\n{"kanban_reply":1,"card":"s2","answer":"はい"}\n```'), LK.planReply('```json\n{"kanban_reply":1,"card":"s2","answer":"たぶん"}\n```')]);
     check(ans[0].answer === 'はい' && !ans[1].answer && /変える所がありません/.test(ans[1].why || ''), '答えは確認の選択肢の label だけ受け取る');
     check(ans[0].lines.some((x) => /^列：/.test(x)), `答えだけの返事でも、Claude の列へ移ることを一覧で見せる（${ans[0].lines.join(' / ')}）`);
+    const curly = await pg.evaluate(() => [LK.planReply('```json\n{"kanban_reply":1,"card":"s12","note_add":"“重要”を確認"}\n```'), LK.planReply('```json\n{“kanban_reply”:1,“card”:“s12”,“note_add”:“見直す”}\n```')]);
+    check(curly[0].note === '“重要”を確認', `メモの中の “” はそのまま読む（${curly[0].note || curly[0].why}）`);
+    check(curly[1].note === '見直す', `引用符が全部 “” になった返事も読める（${curly[1].note || curly[1].why}）`);
+    const curly2 = await pg.evaluate(() => [LK.planReply('{“kanban_reply”:1,“card”:“s12”,“note_add”:“彼は“OK”と言った”}'), LK.planReply('見本：\n```json\n{"kanban_reply":1,"card":"s12","note_add":"メモに足す一言"}\n```\n答え：\n```json\n{"kanban_reply":1,"card":"s12","note_add":"後ろの答え"}\n```')]);
+    check(/全角/.test(curly2[0].why || '') && /半角/.test(curly2[0].why || ''), `引用符が全角で読めないときは、直し方（半角で出し直す）を言う（${curly2[0].why}）`);
+    check(curly2[1].note === '後ろの答え', `見本を引用したあとの本当の返事を読む（後ろの候補から）（${curly2[1].note || curly2[1].why}）`);
     const smp = await pg.evaluate(() => LK.planReply('```json\n{"kanban_reply":1,"card":"s12","note_add":"メモに足す一言","lane":"now|next|later|hold|done（任意）","comment":"…（任意）"}\n```'));
     check(!smp.note && !smp.comment && /変える所がありません/.test(smp.why || '') && /見本の文のまま/.test(smp.why || ''), `返事の形の見本の文をそのまま返されても取り込まない（${smp.why}）`);
     check(await pg.evaluate(() => { const d = document.querySelector('#lkPaste'); return d.open ? false : true; }), '取り込んだら貼る欄を閉じる');

@@ -77,15 +77,19 @@
     async function ping(n) {
       const u = api(INBOX) + '?ref=' + INBOX_BRANCH, h = hdr();
       const g = await fetch(u, { headers: h, cache: 'no-store' });
-      if (g.status === 404) return false;
-      if (!g.ok) throw new Error('inbox ' + g.status);
-      const sha = (await g.json()).sha;
+      let sha;
+      if (g.status === 404) {
+        // ブランチはあるのに印のファイルだけ無いときは、sha なしで新しく作る（ブランチが無ければ何もしない）
+        const b = await fetch(api(INBOX).replace(/\/contents\/.*$/, '/branches/' + INBOX_BRANCH), { headers: h, cache: 'no-store' });
+        if (!b.ok) return false;
+      } else if (!g.ok) throw new Error('inbox ' + g.status);
+      else sha = (await g.json()).sha;
       const body = { message: 'アプリから：Claude に届けるものがある', content: enc(JSON.stringify({ pending: true, at: new Date().toISOString(), n }) + '\n'), branch: INBOX_BRANCH, sha };
       const r = await fetch(api(INBOX), { method: 'PUT', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       return r.ok;
     }
     return {
-      kind: 'github', canSave: true, label: `GitHub ${cfg.owner}/${cfg.repo}`, ping,
+      kind: 'github', canSave: true, label: `GitHub ${cfg.owner}/${cfg.repo}`, dest: `${cfg.owner}/${cfg.repo}@${cfg.branch}`, ping,
       async read(p) { return get(p); },
       async write(p, text, why) {
         try { await put(p, text, why); }
@@ -260,7 +264,7 @@
   async function wakeClaude() {
     if (!store?.ping) return;
     const w = waiting(); if (!w.length) return;
-    const sig = w.map(c => c.doc_id + '@' + (c.updated || '')).sort().join(',');
+    const sig = (store.dest || '') + '|' + w.map(c => c.doc_id + '@' + (c.updated || '')).sort().join(','); // つなぎ先（リポジトリ）ごとに1回
     if (ls.get('woke') === sig) return;
     try { if (await store.ping(w.length)) ls.set('woke', sig); } catch {}
   }
