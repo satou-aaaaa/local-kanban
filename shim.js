@@ -2,14 +2,14 @@
 // ボードは window.claude.use("db"/"comments"/"user"/"assets") でデータを読み書きする。
 // ここではそれを、データのリポジトリ（非公開）の local-board/cards.json を読み書きする形に差し替える。
 // ボードの HTML 自体も、データのリポジトリの board/index.html（毎日の写し）から読む（boot.js）。このリポジトリ（公開）にはボードを置かない。
-//   読む : local-board/cards.json（無ければ board/cards.json＝毎日の写し）・local-board/settings.json・board/today.json・board/index.html
+//   読む : local-board/cards.json（無ければ board/cards.json＝毎日の写し）・local-board/settings.json・board/today.json・board-src/kanban.html（無ければ board/index.html）
 //   書く : local-board/cards.json・local-board/BOARD.md・local-board/settings.json・local-board/pochi-memory.json・local-board/diagnostics/*.json（この端末の診断。会話の中身は入れない）だけ（board/ は毎日の書き出しが上書きするので触らない）
 // 置き場所は3通り：GitHub（端末に貼った鍵）・PC のフォルダ（File System Access API）・cards.json を選ぶ（保存はダウンロード）。
 // 鍵はこの端末の localStorage（lk.gh）にだけ置き、api.github.com 以外へは送らない。
 'use strict';
 (function () {
   const LOCAL = 'local-board/cards.json', BASE = 'board/cards.json', MD = 'local-board/BOARD.md';
-  const SETTINGS = 'local-board/settings.json', MEMORY = 'local-board/pochi-memory.json', TODAY = 'board/today.json', BOARD_HTML = 'board/index.html';
+  const SETTINGS = 'local-board/settings.json', MEMORY = 'local-board/pochi-memory.json', TODAY = 'board/today.json', BOARD_HTML = 'board/index.html', BOARD_SRC = 'board-src/kanban.html';
   const LANES = [['now', '今やる'], ['next', '次にやる'], ['wait', '予定待ち'], ['later', '時間があるとき'], ['hold', '保留'], ['agent', 'エージェントが進行中'], ['done', '済み']];
   // PC とスマホで同じにする設定（見た目・カードの文字の量・キャラ）。並べ替え・絞り込み・開いた列などは端末ごと
   const SYNC_KEYS = ['kanban-theme', 'kanban-pal', 'kanban-wp', 'kanban-veil', 'kanban-glass', 'kanban-daily', 'kanban-density', 'lk.talk', 'voice.name'];
@@ -110,6 +110,8 @@
   }
 
   // html：一緒に選んだボードの画面（board/index.html）。初めての端末はこれが無いと画面が作れない
+  // アプリが当てにするボードの部品（AGENTS.md の一覧の要）が文字としてあるか
+  function boardOk(t) { return typeof t === 'string' && /<html/i.test(t) && /id=["']?board\b/.test(t) && ['move', 'openDetail', 'say', 'render', 'WPS'].every(n => new RegExp('\\b' + n + '\\b').test(t)); }
   function fileStore(name, text, html = null) {
     return { kind: 'file', canSave: false, label: name, text, async read(p) { return p === BOARD_HTML ? html : null; }, async write() {}, async loadCards() { return { text, from: name }; } };
   }
@@ -358,7 +360,19 @@
     }
     // ボードの新しい版・設定・今日の予定（どれも無くてよい）。ボードか設定が変わっていたら開き直す（ボードは開いたときに読むので）
     let again = false;
-    try { const t = await store.read(BOARD_HTML); if (t && window.LKBoot && LKBoot.save(t)) again = true; } catch {}
+    // ボードの元（board-src/kanban.html＝マージ済みのボード）を先に読む。毎朝の写し（board/index.html）は翌朝まで古いので、無いときだけ使う
+    // 元が壊れていたら（アプリが当てにする部品が無い・開いたら動かなかった）、その版は飛ばして毎朝の写しを使う
+    const sig = t => t.length + ':' + t.slice(-200);
+    const boardBad = window.LKBoot && LKBoot.hasBoard && typeof window.move !== 'function';
+    if (boardBad && ls.get('board-from') === 'src') ls.set('src-bad', ls.get('board-sig'));
+    try {
+      // 元が読めなかった（電波など）ときは、取っておいた画面のまま（写しに切り替えると、次に元へ戻って開き直しが行ったり来たりする）
+      let t = null, from = 'src', failed = false; try { t = await store.read(BOARD_SRC); } catch { failed = true; }
+      if (failed && window.LKBoot?.hasBoard && !boardBad) t = null;
+      else if (!boardOk(t) || sig(t) === ls.get('src-bad')) { t = await store.read(BOARD_HTML); from = 'html'; }
+      if (t && window.LKBoot && LKBoot.save(t)) { again = true; ls.set('board-from', from); ls.set('board-sig', sig(t)); try { sessionStorage.setItem('lk.boardNew', from); } catch {} }
+    } catch {}
+    if (boardBad && again) sessionStorage.removeItem('lk.reloaded'); // 壊れた版から戻すときは、もう一度開き直してよい
     try {
       const { changed, newer } = mergeSettings(await store.read(SETTINGS));
       if (changed) again = true;
@@ -389,7 +403,8 @@
     // 端末の保存（ボードの写し・まだ送っていない変更）を、空き容量が減っても消さないでほしいと頼む
     try { navigator.storage?.persist?.().catch(() => {}); } catch {}
     ready = true; lastRead = Date.now();
-    if (from) status(`${store.label} から読みました・${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
+    const boardNew = sessionStorage.getItem('lk.boardNew'); sessionStorage.removeItem('lk.boardNew');
+    if (from) status(boardNew === 'src' ? 'ボードを新しい版にしました' : boardNew === 'html' && ls.get('src-bad') ? 'ボードの新しい版が動かなかったので、毎朝の写しで開きました' : `${store.label} から読みました・${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
     resolveDb(db);
     emit(); todayListeners.forEach(f => f());
     window.dispatchEvent(new CustomEvent('lk:connected', { detail: { kind: store.kind } }));
@@ -445,7 +460,7 @@
 
   // ================= アプリ（app.js）から使う =================
   window.LK = {
-    LANES, SYNC_KEYS, ls, entry, memory: memoryApi, unsent: () => (dirty ? ops.length : 0), ghStore, folderStore, fileStore, connect, reload, flush, undo: undoLast, writable, as, actor: () => actor,
+    LANES, SYNC_KEYS, ls, entry, memory: memoryApi, unsent: () => (dirty ? ops.length : 0), ghStore, folderStore, fileStore, boardOk, connect, reload, flush, undo: undoLast, writable, as, actor: () => actor,
     get store() { return store; }, get ready() { return ready; }, get dirty() { return dirty; },
     get cards() { return cards; },
     add(body) { const id = newId(); return mutate({ kind: 'set', id, body }).then(() => id); },
