@@ -193,7 +193,7 @@ dialog.lk input:not([type=checkbox]):not([type=radio]):not([type=range]):not([ty
 
 /* v42：上の段を1段に（ボードの「見た目」「表示」は ⋯ の中から押す）。うまくいった知らせは消す */
 header .hbtns #lookBtn,header .hbtns #theme{display:none}
-#lkStatus.gone{display:none}
+#lkStatus.gone,#lkStatus.gone:not(.warn):not(.err){display:none} /* スマホの2行の決まり（:not が2つ）より強くする */
 /* 設定の下の固定の帯の下（画面の余白）に文がはみ出して見えないよう、帯の下も塗る（v42 の点検） */
 #talkSetForm>.lk-actions:last-child{box-shadow:0 24px 0 var(--card)}
 /* スマホでは ⋯ の中身が左にはみ出さないよう、画面の中に収める（v42 の点検） */
