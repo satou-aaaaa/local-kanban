@@ -99,6 +99,14 @@
       <ul id="memList"></ul>
       <div class="lk-actions"><button type="button" id="memAll" hidden>全部忘れる</button></div>
     </fieldset>
+    <fieldset id="earBox">
+      <legend>🎤の聞き取りの部品</legend>
+      <p id="earStat" class="help"></p>
+      <progress id="earProg" max="1" value="0" hidden aria-label="聞き取りの部品を入れている進み具合"></progress>
+      <p id="earMsg" class="help" aria-live="polite"></p>
+      <div class="lk-actions"><button type="button" id="earGet"></button></div>
+      <p class="help">押したときだけ huggingface.co から取り、この端末に保存します。声は端末の中で文字にし、外に出しません。</p>
+    </fieldset>
     <fieldset id="koeBox">
       <legend>気持ちで話し分ける声（端末の中で動かす）</legend>
       <p id="koeStat" class="help"></p>
@@ -122,7 +130,7 @@
     </fieldset>
     <fieldset id="diagBox">
       <legend>この端末の診断</legend>
-      <p class="help">うまく動かないときに押すと（🎤がすぐ止まった日は1日1回、自動でも送ります）、この端末の様子（WebGPU の有無・聞き取りの方式・AI の種類・空き・最近の返事にかかった秒数）を、データのリポジトリの local-board/diagnostics/ に書きます。Claude がそれを読んで直します。会話の中身・カードは入れません。</p>
+      <p class="help">うまく動かないときに押すと（🎤が止まった日は1日1回、自動でも送ります）、この端末の様子（WebGPU の有無・聞き取りの部品の有無・AI の種類・空き・最近の返事にかかった秒数）を、データのリポジトリの local-board/diagnostics/ に書きます。Claude がそれを読んで直します。会話の中身・カードは入れません。</p>
       <div class="lk-actions"><button type="button" id="diagBtn">この端末の診断を送る</button></div>
       <p id="diagMsg" class="help" aria-live="polite"></p>
     </fieldset>
@@ -164,9 +172,8 @@
     let t = '';
     if (!L.ready) t = `💬（会話）は、つないだあとに出ます。AI の部品は${set}から先に入れられます。`;
     else if (!window.Talk) t = '💬が出ません：会話の部品（talk.js）を読めませんでした。↻ か開き直しを試してね。';
-    else if (!window.Voice?.supported) t = window.LocalAI && !window.LocalAI.status().ear
-      ? `🎤は、この端末では使えません（端末の中だけで聞き取る仕組みが無い）。${set}で AI の部品を入れると、🎤と声の会話が使えます（💬は打って話せます）。`
-      : '🎤は、この端末では使えません（声を端末の中だけで聞き取れない）。💬は打って話せます。';
+    // 耳（Whisper）をまだ入れていないだけなら、ここには書かない（🎤を押すと入れる場所を開く。文字を増やさない）
+    else if (!window.Voice?.supported && !window.LocalAI) t = '🎤は、この端末では使えません（聞き取りの部品を読めなかった）。💬は打って話せます。';
     $('#talkWhy').textContent = t; $('#talkWhy').hidden = !t;
   }
 
@@ -324,6 +331,8 @@
       case 'done': case 'move': case 'delete': case 'agent': case 'due': {
         if (!L.writable()) return reply('いまは保存できないので動かせません。', voice);
         let c = cmd.card;
+        // 会話が持っているのは一覧の写し（題・列だけで id が無い）ことがある。本物のカードに引き直す
+        if (c && !c.id) c = live().find(x => x.title === c.title && x.lane !== 'done') || null;
         if (!c) {
           const pool = cmd.type === 'done' || cmd.type === 'agent' ? live().filter(x => x.lane !== 'done') : live();
           const r = findCard(cmd, pool, voice); if (!r.card) return r.say;
@@ -353,6 +362,8 @@
       }
       case 'status': {
         let c = cmd.card;
+        // 会話が持っているのは一覧の写し（題・列だけで id が無い）ことがある。本物のカードに引き直す
+        if (c && !c.id) c = live().find(x => x.title === c.title && x.lane !== 'done') || null;
         if (!c) { const r = findCard(cmd, live(), voice); if (!r.card) return r.say; c = r.card; }
         return reply(statusOf(c), voice);
       }
@@ -367,8 +378,15 @@
     if (!L.ready) return;
     if (!window.Voice?.supported) {
       const box = $('#voice'), vs = $('#vstatus'); if (box) box.hidden = false;
-      if (vs) vs.textContent = '🎤は、この端末では使えません。「⋯ → 🎤と会話・AI の設定」で AI の部品を入れると使えます。打って話すなら💬から。';
-      drawWhy(); return;
+      // 案内は設定の中（耳の欄）に出す。ボードの1行はダイアログの裏に隠れて読めない（v40 の点検）
+      const why = !navigator.onLine ? 'いまネットにつながっていません。Wi-Fi につないでから入れてね。打って話すなら💬から。'
+        : '🎤で話すには、この聞き取りの部品を1回入れます（約0.1GB・Wi-Fi のときがおすすめ）。打って話すなら💬から。';
+      if (!window.LocalAI || !window.Talk) { if (vs) vs.textContent = '🎤は、この端末では使えません（聞き取りの部品を読めなかった）。💬は打って話せます。'; drawWhy(); return; }
+      if (vs) vs.textContent = why;
+      openTalkSet();
+      $('#earMsg').textContent = why; $('#earBox').classList.add('lk-hl');
+      setTimeout(() => { $('#earBox')?.scrollIntoView({ block: 'center' }); $('#earGet')?.focus(); }, 50);
+      return;
     }
     openTalk(via);
   }
@@ -390,6 +408,15 @@
   }
 
   // ---------- 会話モード（talk.js。すべて端末の中） ----------
+  // 「減らして固める」（2026-10-21 satouさん）：前の版で AI・気持ちの声を使っていた端末も、1回だけ切る（⚙ でいつでも戻せる）
+  try {
+    if (!localStorage.getItem('lk.slim')) {
+      const t = JSON.parse(localStorage.getItem('lk.talk') || 'null');
+      if (t && t.ai !== 'off') { t.ai = 'off'; localStorage.setItem('lk.talk', JSON.stringify(t)); }
+      if (window.Koe?.status().installed && window.Koe.status().on) window.Koe.setOn(false);
+      localStorage.setItem('lk.slim', '1'); localStorage.setItem('lk.slimSay', '1');
+    }
+  } catch { /* 覚えられなくても動く */ }
   const talkSettings = () => ({ ...(window.Talk?.DEFAULTS || {}), ...(ls.get('talk') || {}) });
   let talk = null;
   function talkLine(who, text) {
@@ -562,8 +589,10 @@
       },
     });
     $('#talkDlg').showModal();
+    $('#talkIn').placeholder = window.Voice?.supported ? '打っても🎤で話してもOK（例：牛乳を買うを追加・済み・今やるを読んで）' : '打って話してね（例：牛乳を買うを追加・済み・今やるを読んで）';
     if (via === 'text') $('#talkIn').focus();
     talk.start(via);
+    try { if (localStorage.getItem('lk.slimSay')) { localStorage.removeItem('lk.slimSay'); talkLine('sys', 'ポチを軽くしたよ。🎤の聞き取りは端末の中の部品だけにして、AI と気持ちの声は切ったよ。⚙ でいつでも戻せるよ。'); } } catch {}
   }
   $('#talkBtn').onclick = () => openTalk('talk');
   // 🎤：押すと聞き続ける（もう一度押すと止める）。長押しなら離すまで聞く（考えながら話しても途中で切らない）
@@ -594,7 +623,7 @@
     $('#talkIcons').innerHTML = ['maru', 'kaku', 'shizuku'].map(k => `<label><input type="radio" name="icon" value="${k}" ${k === t.icon ? 'checked' : ''} aria-label="${{ maru: 'まる', kaku: 'しかく', shizuku: 'しずく' }[k]}">${Talk.avatarSvg(k, t.color)}</label>`).join('');
     const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
     f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
-    drawAi(); drawMem(); drawKoe();
+    drawEar(); drawAi(); drawMem(); drawKoe();
     $('#talkSet').showModal();
   }
   $('#talkSetBtn').onclick = openTalkSet;
@@ -614,6 +643,7 @@
   $('#talkAiGet').onclick = async () => {
     const ok = await installAi(t => { $('#talkMode').textContent = t; }, $('#talkAiProg'));
     if (!ok) return;
+    aiOn();
     talkLine('sys', '入りました。AI で話します。');
     if (talk?.on) { talk.stop(); openTalk('talk'); }
   };
@@ -623,17 +653,16 @@
     try { const name = await sendDiag(); out.textContent = `送りました（local-board/diagnostics/${name}）。会話の中身は入れていません。`; }
     catch (e) { out.textContent = '送れませんでした：' + (e?.message || e); }
   };
-  // 🎤がすぐ止まったときは、この端末の様子を1日1回だけ自動で送る（理由と秒数だけ。聞いた中身・カードは入れない）。
-  // 2026-10-21 satouさん「マイクを押してもすぐ OFF」：端末でしか起きないことを、頼まなくても Claude が読めるように
+  // 2026-10-21 satouさん「マイクを押してもすぐ OFF」：端末でしか起きないことを、頼まなくても Claude が読めるように、
+  // 🎤が「聞こえなかった」以外の理由で止まった日は、1日1回だけ端末の様子を送る（話した中身・カードは入れない）
   addEventListener('voice:fail', e => {
-    if (!e.detail?.fast || !L.ready) return;
+    const c = String(e.detail?.code || '');
+    if (!c || c === 'no-ear' || c === 'not-allowed' || c === 'NotAllowedError' || /聞き取れませんでした/.test(c) || !L.ready) return;
     const d0 = new Date(), day = `${d0.getFullYear()}-${d0.getMonth() + 1}-${d0.getDate()}`;
     if (L.ls.get('diagAuto') === day || diagBusy) return;
     diagBusy = true;
-    setTimeout(() => sendDiag().then(() => { L.ls.set('diagAuto', day); talkLine('sys', '🎤がすぐ止まったので、この端末の様子を Claude に送ったよ（話した中身・カードは入れていない）。'); }).catch(() => {}).finally(() => { diagBusy = false; }), 3000);
+    setTimeout(() => sendDiag().then(() => { L.ls.set('diagAuto', day); talkLine('sys', '🎤が止まったので、この端末の様子を Claude に送ったよ（話した中身・カードは入れていない）。'); }).catch(() => {}).finally(() => { diagBusy = false; }), 3000);
   });
-  // その日は耳（Whisper）で聞くと切り替えたことを一言
-  addEventListener('voice:switch', () => talkLine('sys', 'この端末の聞き取りがすぐ止まったので、今日はもう一つの耳（Whisper）で聞くね。'));
   let diagBusy = false;
   async function sendDiag() {
     {
@@ -642,13 +671,12 @@
       const d = {
         at: new Date().toISOString(), device: dev,
         端末: ua ? `${ua.platform || ''}${ua.mobile ? '（スマホ）' : ''} ${(ua.brands || []).filter(b => !/Not/.test(b.brand)).map(b => b.brand + ' ' + b.version).join('・')}` : navigator.userAgent.replace(/\s*\([^)]*\)\s*/g, ' ').slice(0, 120),
-        聞き取り: window.Voice ? (await Voice.localStatus().catch(() => '?')) + (window.LocalAI?.status().ear ? '・Whisper あり' : '') : 'なし',
+        聞き取り: window.LocalAI?.status().ear ? 'Whisper あり' : 'Whisper なし',
         内蔵AI: window.Talk ? await Talk.aiStatus() : 'なし',
         ...(window.LocalAI ? await LocalAI.info() : {}),
         気持ちの声: window.Koe?.status().installed || 'なし',
         最近の返事: (window.Talk?.metrics || []).slice(-20),
         聞き取りの失敗: window.Voice?.micLog?.() || [],
-        端末の音声認識を休む日: (() => { try { return localStorage.getItem('lk.srBad') || ''; } catch { return ''; } })(),
       };
       const name = `${d.at.slice(0, 10)}-${dev}.json`;
       await L.diag(name, d);
@@ -665,15 +693,9 @@
     const swap = st.llm && st.brain !== A.brainPick();
     $('#aiGet').textContent = swap ? `頭を ${p.model} に替える（約 ${p.gb}GB）` : st.llm ? '入れ直す' : `AI の部品を入れる（約 ${p.gb}GB）`;
     $('#aiDel').hidden = !st.llm;
-    // 頭は入っているが耳が無く、端末の音声認識でも日本語を聞き取れない端末は、耳（Whisper）だけ足せる
     $('#aiGet').dataset.earOnly = '';
-    if (st.llm && !st.ear && !swap) A.earNeeded().then(need => {
-      if (!need || A.status().ear || aiBusy) return;
-      $('#aiGet').textContent = `耳（声の聞き取り）だけ足す（約 ${A.EAR.gb}GB）`; $('#aiGet').dataset.earOnly = '1';
-      $('#aiStat').textContent += ' この端末の Chrome は日本語を端末の中で聞き取れないので、🎤には耳（Whisper）が要ります。';
-    });
     // 入れる前：WebGPU が使えなければ CPU 版、端末の音声認識で日本語を聞き取れなければ耳も入れる、と目安を直す
-    else if (!st.llm && A.brainPick() === 'qwen') Promise.all([A.gpu(), A.earNeeded()]).then(([a, need]) => {
+    if (!st.llm && A.brainPick() === 'qwen') Promise.all([A.gpu(), A.earNeeded()]).then(([a, need]) => {
       if (A.status().llm || aiBusy || A.brainPick() !== 'qwen') return;
       const head = a ? p.model : A.CPU.label, gb = (a ? A.MODELS[p.model === A.MODELS.large.label ? 'large' : 'small'].gb : A.CPU.gb) + (need ? A.EAR.gb : 0);
       $('#aiStat').textContent = a
@@ -682,6 +704,27 @@
       $('#aiGet').textContent = `AI の部品を入れる（約 ${Math.round(gb * 10) / 10}GB）`;
     });
   }
+  // 🎤の聞き取り（耳＝Whisper）。AI とは別に、これだけ入れられる
+  function drawEar() {
+    const A = window.LocalAI; if (!A) { $('#earBox').hidden = true; return; }
+    const on = A.status().ear;
+    $('#earStat').textContent = on ? `入っています（${A.EAR.label}）。🎤で話せます。` : `まだ入っていません（${A.EAR.label}）。入れると🎤で話せます。`;
+    if (!aiBusy) $('#earGet').disabled = false;
+    $('#earGet').textContent = on ? '入れ直す' : `聞き取りを入れる（約 ${A.EAR.gb}GB）`;
+  }
+  $('#earGet').onclick = async () => {
+    if (aiBusy) return;
+    if (!navigator.onLine) { $('#earMsg').textContent = 'いまネットにつながっていません。Wi-Fi につないでから押してね。'; return; }
+    $('#earGet').textContent = '入れています…';
+    const ok = await installAi(t => { $('#earMsg').textContent = t; }, $('#earProg'), { earOnly: true });
+    $('#earBox').classList.remove('lk-hl');
+    drawEar();
+    if (!ok) { $('#earMsg').textContent += ' もう一度押すと、続きから入れ直します。'; return; }
+    // 入ったら設定を閉じて、ボードの1行で知らせる（🎤はボードの上にある）
+    $('#earMsg').textContent = '入りました。🎤を押して話してね。';
+    $('#talkSet').close();
+    const vs = $('#vstatus'); if (vs) { $('#voice').hidden = false; vs.textContent = '聞き取りの部品が入りました。🎤を押して話してね。'; }
+  };
   // 気持ちで話し分ける声（koe.js）
   let koeBusy = false;
   async function drawKoe() {
@@ -720,20 +763,22 @@
   };
   $('#koeDel').onclick = async () => { if (koeBusy || !window.Koe) return; await Koe.remove(); $('#koeMsg').textContent = 'この端末から消しました。'; drawKoe(); };
   $('#koeOn').onchange = e => { window.Koe?.setOn(e.target.checked); drawKoe(); };
+  // AI を入れたら、AI で話す設定にする（AI は入れた人だけ使う。2026-10-21「減らして固める」）
+  function aiOn() { try { const t = JSON.parse(localStorage.getItem('lk.talk') || '{}'); t.ai = 'auto'; localStorage.setItem('lk.talk', JSON.stringify(t)); const f = $('#talkSetForm'); if (f?.ai) f.ai.checked = true; } catch {} }
   // AI の部品を入れる（設定の画面からも、💬の中の1ボタンからも同じ）。msg・prog は進み具合を出す場所
   let aiBusy = false;
   const onPC = () => /Windows|Macintosh|Linux x86/.test(navigator.userAgent) && !/Android|Mobile/.test(navigator.userAgent);
   async function installAi(msg, prog, opts = {}) {
     if (aiBusy || !window.LocalAI) return false;
-    aiBusy = true; $('#aiGet').disabled = true; $('#talkAiGet').disabled = true; prog.hidden = false; prog.value = 0;
+    aiBusy = true; $('#aiGet').disabled = true; $('#talkAiGet').disabled = true; $('#earGet').disabled = true; prog.hidden = false; prog.value = 0;
     msg('取ってきています…（Wi-Fi で、画面を閉じずに待ってね）' + (onPC() ? ' PC ではブラウザの保存場所（ふつう C ドライブ）に入ります。' : ''));
     try { await LocalAI.safeInstall((v, what) => { prog.value = v; if (what) msg(String(what).slice(0, 120)); }, opts); return true; }
     catch (e) { msg(e?.message || String(e)); return false; }
-    finally { aiBusy = false; $('#aiGet').disabled = false; $('#talkAiGet').disabled = false; prog.hidden = true; drawAi(); drawWhy(); }
+    finally { aiBusy = false; $('#aiGet').disabled = false; $('#talkAiGet').disabled = false; prog.hidden = true; drawAi(); drawEar(); drawWhy(); }
   }
   $('#aiGet').onclick = async () => {
     const ok = await installAi(t => { $('#aiMsg').textContent = t; }, $('#aiProg'), { earOnly: $('#aiGet').dataset.earOnly === '1' });
-    if (ok) $('#aiMsg').textContent = '入りました。会話モードと🎤で使えます。';
+    if (ok) { aiOn(); $('#aiMsg').textContent = '入りました。会話モードと🎤で使えます。'; }
   };
   $('#aiBrain').onchange = e => { if (!window.LocalAI || aiBusy) return; LocalAI.setBrain(e.target.value); drawAi(); };
   $('#aiDel').onclick = async () => { if (aiBusy || !window.LocalAI) return; await LocalAI.remove(); $('#aiMsg').textContent = 'この端末から消しました。'; drawAi(); drawWhy(); };

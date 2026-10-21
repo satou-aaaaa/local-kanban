@@ -1,13 +1,16 @@
 // 声（と Ctrl+K の命令欄）で操作するための小さな部品。カンバン以外のアプリ（メモなど）からも使える。外部ライブラリなし。
 //   Voice.parse(文, 列の一覧)  … 文を命令に直す（ブラウザの機能は使わない。テストしやすいように純粋な関数）
 //   Voice.match(言葉, 一覧, 題の取り出し) … あいまい一致で候補を探す
-//   Voice.listen()             … 1回だけ聞き取る（端末の中だけ。サーバーで文字にする音声認識は使わない）
+//   Voice.listen()             … 1回だけ聞き取る（耳＝localai.js の Whisper だけ。端末の中で文字にする。サーバーで文字にする音声認識は使わない）
 //   Voice.listen({ hold: true }) … 押している間だけ聞く。Voice.release() で聞き終わり（離した）
 //   Voice.cancelListen()       … 聞いている途中でやめる（打つほうに切り替えたとき）
-//   Voice.localStatus()        … 端末の中で聞き取れるか（'available' など）
+//   Voice.localStatus()        … 前の版との互換のため残す（いつも 'unavailable'。Chrome の音声認識は使わない）
 //   Voice.speak(文)            … 端末の中の声で読み上げる（ネット経由の声は使わない）
-//   Voice.supported            … 端末の中で聞き取れるか（Chrome 139 以降の音声認識、または localai.js で入れた Whisper）
-//   Voice.useEar(耳)           … 端末内の音声認識が無いときに使う別の耳（{ ready(), listen(), cancel(), release() }。localai.js の Whisper）
+//   Voice.supported            … 聞き取れるか（localai.js で耳＝Whisper を入れたか）
+//   Voice.useEar(耳)           … 聞き取りに使う耳（{ ready(), listen(), cancel(), release() }。localai.js の Whisper）
+// 耳は Whisper の1本だけ（2026-10-21 satouさん「減らして固める」）。Chrome の音声認識（processLocally）は、
+// いまはパソコンだけで Android は対象外（https://groups.google.com/a/chromium.org/g/blink-dev/c/VNOok2dbmHM/m/TQpe9shjCgAJ）、
+// Pixel でマイクの取り合いですぐ止まった（#50）。耳を2本持つと組み合わせごとに壊れたので、1本にした
 // 文型（claude.ai のボードと同じ）:
 //   「〇〇を追加」「〇〇を今やるに追加」「今やるに〇〇を追加」 → {type:'add', title, lane}
 //   「〇〇を済み」「〇〇終わった」「〇〇完了」                → {type:'done', query}
@@ -127,120 +130,39 @@
     return items.map((it) => ({ it, s: similar(q, norm(title(it))) })).filter((x) => x.s >= 0.2).sort((a, b) => b.s - a.s).slice(0, n).map((x) => x.it);
   }
 
-  const SR = g.SpeechRecognition || g.webkitSpeechRecognition;
-  // 声は端末の外に出さない。端末の中で聞き取れる音声認識（Chrome 139 以降の processLocally）だけを使い、
-  // サーバーで文字にする音声認識（ふつうの Chrome・Safari・Edge）には落とさない。
-  const canLocal = !!SR && typeof SR.available === 'function';
+  // 前の版との互換（メモのアプリなどが呼ぶことがある）。Chrome の音声認識は使わないので、いつも「使えない」
+  const localStatus = async () => 'unavailable';
+  const install = async () => false;
 
-  // 'available'（使える）・'downloadable'（日本語の部品を入れれば使える）・'downloading'・'unavailable'
-  async function localStatus(lang = 'ja-JP') {
-    if (!canLocal) return 'unavailable';
-    try { return await SR.available({ langs: [lang], processLocally: true }); } catch { return 'unavailable'; }
-  }
-  // 日本語の部品を端末に入れる（ボタンを押したときに呼ぶ）。true なら入った
-  async function install(lang = 'ja-JP') {
-    if (!canLocal || typeof SR.install !== 'function') return false;
-    try { return !!(await SR.install({ langs: [lang], processLocally: true })); } catch { return false; }
-  }
-
-  // 端末内の音声認識が無いときの別の耳（これも端末の中だけで動くもの）
+  // 耳（localai.js の Whisper。端末の中だけで動く）
   let ear = null;
   function useEar(e) { ear = e; }
   const earReady = () => { try { return !!ear?.ready(); } catch { return false; } };
 
-  // 聞いている途中でやめる（会話の途中で打つほうに切り替えたとき）。別の耳（Whisper）は cancel があれば呼ぶ
-  let rec = null, letGo = false;
+  // 聞いている途中でやめる（会話の途中で打つほうに切り替えたとき）
   // 押している間だけ聞く（hold）の「離した」。聞き取った分を返して終わる
-  function release() {
-    letGo = true;
-    try { rec?.stop(); } catch { /* 止められなくてもよい */ }
-    try { ear?.release?.(); } catch { /* なくてよい */ }
-  }
-  function cancelListen() {
-    try { rec?.abort(); } catch { /* 止められなくてもよい */ }
-    rec = null;
-    try { ear?.cancel?.(); } catch { /* なくてよい */ }
-  }
+  function release() { try { ear?.release?.(); } catch { /* なくてよい */ } }
+  function cancelListen() { try { ear?.cancel?.(); } catch { /* なくてよい */ } }
 
-  // 1回だけ聞き取る。返り値は Promise<{ text }>。端末の中で聞き取れないときは聞かずにエラーにする
-  // hold: true なら、release() を呼ぶまで聞き続ける（間があっても切らない）。waitMs は別の耳（Whisper）で話し始めを待つ長さ
-  // endMs は別の耳（Whisper）の話し終わりの待ち。phrases は Chrome の音声認識に「出やすい言葉」として渡す（あれば）。
-  // 返り値の via は 'ear'（Whisper）か 'local'（Chrome の端末内の音声認識）
-  // 端末の音声認識がすぐ終わる・エラーになる端末（2026-10-21 Pixel「マイクを押してもすぐ OFF」）は、その日は耳（Whisper）で聞く。
-  // Android の Chrome は聞き取りを別の部品（端末の音声認識サービス）に任せるので、マイクの取り合いなどで、話す前に終わることがある。
-  const BAD_KEY = 'lk.srBad';
-  const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }; // 端末の時刻の日付
-  const srBad = () => { try { return (localStorage.getItem(BAD_KEY) || '').startsWith(today()); } catch { return false; } };
-  // 聞き取りに失敗した記録（理由・どの耳・何秒で終わったか。聞いた中身は入れない）。診断で送る
+  // 聞き取りに失敗した記録（理由・何秒で終わったか。聞いた中身は入れない）。診断で送る
   const LOG_KEY = 'lk.micLog';
   function note(v) {
     try { const l = JSON.parse(localStorage.getItem(LOG_KEY) || '[]'); l.push({ at: new Date().toISOString(), ...v }); localStorage.setItem(LOG_KEY, JSON.stringify(l.slice(-20))); } catch { /* 残せなくてもよい */ }
     try { g.dispatchEvent?.(new CustomEvent('voice:fail', { detail: v })); } catch { /* なくてよい */ }
   }
   const micLog = () => { try { return JSON.parse(localStorage.getItem(LOG_KEY) || '[]'); } catch { return []; } };
-  // どの耳で聞くか：'local'（Chrome の端末内の音声認識）・'ear'（Whisper）・'none'
-  async function route(lang = 'ja-JP') {
-    const st = await localStatus(lang);
-    if (st === 'available' && !(srBad() && earReady())) return 'local';
-    return earReady() ? 'ear' : 'none';
-  }
-  async function listen({ lang = 'ja-JP', hold = false, waitMs, endMs, phrases } = {}) {
-    letGo = false;
-    const st = await localStatus(lang);
-    if ((st !== 'available' || srBad()) && earReady()) return { ...(await ear.listen({ lang, hold, waitMs, endMs })), via: 'ear' };
-    try { return await localListen({ lang, hold, phrases, st }); }
-    catch (e) {
-      // 話す前に終わった・エラーになった（「聞こえなかった」で 6 秒以上待ったもの以外）→ 耳があれば今日は耳で聞き直す
-      if (e?.fast && earReady() && !letGo) {
-        try { localStorage.setItem(BAD_KEY, today() + ' ' + (e.code || '')); } catch { /* 覚えられなくても今回は耳で聞く */ }
-        try { g.dispatchEvent?.(new CustomEvent('voice:switch', { detail: { code: e.code } })); } catch { /* なくてよい */ }
-        return { ...(await ear.listen({ lang, hold, waitMs, endMs })), via: 'ear' };
-      }
+  const route = async () => (earReady() ? 'ear' : 'none');
+
+  // 1回だけ聞き取る。返り値は Promise<{ text, via: 'ear' }>。耳が無ければ聞かずにエラー（code 'no-ear'）
+  // hold: true なら release() を呼ぶまで聞き続ける。waitMs は話し始めを待つ長さ、endMs は話し終わりの待ち
+  async function listen({ lang = 'ja-JP', hold = false, waitMs, endMs } = {}) {
+    if (!earReady()) { const e = new Error('🎤で話すには、聞き取りの部品（Whisper）を入れてね'); e.code = 'no-ear'; throw e; }
+    const t0 = Date.now();
+    try { return { ...(await ear.listen({ lang, hold, waitMs, endMs })), via: 'ear' }; } catch (e) {
+      // 聞こえなかっただけ（だまっていた）は記録しない。マイクが取れない・耳が落ちたなどは記録して診断で送る
+      if (!/聞き取れませんでした/.test(e?.message || '')) note({ code: e?.code || e?.name || 'ear-error', ms: Date.now() - t0 });
       throw e;
     }
-  }
-  const HARD = ['audio-capture', 'network', 'start', 'service-not-allowed', 'language-not-supported', 'bad-grammar'];
-  // 失敗の理由を、使う人の言葉で（次にどうするかも）
-  const WHY = { 'audio-capture': 'マイクを使えなかったよ（ほかのアプリがマイクを使っているかも）', network: '聞き取りの部品とつながらなかったよ', start: '聞き取りを始められなかったよ', 'service-not-allowed': 'この端末では聞き取りが止められているみたい', 'language-not-supported': 'この端末の聞き取りは日本語に対応していないみたい' };
-  async function localListen({ lang, hold, phrases, st }) {
-    if (st === 'downloadable' || st === 'downloading') {
-      if (st === 'downloadable') install(lang);
-      throw new Error('日本語の聞き取りの部品を端末に入れています。少し待ってからもう一度押してください。');
-    }
-    if (st !== 'available') throw new Error('この端末では、声を端末の中だけで聞き取れません。' + (g.LocalAI ? '「⋯ → 🎤と会話・AI の設定」で AI の部品（耳）を入れると聞き取れます。' : ''));
-    const t0 = Date.now();
-    const fail = (msg, code) => {
-      const ms = Date.now() - t0, e = new Error(msg);
-      // 「すぐ終わった」（話す前に終わった）：マイク・通信・始められない・言葉が無いのエラーか、1.5 秒たたずに終わったもの。
-      // 「聞こえなかった」（no-speech・何も言わずに終わった）は、黙っていただけのこともあるので 1.5 秒以上なら数えない
-      e.code = code; e.fast = !letGo && code !== 'not-allowed' && code !== 'aborted' && (HARD.includes(code) || ms < 1500);
-      note({ via: 'local', code: code || 'end', ms, fast: e.fast });
-      return e;
-    };
-    return new Promise((ok, ng) => {
-      const r = new SR(); rec = r;
-      r.lang = lang; r.interimResults = false; r.maxAlternatives = 1; r.continuous = !!hold;
-      r.processLocally = true;
-      // 出やすい言葉（Chrome の contextual biasing。試験的な機能なので、無い・失敗するときは何もしない）
-      try { if (phrases?.length && 'phrases' in r && g.SpeechRecognitionPhrase) r.phrases = phrases.slice(0, 50).map((p) => new g.SpeechRecognitionPhrase(p, 3.0)); } catch { /* なくてよい */ }
-      let got = false;
-      const parts = []; // hold：離すまでに聞き取れた分を全部つなぐ
-      r.onresult = (e) => {
-        if (!hold) { got = true; ok({ text: e.results[0][0].transcript, via: 'local' }); return; }
-        for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) parts.push(e.results[i][0].transcript);
-      };
-      let failed = false;
-      r.onerror = (e) => { if (hold && e.error === 'no-speech') return; failed = true; ng(fail(e.error === 'not-allowed' ? 'マイクが許可されていません' : e.error === 'no-speech' ? '聞き取れませんでした' : (WHY[e.error] || '聞き取りが止まったよ（' + e.error + '）'), e.error)); };
-      r.onend = () => {
-        if (rec === r) rec = null;
-        clearTimeout(cap);
-        if (hold && parts.join('').trim()) { got = true; ok({ text: parts.join('').trim(), via: 'local' }); }
-        if (!got && !failed) ng(fail('聞き取れませんでした', 'end'));
-      };
-      const cap = hold ? setTimeout(() => { try { r.stop(); } catch { /* なくてよい */ } }, 60000) : 0; // 押しっぱなしでも 1 分で区切る
-      try { r.start(); } catch (e) { failed = true; ng(fail('音声認識を始められませんでした', 'start')); return; }
-      if (hold && letGo) { try { r.stop(); } catch { /* なくてよい */ } } // 始まる前に離していた
-    });
   }
 
   // 読み上げは端末の中の声（voice.localService が true）だけ。「Google 日本語」などネット経由の声は使わない（文が外に出るため）
@@ -323,6 +245,6 @@
     try { g.speechSynthesis?.cancel(); } catch { /* なくてよい */ }
   }
 
-  const api = { mood: 'normal', stop, cancelListen, release, parse, dueDate, split, match, nearest, laneOf, listen, localStatus, install, speak, speakAll, speechText, chunks, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm, route, micLog, note };
+  const api = { mood: 'normal', stop, cancelListen, release, parse, dueDate, split, match, nearest, laneOf, listen, localStatus, install, speak, speakAll, speechText, chunks, localVoice, useEar, localApi: false, get supported() { return earReady(); }, norm, route, micLog, note };
   g.Voice = api;
 })(typeof window !== 'undefined' ? window : globalThis);
