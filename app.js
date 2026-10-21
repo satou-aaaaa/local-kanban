@@ -115,7 +115,7 @@
       <p id="aiStat" class="help"></p>
       <progress id="aiProg" max="1" value="0" hidden></progress>
       <p id="aiMsg" class="help" aria-live="polite"></p>
-      <label>頭（AI）の種類 <select id="aiBrain"><option value="qwen">Qwen2.5 0.5B（標準。WebGPU があれば速い）</option><option value="sarashina">sarashina2.2 0.5B（日本語が得意・CPU で動く・約0.5GB）</option></select></label>
+      <label>頭（AI）の種類 <select id="aiBrain"><option value="qwen">Qwen2.5 0.5B（WebGPU があれば速い。WebGPU のある端末の標準）</option><option value="sarashina">sarashina2.2 0.5B（日本語が得意・CPU で動く・約0.5GB。WebGPU の無い端末の標準）</option></select></label>
       <div class="lk-actions"><button type="button" id="aiGet"></button><button type="button" id="aiDel" hidden>入れた AI を消す</button></div>
       <details><summary>頭の選び方とクレジット</summary><p class="help">sarashina2.2 は日本語の受け答えが Qwen2.5 より得意です（モデルカードの日本語 MT-Bench 4.55 対 2.95）。WebGPU 版が無いので CPU で動かし、返事はゆっくりです。替えると前の頭は消してから入れます。<span id="aiCredit"></span></p></details>
       <p class="help">入れるあいだは画面を消さないようにします。空きが足りなければ取りに行きません。失敗したら途中まで取った分は消します。押したときだけ、モデルのファイルを Hugging Face（huggingface.co）と GitHub（raw.githubusercontent.com）から1回取ってきて、この端末に保存します。以後はオフラインで動きます。取りに行くのはモデルだけで、会話やカードは送りません。大きいので Wi-Fi のときに押してください。</p>
@@ -393,8 +393,9 @@
   let talk = null;
   function talkLine(who, text) {
     const d = document.createElement('div'); d.className = 'l ' + who; d.textContent = text;
+    if (who === 'you' || who === 'ai') { const w = document.createElement('span'); w.className = 'sr'; w.textContent = who === 'you' ? 'あなた：' : 'ポチ：'; d.prepend(w); } // 読み上げで誰の発言か分かるように（v36 点検）
     if (who === 'you') talkUndo = null;
-    if (who === 'ai' && talkUndo) { const u = talkUndo; talkUndo = null; const b = document.createElement('button'); b.type = 'button'; b.className = 'undo'; b.textContent = '戻す'; b.onclick = () => { b.remove(); u(); }; d.append(' ', b); }
+    if (who === 'ai' && talkUndo) { const u = talkUndo; talkUndo = null; const b = document.createElement('button'); b.type = 'button'; b.className = 'undo'; b.textContent = '戻す'; b.setAttribute('aria-label', '今のを戻す'); b.onclick = () => { b.remove(); u(); }; d.append(' ', b); }
     const box = $('#talkLog'); box.appendChild(d); while (box.children.length > 30) box.firstChild.remove(); box.scrollTop = box.scrollHeight;
   }
   const TALK_STATE = { starting: '準備しています…', listening: '聞いてるよ（話してね。打ってもいいよ）', thinking: '考え中…', speaking: '話しています（話しかけても、打っても割り込めます）', typing: '下の欄に打って話してね', idle: '打つか、🎤を押して話してね', off: '' };
@@ -552,7 +553,7 @@
       onMode: (m, brain, why) => {
         $('#talkMode').textContent = m === 'ai'
           ? '🧠 AI と話しています（' + (brain === 'cpu' ? '入れた AI・CPU で動かしています（ゆっくり）' : brain === 'webllm' ? '入れた WebLLM' : 'Chrome の内蔵 AI') + '・端末の中だけ）'
-          : why === 'off' ? '📋 AI なし：設定で切っています（決まった返事で1枚ずつ聞きます）' : '📋 AI なし：決まった返事で1枚ずつ聞きます';
+          : why === 'off' ? '📋 AI なし：設定で切っています（決まった返事でおしゃべり・カードの確認）' : '📋 AI なし：決まった返事でおしゃべり・カードの確認';
         $('#talkMode').dataset.ai = m === 'ai' ? 'on' : 'off';
         // AI なしで、入れれば使える端末（WebGPU がある）なら、入れる場所への近道を出す
         $('#talkAiGet').hidden = m === 'ai' || why === 'off' || !window.LocalAI || LocalAI.llmReady(); // WebGPU が無くても CPU 版を入れられる

@@ -185,3 +185,6 @@ body:has(#lkPochi:not([hidden])) main#board{padding-bottom:84px}
 dialog.lk select,dialog.lk input[type=color]{min-height:44px}dialog.lk input[type=color]{min-width:64px}
 #talkSetForm .vtune input[type=range]{height:24px}
 dialog.lk input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]){min-height:36px}
+
+/* 読み上げだけに出す文字（会話の行の「あなた：」「ポチ：」。v36） */
+.sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
