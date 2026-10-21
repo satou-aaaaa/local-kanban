@@ -710,6 +710,8 @@ try {
     await pg.click('#talkBtn');
     await pg.waitForFunction(() => document.querySelectorAll('#talkLog .l.ai').length > 0, null, { timeout: 8000 }).catch(() => {});
     const say = async (t) => { const n = await pg.$$eval('#talkLog .l.ai', (l) => l.length); await pg.fill('#talkIn', t); await pg.press('#talkIn', 'Enter'); await pg.waitForFunction((k) => document.querySelectorAll('#talkLog .l.ai').length > k, n, { timeout: 5000 }).catch(() => {}); await pg.waitForTimeout(150); return (await pg.$$eval('#talkLog .l.ai', (l) => l.map((x) => x.textContent))).slice(n).join(' ') || ''; }; // 返事が2つの吹き出しに分かれることがあるので、新しい分を全部
+    // 開いたときのポチの問い（「調子どう？」など。最初の文は問い1つ）が出るまで待つ。数が止まるのを待つだけでは、問いが遅れて出たときに返事と取り違えた
+    await pg.waitForFunction(() => [...document.querySelectorAll('#talkLog .l.ai')].some((l) => /[？?]/.test(l.textContent)), null, { timeout: 5000 }).catch(() => {});
     { let k = -1; for (let i = 0; i < 20; i++) { const c = await pg.$$eval('#talkLog .l.ai', (l) => l.length); if (c === k) break; k = c; await pg.waitForTimeout(300); } } // 最初のひと言が出そろうまで待つ
     const hi = await say('おはよう');
     check(/おはよう/.test(hi) && !/もう一回|分からな/.test(hi), `会話（AI なし）：「おはよう」にあいさつを返す（${hi.slice(0, 60)}）`);
