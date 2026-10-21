@@ -8,7 +8,7 @@
 
 ## 画面は claude.ai のボードそのもの
 
-アプリの画面は、claude.ai のボード（毎日 `board/index.html` に書き出される写し）を、つないだあとに非公開の置き場から読んで、そのまま動かしたもの。
+アプリの画面は、claude.ai のボード（マージ済みの元 `board-src/kanban.html`。無ければ毎日 `board/index.html` に書き出される写し）を、つないだあとに非公開の置き場から読んで、そのまま動かしたもの。
 だから、ボードに足された機能（見た目・壁紙・一覧・記録・絞り込み・頼む・答える…）は、次の書き出しのあと、アプリを開き直すだけで入る。アプリの側で作り直さない。
 
 | 部品 | 役目 |
@@ -28,7 +28,7 @@ Claude には届けられないので、答え・依頼は「まだ届いてい�
 | PC のフォルダ | PC の Chrome・Edge | GitHub Desktop などで取ってきたフォルダを File System Access API で読み書きする |
 | cards.json を選ぶ | どれでも | 読むだけ。保存はダウンロード。初めての端末は board/index.html も一緒に選ぶ |
 
-読むのは `local-board/cards.json`（無ければ `board/cards.json`）・`local-board/settings.json`・`board/index.html`・`board/today.json`、書くのは `local-board/cards.json`・`local-board/BOARD.md`・`local-board/settings.json` だけ。
+読むのは `local-board/cards.json`（無ければ `board/cards.json`）・`local-board/settings.json`・`board-src/kanban.html`（無ければ `board/index.html`）・`board/today.json`、書くのは `local-board/cards.json`・`local-board/BOARD.md`・`local-board/settings.json` だけ。
 
 **見た目とキャラは PC とスマホで同じになる**：色・壁紙・すりガラス・カードの文字の量・キャラの設定は `local-board/settings.json` に置き、つないだときに新しいほうを当てる（鍵は入れない）。並べ替え・絞り込みなどは端末ごと。claude.ai の中だけにある「自分の写真」の壁紙は、アプリでは「湖と山なみ」になる。
 データの形・取り込み方・AI への説明は、データ側のリポジトリの `local-board/README.md`・`AGENTS.md`・`cards.schema.json`。

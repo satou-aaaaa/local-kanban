@@ -155,6 +155,8 @@ check(true, `ボード: ${process.env.LK_BOARD ? '本物の写し（LK_BOARD）'
 // ほかの端末で選んだ見た目（壁紙は「谷」）。この端末で開くと当たること
 const files = {
   'local-board/settings.json': JSON.stringify({ updated: '2026-01-01T00:00:00Z', values: { 'kanban-wp': 'canyon', 'kanban-pal': 'std' }, at: { 'kanban-wp': '2026-01-01T00:00:00Z' } }),
+  // ボードの元（マージ済み）。毎朝の写し board/index.html より先に読む
+  'board-src/kanban.html': BOARD.replace(/<\/body>/i, '<!--lk-board-src--></body>'),
   'board/today.json': JSON.stringify({ items: [{ title: '見本の予定', start: '2099-01-05T14:30:00+09:00' }] }),
 };
 let cardsText = null; // ほかの端末・Claude が書いたあとの cards.json（null なら見本のまま）
@@ -274,6 +276,9 @@ try {
   await ready(page);
   // ボードの HTML を非公開の置き場から読み、端末に取っておいて、それを画面にした
   check(await page.evaluate(() => LKBoot.hasBoard && !!document.getElementById('wall') && typeof move === 'function' && typeof say === 'function'), 'ボードの HTML を読んで端末に取っておき、それを画面にした（壁紙・move・say がある）');
+  check(await page.evaluate(() => (localStorage.getItem('lk.board') || '').includes('<!--lk-board-src-->')), 'ボードは毎朝の写しより先に、マージ済みの元（board-src/kanban.html）を読む（新しい機能がその日のうちに届く）');
+  check(await page.evaluate((b) => LK.boardOk(b) && !LK.boardOk('<html><body><div id="board"></div></body></html>') && !LK.boardOk(null), BOARD), 'アプリが当てにする部品（#board・move・openDetail・say・render・WPS）が無いボードの元は使わず、毎朝の写しで開く');
+  check(/ボードを新しい版にしました/.test(await page.textContent('#lkStatus')), `ボードが新しくなって開き直したら、状態の1行で知らせる（${await page.textContent('#lkStatus')}）`);
   check(await page.evaluate(() => document.title) === 'カンバン', '題は「カンバン」');
   const live = SAMPLE.filter((c) => !c.deleted);
   const inBoard = await page.evaluate(() => cards.filter((c) => !c.deleted).map((c) => c.id));
