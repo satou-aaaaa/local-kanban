@@ -157,6 +157,8 @@ const files = {
   'local-board/settings.json': JSON.stringify({ updated: '2026-01-01T00:00:00Z', values: { 'kanban-wp': 'canyon', 'kanban-pal': 'std' }, at: { 'kanban-wp': '2026-01-01T00:00:00Z' } }),
   // ボードの元（マージ済み）。毎朝の写し board/index.html より先に読む
   'board-src/kanban.html': BOARD.replace(/<\/body>/i, '<!--lk-board-src--></body>'),
+  // Claude を起こす印（データ側の app-inbox ブランチ）
+  'local-board/inbox.json': '{"pending":false}\n',
   'board/today.json': JSON.stringify({ items: [{ title: '見本の予定', start: '2099-01-05T14:30:00+09:00' }] }),
 };
 let cardsText = null; // ほかの端末・Claude が書いたあとの cards.json（null なら見本のまま）
@@ -298,7 +300,7 @@ try {
 
   if (!REAL) {
     // 見た目を変えると local-board/settings.json に保存する（スマホでも同じになる）
-    await page.click('#lookBtn');
+    await page.click('#lkMenu summary'); await page.click('#lkMenu [data-m=look]');
     await page.click('#look [data-wp=lake]');
     const t0 = Date.now();
     while (!puts.some((p) => p.path === 'local-board/settings.json') && Date.now() - t0 < 8000) await page.waitForTimeout(100);
@@ -330,6 +332,19 @@ try {
     const c2 = lastCards().find((c) => c.doc_id === 's2');
     check(c2?.answer === 'はい' && c2?.answer_status === 'local', `答えは answer_status「local」で保存された（${c2?.answer_status}。取り込みで Claude に届ける印）`);
     check(c2?.lane === 'agent' && c2?.owner === 'agent', '答えたカードはエージェントの番');
+    {
+      const t0 = Date.now(); let pings = [];
+      while (Date.now() - t0 < 8000 && !(pings = puts.filter((x) => x.path === 'local-board/inbox.json')).length) await page.waitForTimeout(100);
+      const p0 = pings[0];
+      check(!!p0 && p0.body.branch === 'app-inbox' && /"pending":true/.test(p0.text), `答えたら、Claude を起こす印を app-inbox ブランチに置く（毎時を待たずに届く）（${p0?.body.branch}）`);
+      check(!!p0 && !/見本|はい|example|token/i.test(p0.text) && Object.keys(JSON.parse(p0.text)).sort().join() === 'at,n,pending', `印にはカードの中身を入れない（時刻と件数だけ）（${p0?.text?.trim()}）`);
+      const before = pings.length;
+      await page.evaluate(() => LK.update('s3', { note: '印のテスト' }, 'メモ'));
+      await page.waitForTimeout(2500);
+      check(puts.filter((x) => x.path === 'local-board/inbox.json').length === before, '同じ答えでは印を2回置かない（ほかの変更の保存では置かない）');
+      await page.evaluate(() => LK.update('s3', { note: '見本の補足（AI に渡さない）' }, 'メモ'));
+      await page.waitForTimeout(1500);
+    }
 
     // ボードの「＋ 頼む・足す」で足す
     await page.click('#compose-btn');
@@ -1260,6 +1275,7 @@ try {
     await pg.fill('#talkIn', '済み'); await pg.press('#talkIn', 'Enter');
     await waitCards((cs) => !!t1 && cs.find((c) => c.doc_id === t1)?.lane === 'done', `会話（耳なし）で打った「済み」（${t1}）`);
     await pg.click('#talkSetBtn');
+    check(await pg.evaluate(() => document.activeElement?.id === 'talkSetTtl'), '設定を開くと見出しにいる（名前の欄でキーボードが勝手に出ない。v42 の点検）');
     await pg.fill('#talkSetForm [name=name]', 'テスト名');
     await pg.click('#talkSetForm [name=icon][value=kaku]');
     await pg.click('#talkSetForm button[value=ok]');
@@ -1928,6 +1944,16 @@ try {
     .map((e) => { const r = e.getBoundingClientRect(); return r.width < 44 || r.height < 44 ? `${e.id || e.tagName}「${e.textContent.trim().slice(0, 10)}」${Math.round(r.width)}x${Math.round(r.height)}` : null; })
     .filter(Boolean));
   check(tiny.length === 0, `スマホ幅でアプリのボタンが小さすぎない（${tiny.join('、') || 'なし'}）`);
+  // ⋯ の中身が画面の外にはみ出さない（v42 の点検：右寄せで左にはみ出すことがあった）
+  const outMenu = await phone.$$eval('#lkMenu .items button', (els) => els.filter((e) => e.getClientRects().length)
+    .map((e) => { const r = e.getBoundingClientRect(); return r.left < 0 || r.right > innerWidth + 1 ? e.textContent.trim().slice(0, 10) : null; }).filter(Boolean));
+  check(outMenu.length === 0, `スマホ幅で ⋯ の中身が画面の中に収まる（はみ出し: ${outMenu.join('、') || 'なし'}）`);
+  // つながる前に使えないものは、押せない灰色で並べず、隠す
+  check(await phone.evaluate(() => [...document.querySelectorAll('#lkMenu .items button')].every((b) => !b.disabled || b.hidden)), '⋯ に押せない灰色の項目を並べない');
+  // 上のバーは1段（2段だとカードが下へ押し出される）。隅のポチがいるときは 💬 を出さない（会話の入口を1つに）
+  const bar = await phone.evaluate(() => { const hb = document.querySelector('header .hbtns'); const tops = new Set([...hb.children].filter((e) => e.getClientRects().length && getComputedStyle(e).display !== 'none').map((e) => Math.round(e.getBoundingClientRect().top / 10))); const pochi = document.querySelector('#lkPochi'); return { rows: tops.size, talk: !!document.querySelector('#talkBtn')?.getClientRects().length, pochi: !!pochi && !pochi.hidden }; });
+  check(bar.rows <= 1, `スマホ幅で上のバーが1段（${bar.rows}段）`);
+  check(!bar.pochi || !bar.talk, `スマホ幅で隅のポチがいるときは 💬 を出さない（ポチ ${bar.pochi}・💬 ${bar.talk}）`);
   await phone.click('#lkMenu summary');
   const smallFont = await phone.$$eval('input:not([type=file]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]), select, textarea', (els) => els
     .filter((e) => parseFloat(getComputedStyle(e).fontSize) < 16).map((e) => e.name || e.id || e.tagName));
@@ -1966,7 +1992,7 @@ try {
   // 切り替えボタンは押すと「選ばれている」印（aria-pressed と見た目）が変わること
   // （2026-10-19 claude.ai のボードで、表示だけ変わって印が変わらない不具合があった。shared-workflows incidents/2026-10-19-board-toggle-state.md）
   if (!REAL) {
-    await phone.click('#lookBtn');
+    await phone.click('#lkMenu summary'); await phone.click('#lkMenu [data-m=look]');
     const groups = await phone.$$eval('[aria-pressed]', (bs) => [...new Set(bs.filter((b) => b.offsetParent !== null).map((b) => b.parentElement))].map((p) => (p.id ? '#' + p.id : null)).filter(Boolean)); // 閉じた画面の中のボタンは押せないので、見えている組だけ
     check(groups.includes('#look'), 'ボードの壁紙えらびが切り替えボタン（aria-pressed）になっている');
     for (const g of groups) {

@@ -173,8 +173,7 @@ dialog.lk button[data-sure]{border-color:var(--you);color:var(--you-ink,var(--yo
 /* 隅のポチがカード・知らせに重ならないよう、ボードの下に余白をとる */
 body:has(#lkPochi:not([hidden])) main#board{padding-bottom:84px}
 @media (max-width:760px){
-  /* 上のバーが横にはみ出さない（はみ出した「見た目」などが隠れていた） */
-  header .hbtns{flex-wrap:wrap;row-gap:6px}
+  /* 上のバーは1段（見た目・表示・↻ を ⋯ にしまったので収まる。v42。2段だとカードが下へ押し出された） */
   #lkMenu summary{align-self:stretch}
   /* 状態の1行は2行まで出す（…で切れて何を保存したか読めなかった） */
   #lkStatus:not(.warn):not(.err){white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
@@ -191,3 +190,13 @@ dialog.lk input:not([type=checkbox]):not([type=radio]):not([type=range]):not([ty
 
 /* 🎤から開いたときの耳の欄（どこを押せばよいかを目立たせる。v40 の点検） */
 #earBox.lk-hl { outline: 3px solid var(--accent, #3b82f6); outline-offset: 2px; border-radius: 8px; }
+
+/* v42：上の段を1段に（ボードの「見た目」「表示」は ⋯ の中から押す）。うまくいった知らせは消す */
+header .hbtns #lookBtn,header .hbtns #theme{display:none}
+#lkStatus.gone{display:none}
+/* 設定の下の固定の帯の下（画面の余白）に文がはみ出して見えないよう、帯の下も塗る（v42 の点検） */
+#talkSetForm>.lk-actions:last-child{box-shadow:0 24px 0 var(--card)}
+/* スマホでは ⋯ の中身が左にはみ出さないよう、画面の中に収める（v42 の点検） */
+@media (max-width:760px){#lkMenu .items{position:fixed;left:8px;right:8px;top:auto;min-width:0;max-height:70vh;overflow:auto}}
+/* スマホで隅のポチを出しているときは、上の 💬 を隠す（会話の入口を1つに。v42 の点検） */
+@media (max-width:760px){body:has(#lkPochi:not([hidden])) #talkBtn{display:none}}

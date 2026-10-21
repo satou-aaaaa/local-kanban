@@ -4,7 +4,8 @@
 // 見ること（画面のファイルが変わったときだけ）:
 //   - sw.js の CACHE の版（kanban-v<番号>）が元より大きい
 //   - reviews/v<番号>.md がある
-//   - その中に「## 使う人の目線」「## UI/UX 専門家」「## 交代の視点」と、自動の検査の結果の行（「自動：」）がある
+//   - その中に「## 使う人の目線」「## UI/UX 専門家」「## 交代の視点」と、自動の検査の結果の行（「自動：」）・見せた写真の行（「写真：」）がある
+//   - 押せる部品の数の基準を上げたら「## 増やした押す所」がある（画面のファイルが変わっていなくても）
 //   - 重さ 3・4 の指摘が残っていない（行に「重さ3」「重さ4」があれば、同じ行に「直した」か「satouさんに聞いた」が要る。
 //     ボードそのもの（ボードの写し）の指摘はここでは直せないので「ボードのスレッドに渡した」でもよい）
 import { execFileSync } from 'node:child_process';
@@ -21,7 +22,18 @@ const SCREEN = /^(index\.html|app\.js|app\.css|boot\.js|shim\.js|talk\.js|voice\
 const changed = git('diff', '--name-only', `${baseRef}...HEAD`).split('\n').filter(Boolean);
 const screen = changed.filter((f) => SCREEN.test(f));
 let ng = 0; const ok = (c, m) => { console.log(c ? '✓' : '❌', m); if (!c) ng++; };
-if (!screen.length) { console.log('✓ 画面のファイルは変わっていない（点検の記録は要らない）'); process.exit(0); }
+// 押せる部品の数の基準（qa/uiux-baseline.json）を上げた PR は、点検の記録に「## 増やした押す所」が要る（画面のファイルが変わっていなくても見る）
+// 2026-10-21 satouさん「ボタンが増えたことによって、UI/UXに影響がでていると思います。こちらのチェックも」（前にも言った）
+const BASE = 'qa/uiux-baseline.json';
+let grown = [];
+if (changed.includes(BASE)) {
+  let b0 = {}; try { b0 = JSON.parse(git('show', `${baseRef}:${BASE}`)); } catch { /* 元に無ければ増えていない */ }
+  const b1 = JSON.parse(readFileSync(resolve(root, BASE), 'utf8'));
+  for (const [kind, scenes] of Object.entries(b1)) for (const [k, m] of Object.entries(scenes)) for (const f of ['first', 'taps']) {
+    const was = b0[kind]?.[k]?.[f]; if (was != null && m[f] > was) grown.push(`${kind}・${k} の${f === 'first' ? '最初の画面' : '全部'} ${was}→${m[f]}`);
+  }
+}
+if (!screen.length && !grown.length) { console.log('✓ 画面のファイルは変わっていない（点検の記録は要らない）'); process.exit(0); }
 console.log('・ 変わった画面のファイル: ' + screen.join(' '));
 const ver = (s) => +((s.match(/const CACHE = 'kanban-v(\d+)'/) || [])[1] || 0);
 let before = ''; try { before = git('show', `${baseRef}:sw.js`); } catch { /* 元に無ければ 0 */ }
@@ -34,6 +46,11 @@ ok(!!r, `点検の記録 reviews/v${v}.md がある`);
 if (r) {
   for (const h of ['## 使う人の目線', '## UI/UX 専門家', '## 交代の視点']) ok(r.includes(h), `「${h}」の節がある`);
   ok(/^自動：/m.test(r), '自動の検査の結果の行（「自動：」で始まる行）がある');
+  ok(/^写真：/m.test(r), '点検役に見せた画面写真の行（「写真：」で始まる行。どの画面・幅・色を何枚）がある（ボードの点検と同じ。写真を見ずに点検しない）');
+  if (grown.length) {
+    const sec = (r.split(/^## 増やした押す所\s*$/m)[1] || '').split(/^## /m)[0].trim();
+    ok(sec.length >= 20, `押せる部品を増やした（${grown.join('、')}）ので、「## 増やした押す所」に何を足したか・なぜ要るか・代わりに減らした／しまったものを書いてある`);
+  }
   const left = r.split('\n').filter((l) => /重さ\s*[34]/.test(l) && !/直した|satouさんに聞いた|ボードのスレッドに渡した/.test(l));
   ok(!left.length, '重さ 3・4 の指摘が残っていない' + (left.length ? '（' + left.map((l) => l.trim().slice(0, 40)).join(' / ') + '）' : ''));
 }
