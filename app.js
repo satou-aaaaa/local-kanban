@@ -122,7 +122,7 @@
     </fieldset>
     <fieldset id="diagBox">
       <legend>この端末の診断</legend>
-      <p class="help">うまく動かないときに押すと、この端末の様子（WebGPU の有無・聞き取りの方式・AI の種類・空き・最近の返事にかかった秒数）を、データのリポジトリの local-board/diagnostics/ に書きます。Claude がそれを読んで直します。会話の中身・カードは入れません。</p>
+      <p class="help">うまく動かないときに押すと（🎤がすぐ止まった日は1日1回、自動でも送ります）、この端末の様子（WebGPU の有無・聞き取りの方式・AI の種類・空き・最近の返事にかかった秒数）を、データのリポジトリの local-board/diagnostics/ に書きます。Claude がそれを読んで直します。会話の中身・カードは入れません。</p>
       <div class="lk-actions"><button type="button" id="diagBtn">この端末の診断を送る</button></div>
       <p id="diagMsg" class="help" aria-live="polite"></p>
     </fieldset>
@@ -619,7 +619,23 @@
   // この端末の診断（会話の中身・カードは入れない）
   $('#diagBtn').onclick = async () => {
     const out = $('#diagMsg'); out.textContent = '調べています…';
-    try {
+    try { const name = await sendDiag(); out.textContent = `送りました（local-board/diagnostics/${name}）。会話の中身は入れていません。`; }
+    catch (e) { out.textContent = '送れませんでした：' + (e?.message || e); }
+  };
+  // 🎤がすぐ止まったときは、この端末の様子を1日1回だけ自動で送る（理由と秒数だけ。聞いた中身・カードは入れない）。
+  // 2026-10-21 satouさん「マイクを押してもすぐ OFF」：端末でしか起きないことを、頼まなくても Claude が読めるように
+  addEventListener('voice:fail', e => {
+    if (!e.detail?.fast || !L.ready) return;
+    const d0 = new Date(), day = `${d0.getFullYear()}-${d0.getMonth() + 1}-${d0.getDate()}`;
+    if (L.ls.get('diagAuto') === day || diagBusy) return;
+    diagBusy = true;
+    setTimeout(() => sendDiag().then(() => { L.ls.set('diagAuto', day); talkLine('sys', '🎤がすぐ止まったので、この端末の様子を Claude に送ったよ（話した中身・カードは入れていない）。'); }).catch(() => {}).finally(() => { diagBusy = false; }), 3000);
+  });
+  // その日は耳（Whisper）で聞くと切り替えたことを一言
+  addEventListener('voice:switch', () => talkLine('sys', 'この端末の聞き取りがすぐ止まったので、今日はもう一つの耳（Whisper）で聞くね。'));
+  let diagBusy = false;
+  async function sendDiag() {
+    {
       let dev = L.ls.get('device'); if (!dev) { dev = Math.random().toString(36).slice(2, 8); L.ls.set('device', dev); }
       const ua = navigator.userAgentData;
       const d = {
@@ -630,11 +646,14 @@
         ...(window.LocalAI ? await LocalAI.info() : {}),
         気持ちの声: window.Koe?.status().installed || 'なし',
         最近の返事: (window.Talk?.metrics || []).slice(-20),
+        聞き取りの失敗: window.Voice?.micLog?.() || [],
+        端末の音声認識を休む日: (() => { try { return localStorage.getItem('lk.srBad') || ''; } catch { return ''; } })(),
       };
-      await L.diag(`${d.at.slice(0, 10)}-${dev}.json`, d);
-      out.textContent = `送りました（local-board/diagnostics/${d.at.slice(0, 10)}-${dev}.json）。会話の中身は入れていません。`;
-    } catch (e) { out.textContent = '送れませんでした：' + (e?.message || e); }
-  };
+      const name = `${d.at.slice(0, 10)}-${dev}.json`;
+      await L.diag(name, d);
+      return name;
+    }
+  }
   function drawAi() {
     const A = window.LocalAI; if (!A) { $('#aiBox').hidden = true; return; }
     const st = A.status(), p = A.plan();

@@ -944,6 +944,13 @@
       if (mode !== 'ai') log('sys', s.ai === 'off' ? 'AI は設定で切っています。決まった返事で話します。' : 'いまは AI なし（決まった返事）です。⚙ 設定で AI を入れると、自由に話せます。');
     }
     // 割り込み用のマイク（使えなければ割り込みなし）。声で話すときだけ取る（打つだけなら許可を聞かない）
+    // 端末の音声認識（Chrome）で聞くときは、割り込み用のマイクを持たない。Android ではマイクの取り合いになり、
+    // 話す前に聞き取りが終わって🎤がすぐ OFF になる（2026-10-21 Pixel）。Whisper で聞くときは同じページの中なので持ってよい
+    async function micFor() {
+      let r = 'ear'; try { r = (await g.Voice.route?.()) || 'ear'; } catch { /* 分からなければ持つ */ }
+      if (r === 'local') { stream?.getTracks().forEach((t) => t.stop()); stream = null; return; }
+      await mic();
+    }
     async function mic() {
       if (stream || !s.bargeIn || !g.navigator?.mediaDevices?.getUserMedia) return;
       try { stream = await g.navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); } catch { stream = null; }
@@ -1016,8 +1023,9 @@
       if (listening || !on) return;
       if (!g.Voice.supported) { state('typing'); return; } // 耳が無い端末は文字で（hear() を呼んでもらう）
       listening = true; const my = ++gen; let miss = 0;
-      await mic();
+      await micFor();
       while (on && my === gen) {
+        await micFor(); // 途中で耳が替わることがある（端末の音声認識 → Whisper）ので毎回
         state('listening');
         await cue('start');
         if (!on || my !== gen) break;
@@ -1033,12 +1041,15 @@
         catch (e) {
           if (!on || my !== gen) break;
           const msg = String(e?.message || e || '');
+          if (!e?.code) g.Voice?.note?.({ via: 'ear', code: msg.slice(0, 60), ms: Math.round(performance.now() - t0) }); // 端末の音声認識の失敗は voice.js が残す
           // 割り込まれたのに何も言われなかった（物音だった）→ 続きを話す
           if (resume && /聞き取れませんでした/.test(msg)) { cut = false; await say('ごめん、続けるね。' + resume, true); await speech; continue; }
+          // 話す前にすぐ終わった（端末の音声認識）で、ほかの耳も無い → 2回待たずに、理由と次にどうするかを言って止める
+          if (e?.fast) { log('sys', msg + '。' + (g.LocalAI ? '「⋯ → 🎤と会話・AI の設定」で耳（Whisper）を入れると、この端末の中で聞けるよ。' : '') + 'いまは打って話してね。'); listening = false; state('typing'); return; }
           if (/端末の中だけで聞き取れません|部品|マイク|準備が終わりません/.test(msg)) { log('sys', msg + ' 文字を打って話してね。'); listening = false; state('typing'); return; }
           // 「聞こえなかった」以外のエラーは黙らずに出す（何が起きたか分からないまま止まらないように）
           if (!/聞き取れませんでした/.test(msg)) log('sys', '聞き取れなかった：' + msg);
-          if (++miss >= 2) break;
+          if (++miss >= 2) { log('sys', /聞き取れませんでした/.test(msg) ? '2回続けて聞こえなかったので、🎤を止めたよ。話すときはもう一度押してね。' : '🎤を止めたよ。もう一度押すか、打って話してね。'); break; }
           continue; // 聞き取れなかった → もう一度
         }
         if (!on || my !== gen) break;
@@ -1076,12 +1087,16 @@
       if (!g.Voice.supported) { state('typing'); return; }
       holding = true; listening = true; const my = ++gen;
       state('listening');
-      await mic();
+      await micFor();
       await cue('start');
       let text = '';
       if (on && my === gen && !letGo) {
         try { text = (await g.Voice.listen({ hold: true })).text; }
-        catch (e) { const msg = String(e?.message || e || ''); if (on && my === gen && !/聞き取れませんでした/.test(msg)) log('sys', '聞き取れなかった：' + msg); }
+        catch (e) {
+          const msg = String(e?.message || e || '');
+          if (!e?.code) g.Voice?.note?.({ via: 'ear', code: msg.slice(0, 60), ms: 0 });
+          if (on && my === gen && (e?.fast || !/聞き取れませんでした/.test(msg))) log('sys', e?.fast ? msg + '。もう一度押すか、打って話してね。' : '聞き取れなかった：' + msg); // 長押しでもすぐ止まったときは黙らない
+        }
       }
       holding = false;
       if (my !== gen || !on) return;
