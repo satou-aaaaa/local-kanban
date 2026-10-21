@@ -520,6 +520,7 @@ try {
   await ready(noVoice);
   await noVoice.click('#micBtn');
   await noVoice.waitForSelector('#talkSet[open]', { timeout: 3000 }).catch(() => {});
+  await noVoice.waitForFunction(() => document.activeElement?.id === 'earGet', null, { timeout: 3000 }).catch(() => {}); // フォーカスは少しおいて移す（CI は遅い）
   check(/聞き取りの部品/.test(await noVoice.textContent('#vstatus')) && await noVoice.evaluate(() => document.querySelector('#talkSet').open && /聞き取りを入れる/.test(document.querySelector('#earGet').textContent) && document.activeElement?.id === 'earGet'), `耳（Whisper）が無いと、🎤で「聞き取りを入れる」のボタンを開いて知らせる（${await noVoice.textContent('#vstatus')}）`);
   {
     const hl = await noVoice.evaluate(() => ({ msg: document.querySelector('#earMsg').textContent, hl: document.querySelector('#earBox').classList.contains('lk-hl'), name: document.querySelector('#earProg').getAttribute('aria-label') || '' }));
