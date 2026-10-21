@@ -1145,14 +1145,21 @@
     }
     return '';
   }
+  // まずそのまま読む（メモの中の「“”」を壊さない）。読めないときだけ、AI が JSON の引用符を “” にした返事として読み直す
   function findReply(text) {
-    const s = String(text || '').replace(/[“”＂]/g, '"');
-    const cands = [...s.matchAll(/```[a-zA-Z]*[ \t]*\n?([\s\S]*?)```/g)].map(m => m[1].trim()).filter(x => /kanban_reply/.test(x));
-    const k = s.indexOf('kanban_reply');
+    const raw = String(text || ''), a = findReplyIn(raw);
+    if (a.obj || !/[“”＂]/.test(raw)) return a;
+    const b = findReplyIn(raw.replace(/[“”＂]/g, '"'));
+    return b.obj ? b : (a.cands ? { why: '決まった形の返事の引用符が全角（“ ”）で読めません。AI に「JSON の引用符を半角の \" にして、最後の JSON だけもう一度」と頼んでね。何も変えていません。' } : a);
+  }
+  function findReplyIn(s) {
+    // 見本を引用したあとに本当の返事を書く AI があるので、後ろの候補から読む
+    const cands = [...s.matchAll(/```[a-zA-Z]*[ \t]*\n?([\s\S]*?)```/g)].map(m => m[1].trim()).filter(x => /kanban_reply/.test(x)).reverse();
+    const k = s.lastIndexOf('kanban_reply');
     if (k >= 0) { const a = s.lastIndexOf('{', k); if (a >= 0) cands.push(objAt(s, a)); }
     if (!cands.length) return { why: '決まった形の返事（```json で囲んだ所）が見つかりません。AI の返事を最後まで全部貼ったか確かめてね。無ければ AI に「最後の JSON だけもう一度」と頼んでね。' };
     for (const x of cands) { try { const o = JSON.parse(x); if (o && typeof o === 'object' && !Array.isArray(o) && 'kanban_reply' in o) return { obj: o }; } catch {} }
-    return { why: '決まった形の返事が途中で崩れていて読めません。AI に「最後の JSON だけもう一度」と頼んでね。何も変えていません。' };
+    return { cands: true, why: '決まった形の返事が途中で崩れていて読めません。AI に「最後の JSON だけもう一度」と頼んでね。何も変えていません。' };
   }
   const str = v => (typeof v === 'string' ? v.trim() : '');
   function planReply(text) {
