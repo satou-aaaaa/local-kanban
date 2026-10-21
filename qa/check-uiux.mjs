@@ -143,7 +143,9 @@ for (const [tag, w, h, mobile, scheme] of VIEWS) {
     ok(!m.noField.length, `${key}：入力欄に名前がある${m.noField.length ? '（名前が無い: ' + m.noField.slice(0, 5).join(' ') + '）' : ''}`);
     ok(!m.tiny.length, `${key}：アプリの押す所が 24px 以上${m.tiny.length ? '（小さい: ' + m.tiny.slice(0, 5).join(' ') + '）' : ''}`);
     if (bs && !update) {
-      ok(m.first <= bs.first, `${key}：最初の画面で押せる部品 ${m.first}（基準 ${bs.first}。増やすなら点検の記録に理由）`);
+      // 最初の画面の数は、端末の字の形（CI と手元で日本語の字が違う）で画面の下の端の1つが出入りする。だから 1 だけ見逃す。
+      // 押せる部品の全部の数（taps）は字の形で変わらないので、1つでも増えたら止める（ボタンを足したことはこちらで必ず分かる）
+      ok(m.first <= bs.first + 1, `${key}：最初の画面で押せる部品 ${m.first}（基準 ${bs.first}。字の形の違いで1つまでは出入りする。増やすなら点検の記録に理由）`);
       if (bs.taps != null) ok(m.taps <= bs.taps, `${key}：押せる部品 全部で ${m.taps}（基準 ${bs.taps}。増やすなら点検の記録に理由）`);
       ok(m.small <= bs.small, `${key}：12px 未満の文字 ${m.small}（基準 ${bs.small}）${m.small > bs.small ? ' 例: ' + m.smallEx.join(' ') : ''}`);
       ok(m.lowC <= bs.lowC, `${key}：明るさの差が足りない文字 ${m.lowC}（基準 ${bs.lowC}）${m.lowC > bs.lowC ? ' 例: ' + m.lowCEx.join(' ') : ''}`);
