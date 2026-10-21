@@ -2221,7 +2221,7 @@ try {
       if (await pg.evaluate(() => typeof snoozed === 'function')) {
         await step('ひと押しの返事が保存に届く', async () => {
           if (!(await openC('見本のカード（今やる）'))) return '詳細が開かない';
-          const b = pg.locator('#detail .qreply button', { hasText: 'それで進めて' });
+          const b = pg.locator('#detail .qreply button', { hasText: '進めて' });
           if (!(await b.count())) return 'ひと押しの返事のボタンが無い';
           await b.click();
           return (await saved((cs) => cs.some((c) => c.doc_id === 's1' && (c.history || []).some((x) => /you|satou/.test(x.who) && x.text === 'それで進めて')))) ? '' : '履歴に書かれない';
