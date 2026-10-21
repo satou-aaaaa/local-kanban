@@ -10,6 +10,7 @@ permissions:
   contents: write
   pull-requests: write
   pages: write
+  actions: write   # マージ後に main で QA を回し直す（recheck_main）のに要る。無いと 403 で黙って止まる（2026-10-21）
 
 jobs:
   merge:
