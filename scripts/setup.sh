@@ -31,8 +31,17 @@ fi
 
 # Playwright のブラウザ。PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 の環境（Claude Code のクラウドなど）は入っているものを使う（qa/ は PW_CHROMIUM を読む）
 if [ "${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-}" = 1 ]; then
-  hs=$(ls -d /opt/pw-browsers/chromium_headless_shell-*/*/headless_shell 2>/dev/null | head -1 || true)
-  if [ -n "$hs" ]; then session_env "PW_CHROMIUM=$hs"; fi
+  # 名前は Playwright の版で違う（headless_shell・chrome-headless-shell）。CI と同じ headless shell を優先し、無ければ普通の chromium
+  hs=''
+  for f in /opt/pw-browsers/chromium_headless_shell-*/*/headless_shell /opt/pw-browsers/chromium_headless_shell-*/*/chrome-headless-shell /opt/pw-browsers/chromium; do
+    if [ -x "$f" ]; then hs=$f; break; fi
+  done
+  if [ -n "$hs" ]; then
+    session_env "PW_CHROMIUM=$hs"
+    [ -n "${CLAUDE_ENV_FILE:-}" ] || echo "・ 検査のブラウザ: export PW_CHROMIUM=$hs を打ってから node qa/run.mjs"
+  else
+    echo "・ 入っているブラウザが見つからない。検査の前に (cd qa && npx playwright install chromium)" >&2
+  fi
 else
   (cd qa && npx playwright install chromium)
 fi
