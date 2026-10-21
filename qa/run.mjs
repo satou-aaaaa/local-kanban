@@ -705,6 +705,13 @@ try {
     await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold', '「それは保留にして」');
     check(lastCards().find((c) => c.doc_id === 's3')?.lane === 'hold' && !/見つからない/.test(it), `会話：「それ」は直前に話に出たカードを指す（${it.slice(0, 60)}）`);
     await say('戻す');
+    // 新機能10：「今日なにする？」→ やることを3つにしぼって言う（今やる・次にやるから。エージェント・予定待ちは入れない）
+    const three = await say('今日なにする？');
+    const picked = [...three.matchAll(/「([^」]+)」/g)].map((m) => m[1]);
+    check(+(three.match(/今日は([123])つ/) || [])[1] === new Set(picked).size && !picked.some((x) => /エージェント|予定待ち|済み/.test(x)) && picked[0] === '見本のカード（今やる）' && /まずは1つ目から/.test(three), `会話：「今日なにする？」で、やることを3つにしぼって言い、最初の1つをすすめる（${three.slice(0, 90)}）`);
+    await say('2つ目を保留へ');
+    await waitCards((cs) => cs.find((c) => c.title === picked[1])?.lane === 'hold', `「今日なにする？」のあと「2つ目を保留へ」で、言った2つ目（${picked[1]}）を動かす`);
+    await say('戻す');
     await say('終わり');
     check(outside.length === 0, '会話（AI なし・打つ）：自分のサイトと GitHub 以外へ通信していない');
     await pg.close();
@@ -1142,9 +1149,29 @@ try {
       script = [{ text: 'なんかいい天気', via: 'local' }, { text: '待って', via: 'local' }];
       t = mk({}); await t.start('voice'); await done(t); t.stop();
       out.wait = logs.some((x) => /待ってるね/.test(x)) && !logs.some((x) => /ごめん、続けるね/.test(x));
+      // 「今日なにする？」の3つの選び方：期限すぎ・今日まで → 今やる → 期限が近い順。AI があっても AI に聞かずに同じ3つ
+      {
+        const said = [], runs = [];
+        const today = new Date(), ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const later = new Date(today.getTime() + 20 * 864e5), past = new Date(today.getTime() - 864e5);
+        const tt = T.create({ settings: { ai: 'off', reply: 'text', tidy: false, cue: false, followUp: false }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']],
+          board: () => [{ title: 'A 今やる', lane: 'now', due: '' }, { title: 'B 寝かせ', lane: 'later', due: '' }, { title: 'C 期限すぎ', lane: 'next', due: ymd(past) }, { title: 'D 先の期限', lane: 'next', due: ymd(later) }, { title: 'E エージェント', lane: 'agent', due: ymd(past) }, { title: 'F 予定待ち', lane: 'wait', due: ymd(past) }, { title: 'G 面接', lane: 'wait', due: '', event_start: ymd(today) + 'T15:00:00+09:00' }],
+          queue: () => [], weekDone: () => [], run: (x) => { runs.push(x); return '「' + x + '」をやりました。'; }, act: () => 'ok', pending: () => false, onLine: (k, x) => { if (k === 'ai') said.push(x); }, onState() {} });
+        await tt.start('text'); said.length = 0;
+        await tt.hear('今日は何する？');
+        const one = said.join(' ');
+        const k = said.length;
+        await tt.hear('今日の予定は？');
+        const again = said.slice(k).join(' ');
+        await tt.hear('今日の予定に牛乳を買うを足して');
+        tt.stop();
+        out.three = { one, again, runs, last: said.slice(-1)[0] || '' };
+      }
       Object.assign(V, { listen: keep.listen, route: keep.route, speakAll: keep.speakAll, stop: keep.stop }); LocalAI.bargeIn = keep.bi; navigator.mediaDevices.getUserMedia = keep.gum;
       return out;
     });
+    { const t3 = [...r.three.one.matchAll(/「([^」]+)」/g)].map((m) => m[1]); check(t3.slice(0, 4).join('|') === 'G 面接|C 期限すぎ|A 今やる|D 先の期限' && /今日の予定は「G 面接」（15:00）/.test(r.three.one) && /（期限すぎ）/.test(r.three.one) && /3つにしぼろう/.test(r.three.one) && /まずは1つ目から/.test(r.three.one) && /^1つ目「C 期限すぎ」|「C 期限すぎ」/.test(r.three.again), `「今日なにする？」の3つ：期限すぎ → 今やる → 期限の近い順。エージェント・予定待ち・寝かせたものは後（${r.three.one}｜${r.three.again}）`); }
+    check(r.three.runs.includes('今日の予定に牛乳を買うを足して') && !/しぼろう/.test(r.three.last), `「今日の予定に〇〇を足して」は命令として扱う（3つを言わない。${r.three.runs.join('|')}）`);
     check(r.vowels === 'oaounoiao', `口の形：読む文のかなから あいうえお・閉じる を並べる（${r.vowels}）`);
     check(/^[aiueo]$/.test(r.mouth.m || '') && r.mouth.shown.length === 1 && /v-[aiueo]/.test(r.mouth.shown[0]), `口の形：話している間、母音の口を1つだけ見せる（${JSON.stringify(r.mouth)}）`);
     check(r.level.lv === '1' && r.level.v === '0.8' && r.level.nod, `聞いている間：声の大きさで耳と輪を動かし、話の切れ目でうなずく（${JSON.stringify(r.level)}）`);

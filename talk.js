@@ -593,6 +593,35 @@
     const lastCardIn = (r) => { const ts = [...String(r || '').matchAll(/「([^」]+)」/g)].map((m) => m[1]).reverse(); for (const t of ts) { const c = host.card?.(t, true); if (c) return c; } return null; };
     // 「何からやる？」「今日は何する？」：AI なしでも答える（2026-10-21 通じなかった）
     const WHAT_NOW = /(何から|なにから|どれから|何を|なにを|何|なに)(やる|する|やろう|しよう|やれば|すれば)|今日(は|の)?(予定|やること|何|なに)|やること(は|ある|を教えて)/;
+    // 「今日なにする？」：やることを3つにしぼって言う（10/21 新機能10。GTD の「今やること」・Todoist の Today）。「何からやる？」は1枚だけ（今のまま）
+    const TODAY3 = /今日.*((何|なに)(する|しよう|やる|やろう|すれば|やれば|したら|やったら|を(する|やる))|やること|予定)/;
+    // 問いだけ（「今日の予定にAを足して」のような命令は取らない）
+    const isToday3 = (t) => TODAY3.test(t) && !/(何から|なにから|どれから)/.test(t) && !/(足し|入れ|追加|移し|消し|済みに|して$|して[。！!]?$)/.test(t);
+    let three = [], pinRef = '';
+    const ymdOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    function todayThree(today = new Date()) {
+      const d0 = ymdOf(today), d1 = ymdOf(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1));
+      const all = host.board().filter((c) => !handled.has(c.title));
+      const cs = all.filter((c) => ['now', 'next', 'later'].includes(c.lane));
+      // 予定待ちの列の、今日の予定（面接など）は先に一言（「今日の予定は？」で予定が出ないと「無い」と受け取ってしまう）
+      const ev = all.filter((c) => c.lane === 'wait' && String(c.event_start || '').slice(0, 10) === d0);
+      const evLine = ev.length ? '今日の予定は' + ev.slice(0, 2).map((c) => `「${c.title}」${/T\d\d:\d\d/.test(c.event_start) ? `（${c.event_start.slice(11, 16)}）` : ''}`).join('と') + '。 ' : '';
+      const rank = (c) => (c.due && c.due.slice(0, 10) <= d1 ? 0 : c.lane === 'now' ? 1 : c.due ? 2 : c.lane === 'next' ? 3 : 4);
+      const n = Math.min(3, goal || 3); // しんどい日に「1枚だけ」と決めたら、すすめるのも1枚
+      three = cs.map((c, i) => ({ c, i })).sort((a, b) => rank(a.c) - rank(b.c) || String(a.c.due || '9999').localeCompare(String(b.c.due || '9999')) || a.i - b.i).slice(0, n).map((x) => x.c);
+      if (!three.length) {
+        const rest = [['wait', '予定待ち'], ['hold', '保留'], ['agent', 'エージェント']].map(([k, w]) => [w, all.filter((c) => c.lane === k).length]).filter(([, k]) => k);
+        return evLine + '今やる・次にやるは空っぽだよ。' + (rest.length ? rest.map(([w, k]) => `${w}が${k}枚`).join('、') + 'あるけど、いまは待つだけ。' : 'ゆっくりしよ。');
+      }
+      const tag = (c) => { const w = dueShort(c.due, today); return w === '期限すぎ' || w === '今日まで' || w === '明日まで' ? `（${w}）` : ''; };
+      const nth = ['1つ目', '2つ目', '3つ目'];
+      cur = three[0]; pinRef = three[0].title; // 「それ」「済み」は1つ目のこと。「2つ目を済みに」も通じる
+      if (three.length === 1) return evLine + `今日はこれ。「${three[0].title}」${tag(three[0])}。` + (cs.length > 1 ? ' ほかは明日でいいよ。' : '');
+      return evLine + (cs.length > three.length ? `今日は${three.length}つにしぼろう。` : `今日は${three.length}つ。`) + three.map((c, i) => `${nth[i]}「${c.title}」${tag(c)}`).join('、') + '。 まずは1つ目からね。';
+    }
+    // 「2つ目を済みに」「3番目は保留」：直前に言った3つのうちのそのカード
+    const NTH = /^(1|2|3|１|２|３|一|二|三|ひと|ふた|みっ)(つ目|番目|こ目|個目)/;
+    const nthRef = (t) => { const m = t.match(NTH); if (!m || !three.length) return t; const k = { 1: 0, '１': 0, 一: 0, ひと: 0, 2: 1, '２': 1, 二: 1, ふた: 1, 3: 2, '３': 2, 三: 2, みっ: 2 }[m[1]]; const c = three[k]; return c ? t.replace(NTH, c.title) : t; };
     const GREET = /^(おはよう|おはよ|こんにちは|こんにちわ|こんばんは|こんばんわ|やあ|やっほー|ただいま|もしもし|ポチ|ねえ)(ございます)?[!！。、\s]*$/;
     const nameOf = () => mem().find((m) => m.kind === 'name')?.text || '';
     function remember(item) { if (!M) return null; try { const r = M.put(item); lastLearned = r?.id || item.id || ''; return r; } catch { return null; } }
@@ -1120,12 +1149,13 @@
       const speak = s.reply === 'voice' ? true : s.reply === 'text' ? false : voice;
       log('you', text);
       turns++;
-      text = refer(text);
+      text = refer(nthRef(String(text || '').trim()));
       if (END.test(g.Voice.norm(text))) { await say(wrapUp() + (/おやすみ/.test(text) ? 'おやすみ！ ゆっくり休んでね。' : pick('bye', PHRASES.bye)), speak); await speech; stop(); return; }
       state('thinking');
       let r = manners(text), viaAi = false;
       if (r == null) r = memoryTalk(text);
       if (r == null && host.pending()) r = host.run(text);
+      if (r == null && isToday3(g.Voice.norm(text))) r = todayThree(); // AI のあるなしにかかわらず同じ3つ（AI に任せると毎回ちがう）
       if (r == null) r = command(text, true);
       if (r == null) {
         await ready;
@@ -1135,7 +1165,7 @@
       }
       const thinkS = (performance.now() - turnAt) / 1000;
       await say(r, speak);
-      { const ref = lastCardIn(r) || cur; if (ref?.title) lastRef = ref.title; }
+      { const ref = pinRef ? { title: pinRef } : lastCardIn(r) || cur; if (ref?.title) lastRef = ref.title; pinRef = ''; }
       if (!viaAi) note(text, r);
       const r1 = (x) => Math.round(x * 10) / 10;
       metrics.push({ at: new Date().toISOString().slice(0, 16), via: voice ? '声' : '打つ', brain: viaAi ? brain : mode === 'ai' ? 'すぐやった命令' : 'AI なし', listen_s: opts.listenS ? r1(opts.listenS) : null, think_s: r1(thinkS), speak_s: firstAt ? r1((firstAt - turnAt) / 1000) : null });
