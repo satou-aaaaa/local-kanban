@@ -23,7 +23,8 @@ node qa/check-review.mjs origin/main   # 画面を変えたら：版（sw.js の
 
 - CI は Playwright の headless shell で回る（本物の Chrome より部品が少なく、本物の音声認識を呼ぶとタブごと落ちる）。CI だけ「Target crashed」で落ちたら、`PW_CHROMIUM` に headless shell（`chromium_headless_shell-*/…/headless_shell`）を指して再現する。端末の機能はにせものに替えて調べる（`qa/run.mjs` の先頭で全コンテキストに入れている）。
 - app.js が当てにするボードの部品（`move`・`remove`・`say`・`render`・`openDetail`・`cards`・`WPS`・`#micBtn`・`#voice`・`#vstatus`・`.hbtns`・`#board` の `lane-<列>`・`#jump`・`#compose-btn`・`#toast-msg`・`#toast-undo`・`#wall`・`dialog#detail`。あれば使う：`repliedToYou`＝返事が来た印・`needsYou`＝satouさんの番（v53 から担当の答え待ちも入る）。アプリのアイコンの数と知らせにする）は `qa/board.fixture.html` に同じ名前で置く。増やしたらにせものにも、データ側の `tools/local_board.py` の相性の検査にも足す。
-- アプリの部品（`#voiceTry`・`#lkMenu`・`#lkIntro`・`#lkStatus`・`#talkWhy`・`#talkBtn`・`#talkDlg`・`#talkIn`・`#talkMic`・`#talkSetForm`・`#aiGet`・`#aiBrain`・`#talkAiGet`・`#lkPick`・`#lkUnsent`・`#memList`・`#memAll`・`#voiceTry`・`#koeGet`・`#koeBox`・`#earGet`・`#earBox`・`#lkPochi`）を変えたら `qa/run.mjs` も合わせて直す。
+- アプリの部品（`#voiceTry`・`#lkMenu`・`#lkIntro`・`#lkStatus`・`#talkWhy`・`#talkBtn`・`#talkDlg`・`#talkIn`・`#talkMic`・`#talkSetForm`・`#aiGet`・`#aiBrain`・`#talkAiGet`・`#lkPick`・`#lkUnsent`・`#memList`・`#memAll`・`#voiceTry`・`#koeGet`・`#koeBox`・`#earGet`・`#earBox`・`#lkPochi`・`#lkHand`・`#lkPaste`・`#lkPasteIn`・`#lkPasteGo`）を変えたら `qa/run.mjs` も合わせて直す。
+- 「🤖 ほかの AI に渡す」（app.js）：渡すのは人が押したときだけ（共有かコピー。通信を足さない）。渡す文に鍵・データのリポジトリ名・ポチの会話・リンクを入れず、メモと記録の電話・メール・住所らしきものは伏せ字にする。返事は ```json の `kanban_reply` だけを読み、変わる所を見せてから `LK.as('AI', …)` で取り込む（「戻す」で戻る）。形を変えたら qa/run.mjs の「AI に渡す」も直す。
 - ボードに壁紙が足されたら写真を `bg/`・`bg/t/` に置く（本物のボードで回す QA が、ボードの `WPS` の写真がすべてあるかを見る）。
 - 機能を足す・直すたびに `qa/run.mjs` に検査も足す（2026-10-20 satouさん「テストは可能な限り追加」「基本的なユースケースはテストコードでカバー」）。基本の使い方（開く・4通りで閉じる・足す・移す・済み・コメント・答える・絞る・探す・見かた）は、本物のボードの写しで回すときに「基本」の項目がアプリの画面で3つの幅（1366・1280・390）で通す。ボード側の同じ検査は データ側の `board-src/qa/check-basics.mjs`。
 - 速さ：直したら `LK_BOARD=<ボード> node qa/speed.mjs` で、アプリの中のボードを 150 枚・スマホ相当（CPU 4倍遅く）で測る（詳細を開く 200ms・描き直し 100ms 以下）。

@@ -461,6 +461,90 @@ try {
     // 画面に戻ったら（1分以上たっていたら）読み直す
     check(/visibilitychange/.test(readFileSync(resolve(root, 'shim.js'), 'utf8')), '画面に戻ったら読み直す仕組みがある');
   }
+  // ---------- 🤖 ほかの AI に渡す・AI の返事を貼る（2026-10-21 satouさん「claude 以外の AI も」） ----------
+  // 共有（navigator.share）とクリップボードはにせものに替える。渡す文に鍵・リポジトリ名・連絡先が入らないこと、返事を貼ると一覧が出て取り込め、戻せること
+  {
+    const pg = await context.newPage();
+    pg.on('pageerror', (e) => errors.push(`pageerror(AI に渡す): ${e.message}`));
+    await pg.addInitScript(() => {
+      window.__shared = []; window.__clip = '';
+      navigator.share = async (d) => { window.__shared.push(d.text); };
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { window.__clip = t; }, readText: async () => window.__clipIn || '' } });
+    });
+    const s12 = { doc_id: 's12', title: '見本の渡すカード', owner: 'you', lane: 'now', order: 3, due: '2099-01-10',
+      note: '電話 090-1234-5678、連絡は taro@example.com へ。住所は東京都千代田区丸の内1-2-3。データは example-owner/example-data にある。2026-10-21 に 3 件',
+      history: [{ at: '2099-01-01T00:00:00Z', who: 'you', text: '鍵は qa-dummy-token だった' }, { at: '2099-01-02T00:00:00Z', who: 'claude', text: '見本の返事 03-1234-5678' }] };
+    cardsText = JSON.stringify([...SAMPLE, s12]);
+    await pg.goto(base); await ready(pg);
+    await pg.evaluate(() => LK.reload()); await pg.waitForFunction(() => LK.cards.some((c) => c.doc_id === 's12'), null, { timeout: 5000 });
+    // ポチの会話の中身が渡す文に入らないこと（会話の欄に書いてから渡す）
+    await pg.evaluate(() => { const d = document.createElement('div'); d.className = 'l you'; d.textContent = '会話のひみつの話'; document.querySelector('#talkLog').appendChild(d); });
+    await pg.evaluate(() => openDetail('s12'));
+    const hb = await pg.waitForSelector('dialog#detail[open] #lkHand', { timeout: 5000 }).then((h) => h.boundingBox(), () => null);
+    check(!!hb && hb.height >= 44 && hb.width >= 44 && await pg.getAttribute('#lkHand', 'aria-label') === 'ほかの AI に渡す', `カードの詳細に「🤖 ほかの AI に渡す」が出る（44px 以上・名前つき。${hb ? Math.round(hb.width) + 'x' + Math.round(hb.height) : 'なし'}）`);
+    await pg.click('#lkHand');
+    await pg.waitForFunction(() => window.__shared.length > 0, null, { timeout: 3000 }).catch(() => {});
+    const t1 = await pg.evaluate(() => window.__shared[0] || '');
+    check(/題：見本の渡すカード/.test(t1) && /ID：s12/.test(t1) && /```json\n\{"kanban_reply":1,"card":"s12"/.test(t1) && /この形で返して/.test(t1) && /期限：2099-01-10/.test(t1), '渡す文に題・ID・期限・返事の決まった形（```json の kanban_reply）がある（共有で渡した）');
+    check(!/qa-dummy-token|example-data/.test(t1), '渡す文に鍵・データのリポジトリ名が入らない');
+    check(!/090-1234-5678|03-1234-5678|taro@example\.com|丸の内1-2-3/.test(t1) && /［電話］/.test(t1) && /［メール］/.test(t1) && /［住所］/.test(t1), '渡す文の電話番号・メールアドレス・住所は伏せ字になる');
+    check(/2026-10-21 に 3 件/.test(t1), '日付や数は伏せ字にしない');
+    check(!/ひみつの話/.test(t1) && /本人：/.test(t1) && /Claude：見本の返事/.test(t1), '渡す文に最近の記録は入り、ポチの会話の中身は入らない');
+    // 共有が無い端末ではコピー
+    await pg.evaluate(() => { navigator.share = undefined; });
+    await pg.click('#lkHand');
+    await pg.waitForFunction(() => !!window.__clip, null, { timeout: 3000 }).catch(() => {});
+    const t2 = await pg.evaluate(() => window.__clip);
+    check(t2 === t1, '共有が無い端末では、同じ文をクリップボードにコピーする');
+    const t3 = await pg.evaluate(() => LK.handText('s2'));
+    check(/確認：見本の問い\n選択肢：はい／いいえ/.test(t3), '確認のカードは、問いと選択肢も渡す');
+    const m = await pg.evaluate(() => [LK.mask('〒100-0005 東京都千代田区丸の内1丁目2番3号'), LK.mask('さいたま市大宮区桜木町1-7-5 に行く'), LK.mask('+81 90 1234 5678'), LK.mask('第1-2回の会議・10-21・0120-12-345'), LK.mask('鍵 github_pat_ABC123')]);
+    check(m[0] === '［住所］' && /^［住所］ に行く$/.test(m[1]) && m[2] === '［電話］' && m[3] === '第1-2回の会議・10-21・0120-12-345' && m[4] === '鍵 ［鍵］', `伏せ字の形（${m.join(' / ')}）`);
+    await pg.keyboard.press('Escape'); await pg.waitForTimeout(200);
+    if (await pg.evaluate(() => document.querySelector('dialog#detail')?.open)) await pg.evaluate(() => document.querySelector('dialog#detail').close());
+
+    // 返事を貼る
+    const paste = async (txt) => { await pg.fill('#lkPasteIn', txt); await pg.waitForTimeout(50); return pg.evaluate(() => ({ msg: document.querySelector('#lkPasteMsg').textContent, items: [...document.querySelectorAll('#lkPasteList:not([hidden]) li')].map((l) => l.textContent), go: !document.querySelector('#lkPasteGo').disabled })); };
+    await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aipaste]');
+    check(await pg.evaluate(() => document.querySelector('#lkPaste').open), '「⋯ → 🤖 AI の返事を貼る」で貼る欄が開く');
+    const before = await pg.evaluate(() => JSON.stringify(LK.cards.find((c) => c.doc_id === 's12')));
+    const bad = [
+      ['返事に JSON が無い', 'そうですね、まずは資料を集めましょう。', /見つかりません/],
+      ['JSON が崩れている', '```json\n{"kanban_reply":1,"card":"s12",}\n```', /崩れて/],
+      ['kanban_reply が違う', '```json\n{"kanban_reply":2,"card":"s12","note_add":"x"}\n```', /形が違います/],
+      ['知らないカード', '```json\n{"kanban_reply":1,"card":"nope","note_add":"x"}\n```', /「nope」が見つかりません/],
+      ['card が無い', '```json\n{"kanban_reply":1,"note_add":"x"}\n```', /card/],
+    ];
+    for (const [label, txt, re] of bad) { const r = await paste(txt); check(re.test(r.msg) && !r.go && !r.items.length, `形が違う返事（${label}）は理由を日本語で言い、取り込めない（${r.msg}）`); }
+    check(await pg.evaluate(() => JSON.stringify(LK.cards.find((c) => c.doc_id === 's12'))) === before, '形が違う返事では何も変えない');
+    const ok = await paste('いい案です。\n\n```json\n{"kanban_reply":1,"card":"s12","note_add":"先に資料を集める","lane":"next","due":"2099-02-03","comment":"AI の見立て"}\n```\n以上です。');
+    check(ok.go && ok.items.length === 4 && ok.items.some((x) => /今やる → 次にやる/.test(x)) && ok.items.some((x) => /2099-02-03/.test(x)) && ok.items.some((x) => /先に資料を集める/.test(x)), `返事を貼ると、変わる所が一覧で出る（${ok.items.join(' / ')}）`);
+    await pg.click('#lkPasteGo');
+    await waitCards((cs) => { const c = cs.find((x) => x.doc_id === 's12'); return c?.lane === 'next' && c.due === '2099-02-03'; }, 'AI の返事の取り込み');
+    const c12 = lastCards().find((c) => c.doc_id === 's12');
+    const h12 = (c12?.history || []).at(-1) || {};
+    check(/AI：先に資料を集める$/.test(c12?.note || '') && c12?.moves?.at(-1)?.to === 'next', '取り込むと、メモに足して列を移す');
+    check(h12.who === 'AI' && /AI の見立て/.test(h12.text || '') && (c12.history || []).filter((h) => h.who === 'AI').length === 1, `履歴に who「AI」で1行残る（${h12.text}）`);
+    check(!(await pg.evaluate(() => document.querySelector('#lkPaste').open)) && await pg.isVisible('#toast-undo'), '取り込んだら閉じて「戻す」を出す');
+    await pg.click('#toast-undo');
+    await waitCards((cs) => { const c = cs.find((x) => x.doc_id === 's12'); return c?.lane === 'now' && c.due === '2099-01-10'; }, 'AI の返事の「戻す」');
+    check(!/先に資料/.test(lastCards().find((c) => c.doc_id === 's12')?.note || ''), '「戻す」で取り込む前に戻る（メモも）');
+    // 決まった値以外の lane・due・answer は捨てる（ほかは取り込む）
+    await pg.waitForTimeout(1000);
+    await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aipaste]');
+    const odd = await paste('```json\n{"kanban_reply":1,"card":"s12","note_add":"見直す","lane":"agent","due":"来週","answer":"はい"}\n```');
+    check(odd.go && odd.items.length === 1 && /列「agent」/.test(odd.msg) && /期限「来週」/.test(odd.msg) && /答え「はい」/.test(odd.msg), `決まった値でない lane・due・answer は捨てると言う（${odd.msg}）`);
+    await pg.click('#lkPasteGo');
+    await waitCards((cs) => /AI：見直す$/.test(cs.find((x) => x.doc_id === 's12')?.note || ''), '値を捨てた返事の取り込み');
+    check(lastCards().find((c) => c.doc_id === 's12')?.lane === 'now', '決まった値でない lane は捨て、列は変えない');
+    const ans = await pg.evaluate(() => [LK.planReply('```json\n{"kanban_reply":1,"card":"s2","answer":"はい"}\n```'), LK.planReply('```json\n{"kanban_reply":1,"card":"s2","answer":"たぶん"}\n```')]);
+    check(ans[0].answer === 'はい' && !ans[1].answer && /変える所がありません/.test(ans[1].why || ''), '答えは確認の選択肢の label だけ受け取る');
+    check(await pg.evaluate(() => { const d = document.querySelector('#lkPaste'); return d.open ? false : true; }), '取り込んだら貼る欄を閉じる');
+    await pg.waitForTimeout(1500);
+    cardsText = null;
+    await pg.close();
+  }
+
   // 声の命令の読み取り（voice.js）
   const parsed = await page.evaluate(() => {
     const L = [['now', '今やる', '今'], ['next', '次にやる', '次'], ['later', '時間があるとき', 'あとで'], ['hold', '保留'], ['agent', 'エージェント'], ['done', '済み']];
