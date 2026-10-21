@@ -214,7 +214,10 @@
     // 多すぎること自体はボードが「12 / 3 ⚠」で見せる（WIP 制限は合意の印で、勝手に片付ける決まりではない。Kanban Guide）
     // 2026-10-20 ポチが今やるの8枚（お礼メール・返信など急ぎ）を一度に次にやるへ回した
     const soon = (() => { const d = new Date(today + 'T00:00:00'); d.setDate(d.getDate() + 2); return ymd(d); })();
-    const keep = c => (c.due && c.due <= soon) || c.priority === 'high' || c.type === 'mail' || !!c.draft || (c.decision && !c.answer) || (typeof window.repliedToYou === 'function' && (() => { try { return !!window.repliedToYou(c); } catch { return false; } })());
+    // 本人がこの1日にコメント・返事をしたカード、コメントが Claude の返事待ちのカードも下ろさない
+    // （2026-10-21 satouさんが「それで進めて」と答えた2分後に、ポチがその2枚を次にやるへ回した）
+    const touched = c => ['local', 'new', 'sent'].includes(c.comment_status) || (c.history || []).some(h => h.who === 'you' && at - (Date.parse(h.at) || 0) < 864e5);
+    const keep = c => touched(c) || (c.due && c.due <= soon) || c.priority === 'high' || c.type === 'mail' || !!c.draft || (c.decision && !c.answer) || (typeof window.repliedToYou === 'function' && (() => { try { return !!window.repliedToYou(c); } catch { return false; } })());
     // 今日もう下ろした枚数は、端末ごとの印ではなくカードの履歴（データのリポジトリ）から数える。PC とスマホで合わせて1日2枚まで
     const downToday = list.filter(c => (c.history || []).some(h => h.who === 'ポチ' && h.text === '次にやるへ' && h.at && ymd(new Date(h.at)) === today)).length;
     const down = nowAll.filter(c => c.lane === 'now' && mine(c) && !keep(c)).sort((a, b) => byPrio(b, a)).slice(0, Math.max(0, Math.min(2 - downToday, over.length)));
