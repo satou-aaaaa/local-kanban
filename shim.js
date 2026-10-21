@@ -264,9 +264,11 @@
   async function wakeClaude() {
     if (!store?.ping) return;
     const w = waiting(); if (!w.length) return;
-    const sig = (store.dest || '') + '|' + w.map(c => c.doc_id + '@' + (c.updated || '')).sort().join(','); // つなぎ先（リポジトリ）ごとに1回
-    if (ls.get('woke') === sig) return;
-    try { if (await store.ping(w.length)) ls.set('woke', sig); } catch {}
+    // 記録はつなぎ先（リポジトリ・ブランチ）ごとに持つ（つなぎ替えて戻っても、同じものでは起こし直さない）
+    const dest = store.dest || store.kind, sig = w.map(c => c.doc_id + '@' + (c.updated || '')).sort().join(',');
+    const seen = () => { const v = ls.get('woke'); return v && typeof v === 'object' ? v : {}; }; // v43 までは文字列だった
+    if (seen()[dest] === sig) return;
+    try { if (await store.ping(w.length)) ls.set('woke', { ...seen(), [dest]: sig }); } catch {}
   }
   window.addEventListener('online', () => { if (dirty) flush(); });
   window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });

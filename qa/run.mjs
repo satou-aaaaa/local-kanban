@@ -354,7 +354,7 @@ try {
       const none = await page.evaluate(() => LK.store.ping(1));
       check(none === false && puts.length === n1, 'app-inbox ブランチが無ければ印を置かない');
       inboxBranch = true; files['local-board/inbox.json'] = keep;
-      check(await page.evaluate(() => /^example-owner\/example-data@main\|/.test(LK.ls.get('woke') || '')), '起こした印の記録は、つなぎ先（リポジトリ・ブランチ）ごと');
+      check(await page.evaluate(() => { const w = LK.ls.get('woke'); return !!w && typeof w === 'object' && /s2@/.test(w['example-owner/example-data@main'] || ''); }), '起こした印の記録は、つなぎ先（リポジトリ・ブランチ）ごと（ほかのつなぎ先の記録を消さない）');
       await page.evaluate(() => LK.update('s3', { note: '見本の補足（AI に渡さない）' }, 'メモ'));
       await page.waitForTimeout(1500);
     }
@@ -574,6 +574,11 @@ try {
     check(curly[1].note === '見直す', `引用符が全部 “” になった返事も読める（${curly[1].note || curly[1].why}）`);
     const curly2 = await pg.evaluate(() => [LK.planReply('{“kanban_reply”:1,“card”:“s12”,“note_add”:“彼は“OK”と言った”}'), LK.planReply('見本：\n```json\n{"kanban_reply":1,"card":"s12","note_add":"メモに足す一言"}\n```\n答え：\n```json\n{"kanban_reply":1,"card":"s12","note_add":"後ろの答え"}\n```')]);
     check(/全角/.test(curly2[0].why || '') && /半角/.test(curly2[0].why || ''), `引用符が全角で読めないときは、直し方（半角で出し直す）を言う（${curly2[0].why}）`);
+    const curly3 = await pg.evaluate(() => LK.planReply('見本：\n```json\n{"kanban_reply":1,"card":"s12","note_add":"見本のメモ"}\n```\n答え：\n```json\n{“kanban_reply”:1,“card”:“s12”,“note_add”:“全角の答え”}\n```'));
+    const curly4 = await pg.evaluate(() => [LK.planReply('{“kanban_reply”:1,“card”:“s12”,“note_add”:“a}b”}'), LK.planReply('“OK” です。\n```json\n{"kanban_reply":1,"card":"s12","note_add":"あ')]);
+    check(curly4[0].note === 'a}b', `囲みの無い全角の返事で、メモの中の } で切れない（${curly4[0].note || curly4[0].why}）`);
+    check(!!curly4[1].why && !/全角/.test(curly4[1].why), `JSON が途中で切れただけなら、地の文に “” があっても「全角」とは言わない（${curly4[1].why}）`);
+    check(curly3.note === '全角の答え', `半角の見本のあとの、引用符が全角の本当の返事を読む（${curly3.note || curly3.why}）`);
     check(curly2[1].note === '後ろの答え', `見本を引用したあとの本当の返事を読む（後ろの候補から）（${curly2[1].note || curly2[1].why}）`);
     const smp = await pg.evaluate(() => LK.planReply('```json\n{"kanban_reply":1,"card":"s12","note_add":"メモに足す一言","lane":"now|next|later|hold|done（任意）","comment":"…（任意）"}\n```'));
     check(!smp.note && !smp.comment && /変える所がありません/.test(smp.why || '') && /見本の文のまま/.test(smp.why || ''), `返事の形の見本の文をそのまま返されても取り込まない（${smp.why}）`);
