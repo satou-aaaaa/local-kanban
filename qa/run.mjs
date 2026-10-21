@@ -161,6 +161,25 @@ let cardsText = null; // ほかの端末・Claude が書いたあとの cards.js
 let conflictOnce = false;
 let failPuts = false; // true のあいだ保存は失敗する（GitHub に届かない） // true にすると、次の cards.json の保存を 1 回だけ「ほかの端末が先に書いた」にする
 
+// 耳（Whisper）のにせもの：window.__heard を順に「聞こえた」ことにする。localai.js の本物の耳と替わらないよう、Voice ができたときに入れて固定する。
+// 押している間だけ聞く（hold）は、release()（離した）で聞いた分を返す。addInitScript に渡す（外の変数は使わない）
+const fakeEar = () => {
+  window.__heard = window.__heard || []; window.__earCalls = [];
+  const fake = {
+    ready: () => true,
+    listen: ({ hold } = {}) => new Promise((ok, ng) => {
+      window.__earCalls.push({ hold: !!hold });
+      if (window.__earFail) { const e = new Error('マイクを使えませんでした'); e.code = window.__earFail; window.__earFail = ''; setTimeout(() => ng(e), 100); return; }
+      const go = () => { const t = window.__heard.shift(); setTimeout(() => (t ? ok({ text: t }) : ng(new Error('聞き取れませんでした'))), t ? 80 : 400); };
+      if (hold) { window.__srHold = (window.__srHold || 0) + 1; window.__earRelease = go; } else go();
+    }),
+    cancel() {},
+    release() { const f = window.__earRelease; window.__earRelease = null; f?.(); },
+  };
+  let V;
+  Object.defineProperty(window, 'Voice', { configurable: true, get() { return V; }, set(v) { V = v; v.useEar(fake); v.useEar = () => {}; } });
+};
+
 const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {});
 // 本物の SpeechRecognition.available()・install() は、CI の headless Chrome では音声の部品が無くタブごと落ちる
 // （Target crashed。2026-10-20 に2回）。どのコンテキストでも「端末の中では日本語を聞けない端末」のふりにしておく。
@@ -170,6 +189,7 @@ const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath
   browser.newContext = async (o) => {
     const c = await open(o);
     await c.addInitScript(() => {
+      try { if (!localStorage.getItem('lk.slim')) localStorage.setItem('lk.slim', '1'); } catch { /* なくてよい */ } // 「減らして固める」の1回だけの知らせは、それを見る検査だけで出す
       for (const k of ['SpeechRecognition', 'webkitSpeechRecognition']) {
         const C = window[k];
         if (C) { C.available = async () => 'unavailable'; C.install = async () => false; }
@@ -499,8 +519,14 @@ try {
   await noVoice.goto(base);
   await ready(noVoice);
   await noVoice.click('#micBtn');
-  check(/使えません/.test(await noVoice.textContent('#vstatus')), `音声認識が無いと🎤で「使えない」と AI の部品の場所を出す（${await noVoice.textContent('#vstatus')}）`);
-  check(/🎤は/.test(await noVoice.textContent('#talkWhy')), '音声認識が無い理由を上に一言出す');
+  await noVoice.waitForSelector('#talkSet[open]', { timeout: 3000 }).catch(() => {});
+  check(/聞き取りの部品/.test(await noVoice.textContent('#vstatus')) && await noVoice.evaluate(() => document.querySelector('#talkSet').open && /聞き取りを入れる/.test(document.querySelector('#earGet').textContent) && document.activeElement?.id === 'earGet'), `耳（Whisper）が無いと、🎤で「聞き取りを入れる」のボタンを開いて知らせる（${await noVoice.textContent('#vstatus')}）`);
+  {
+    const hl = await noVoice.evaluate(() => ({ msg: document.querySelector('#earMsg').textContent, hl: document.querySelector('#earBox').classList.contains('lk-hl'), name: document.querySelector('#earProg').getAttribute('aria-label') || '' }));
+    check(/1回入れます/.test(hl.msg) && hl.hl && !!hl.name, `🎤から開いた設定の耳の欄に、なぜ開いたかを書き（ダイアログの裏に隠れない）、欄を目立たせる。進み具合に名前がある（${JSON.stringify(hl)}）`);
+    check(/打って話してね/.test(await noVoice.evaluate(() => { document.querySelector('#talkSet').close(); document.querySelector('#talkBtn').click(); return document.querySelector('#talkIn').placeholder; })), '耳が無いときは、打つ欄に「🎤で話しても」と書かない');
+    await noVoice.evaluate(() => document.querySelector('#talkDlg').open && document.querySelector('#talkDlg').close());
+  }
   check(!(await noVoice.evaluate(() => window.__boardMic)), 'ボードの🎤ではなくアプリの🎤（端末の中の AI の耳も使える）が動いた');
   await noVoice.close();
   // 端末の中で聞き取れないブラウザ（サーバーへ送る音声認識しか無い）では聞き取りを始めない（プライベートな内容を外に出さない）
@@ -518,13 +544,10 @@ try {
   // 🎤：音声認識をにせものに差し替えて、聞き取り → 命令 → 読み上げ の流れを確かめる（候補が複数なら番号で選ぶ）
   const mic = await context.newPage();
   mic.on('pageerror', (e) => errors.push(`pageerror(🎤): ${e.message}`));
+  await mic.addInitScript(fakeEar);
   await mic.addInitScript(() => {
     window.__heard = ['見本のカードを済み', '2番']; window.__spoken = [];
-    class FakeSR {
-      static available(o) { return Promise.resolve(o?.processLocally ? 'available' : 'available'); }
-      start() { window.__local = this.processLocally === true; const t = window.__heard.shift(); setTimeout(() => { if (t) this.onresult({ results: [[{ transcript: t }]] }); this.onend(); }, 50); }
-    }
-    window.webkitSpeechRecognition = FakeSR; delete window.SpeechRecognition;
+    window.webkitSpeechRecognition = class { start() { window.__srUsed = true; } }; delete window.SpeechRecognition; // Chrome の聞き取りがあっても使わない
     navigator.mediaDevices.getUserMedia = () => Promise.reject(new Error('検査ではマイクを使わない'));
     window.speechSynthesis.getVoices = () => [{ name: 'ネットの声', lang: 'ja-JP', localService: false }, { name: '端末の声', lang: 'ja-JP', localService: true }];
     window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => u.onend && u.onend(), 10); };
@@ -545,7 +568,7 @@ try {
   check(await mic.evaluate(() => document.querySelector('#talkDlg').open && [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent.replace(/^あなた：/, '')).join('|') === '見本のカードを済み|2番'), '🎤 ボードの🎤も会話と同じ欄を開き、話したことを文字で同じ流れに残す');
   check(await mic.evaluate(() => Voice.localVoice()?.name === '端末の声'), '🎤 読み上げは端末の中の声を選ぶ（ネット経由の声は使わない）');
   check(await mic.evaluate(() => { const g = speechSynthesis.getVoices; speechSynthesis.getVoices = () => [{ name: 'ネットの声', lang: 'ja-JP', localService: false }]; const n = Voice.localVoice(); speechSynthesis.getVoices = g; return n === null; }), '🎤 端末の中の声が無ければ読み上げない');
-  check(await mic.evaluate(() => window.__local), '🎤 端末の中だけで聞き取る設定（processLocally = true）で聞いた');
+  check(await mic.evaluate(() => window.__earCalls.length >= 2 && !window.__srUsed), '🎤 耳（Whisper）だけで聞いた（Chrome の聞き取りは使わない）');
   // 声のなめらかさ：文ごとに止めない・読みにくい記号を除く・よい声を先に選ぶ・速さと高さ
   const flow = await mic.evaluate(async () => {
     const got = [], cancels = [];
@@ -592,72 +615,58 @@ try {
   check(/CC BY-SA 4\.0/.test(koe.credit) && /Takamichi/.test(koe.credit) && /litagin/.test(koe.credit), '🎭 クレジット（CC BY-SA 4.0・JVNV の作者・元のモデル）を出す');
   await mic.close();
 
-  // 🎤（Android のまね）：端末の音声認識は別のサービスがマイクを使うので、ページがマイクを持っていると話す前にエラーで終わる。
-  // 2026-10-21 satouさん（Pixel）「マイクを押してもすぐ OFF」：割り込み用のマイクを持ったまま聞いていた。押す → 話す → 文字が出るまでを見る
-  const androidSR = ({ alwaysFail }) => {
-    window.__heard = ['見本のカード（次にやる・毎週）を保留へ', 'ありがとう']; window.__spoken = []; window.__live = 0; window.__srStarts = 0;
-    class FakeSR {
-      static available() { return Promise.resolve('available'); }
-      static install() { return Promise.resolve(true); }
-      start() { window.__srStarts++; const busy = window.__live > 0 || alwaysFail; setTimeout(() => { if (busy) { this.onerror?.({ error: 'audio-capture' }); this.onend?.(); return; } const t = window.__heard.shift(); if (t) this.onresult({ results: [[{ transcript: t }]] }); this.onend(); }, busy ? 200 : 300); }
-      stop() {} abort() { this.onerror?.({ error: 'aborted' }); this.onend?.(); }
-    }
-    window.webkitSpeechRecognition = FakeSR; window.SpeechRecognition = FakeSR;
-    navigator.mediaDevices.getUserMedia = async () => { const ac = new AudioContext(); const o = ac.createOscillator(); const d = ac.createMediaStreamDestination(); o.connect(d); o.start(); window.__live++; d.stream.getTracks().forEach((t) => { const s0 = t.stop.bind(t); t.stop = () => { if (t.readyState !== 'ended') window.__live--; s0(); }; }); return d.stream; };
-    window.speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }];
-    window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => u.onend && u.onend(), 10); };
-    window.speechSynthesis.cancel = () => {};
-    localStorage.removeItem('lk.srBad'); localStorage.removeItem('lk.micLog');
-  };
+  // 🎤（2026-10-21 satouさん Pixel「マイクを押してもすぐ OFF」→「減らして固める」）：耳は Whisper だけ。
+  // Chrome の聞き取りがあっても使わない（Android ではマイクの取り合いで話す前に止まった）。割り込み用のマイクを持ったままでも、押す → 話す → 文字が出てカードが動く
   {
     const pg = await context.newPage();
-    pg.on('pageerror', (e) => errors.push(`pageerror(🎤 Android): ${e.message}`));
-    await pg.addInitScript(androidSR, { alwaysFail: false });
+    pg.on('pageerror', (e) => errors.push(`pageerror(🎤 耳だけ): ${e.message}`));
+    await pg.addInitScript(fakeEar);
+    await pg.addInitScript(() => {
+      window.__heard = ['見本のカード（次にやる・毎週）を保留へ', 'ありがとう', '終わり']; window.__spoken = []; window.__live = 0; window.__srStarts = 0;
+      class FakeSR { static available() { return Promise.resolve('available'); } start() { window.__srStarts++; setTimeout(() => { this.onerror?.({ error: 'audio-capture' }); this.onend?.(); }, 100); } stop() {} abort() {} }
+      window.webkitSpeechRecognition = FakeSR; window.SpeechRecognition = FakeSR;
+      navigator.mediaDevices.getUserMedia = async () => { const ac = new AudioContext(); const o = ac.createOscillator(); const d = ac.createMediaStreamDestination(); o.connect(d); o.start(); window.__live++; return d.stream; };
+      window.speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }];
+      window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => u.onend && u.onend(), 10); };
+      window.speechSynthesis.cancel = () => {};
+      if (!sessionStorage.getItem('qa.bi')) { sessionStorage.setItem('qa.bi', localStorage.getItem('lk.talk') || ''); const t = JSON.parse(localStorage.getItem('lk.talk') || '{}'); t.bargeIn = true; localStorage.setItem('lk.talk', JSON.stringify(t)); }
+    });
     await pg.goto(base); await ready(pg);
-    const b = puts.length;
     await pg.click('#micBtn');
-    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold', '🎤（Android のまね）で「保留」');
-    const r = await pg.evaluate(() => ({ you: [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent.replace(/^あなた：/, '')), live: window.__live, sys: [...document.querySelectorAll('#talkLog .sys')].map((d) => d.textContent).join(' / '), mic: document.querySelector('#talkMic').getAttribute('aria-pressed') }));
-    check(r.you[0] === '見本のカード（次にやる・毎週）を保留へ' && puts.slice(b).some((p) => p.path === 'local-board/cards.json') && !/audio-capture|止めた/.test(r.sys), `🎤（Android のまね）：押す → 話す → 文字が出てカードが動く。すぐ OFF にならない（${r.you.join('|')}｜${r.sys}）`);
-    check(r.live === 0, `🎤（Android のまね）：端末の音声認識で聞くあいだ、ページはマイクを持たない（持っているマイク ${r.live}）`);
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold', '🎤（耳だけ）で「保留」');
+    await pg.waitForTimeout(800);
+    const r = await pg.evaluate(() => ({ you: [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent.replace(/^あなた：/, '')), sr: window.__srStarts, live: window.__live, sys: [...document.querySelectorAll('#talkLog .sys')].map((d) => d.textContent).join(' / '), mic: document.querySelector('#talkMic').getAttribute('aria-pressed') }));
+    check(r.you[0] === '見本のカード（次にやる・毎週）を保留へ' && r.sr === 0 && !/audio-capture|止めた/.test(r.sys), `🎤：耳（Whisper）だけで聞き、押す → 話す → 文字が出てカードが動く。Chrome の聞き取りは使わない（${r.you.join('|')}・Chrome ${r.sr} 回｜${r.sys}）`);
+    check(r.live >= 1, `🎤：耳で聞くあいだも、割り込み用のマイクを持てる（${r.live}）`);
     await pg.evaluate(() => move('s3', 'next'));
-    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'next', '🎤（Android のまね）のあと元に戻す');
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'next', '🎤（耳だけ）のあと元に戻す');
+    await pg.evaluate(() => { const k = sessionStorage.getItem('qa.bi'); k ? localStorage.setItem('lk.talk', k) : localStorage.removeItem('lk.talk'); });
     await pg.close();
   }
+  // 「減らして固める」を入れた最初の1回：前の版で AI を使っていた端末も AI を切り、そのことを会話の欄で1回だけ言う
   {
-    // 端末の音声認識がいつもすぐ終わる端末で、耳（Whisper）も無い → 黙って止まらず、止めた理由を言う。理由と秒数を残す（中身は残さない）
     const pg = await context.newPage();
-    await pg.addInitScript(androidSR, { alwaysFail: true });
+    pg.on('pageerror', (e) => errors.push(`pageerror(減らして固める): ${e.message}`));
+    await pg.addInitScript(() => { if (!sessionStorage.getItem('qa.once')) { sessionStorage.setItem('qa.once', '1'); localStorage.removeItem('lk.slim'); localStorage.setItem('lk.talk', JSON.stringify({ ai: 'auto', name: 'ポチ' })); } });
     await pg.goto(base); await ready(pg);
-    await pg.click('#micBtn');
-    await pg.waitForFunction(() => /打って話してね/.test(document.querySelector('#talkLog')?.textContent || ''), null, { timeout: 8000 }).catch(() => {});
-    const r = await pg.evaluate(() => ({ log: document.querySelector('#talkLog').textContent, ml: Voice.micLog() }));
-    check(/マイクを使えなかった.*耳（Whisper）を入れると.*打って話してね/.test(r.log) && !/audio-capture/.test(r.log) && r.ml.length === 1, `🎤（すぐ終わる端末・耳なし）：1回目で、理由（使う人の言葉）と次にどうするかを言って止める（${r.log.slice(-90)}）`);
-    check(r.ml.length >= 1 && r.ml.every((x) => x.code === 'audio-capture' && x.fast && typeof x.ms === 'number' && Object.keys(x).every((k) => ['at', 'via', 'code', 'ms', 'fast'].includes(k))), `🎤：失敗の記録は理由・耳・秒数だけ（${JSON.stringify(r.ml[0] || {})}）`);
+    await pg.click('#talkBtn');
+    await pg.waitForFunction(() => /ポチを軽くしたよ/.test(document.querySelector('#talkLog')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+    const r = await pg.evaluate(() => ({ log: document.querySelector('#talkLog').textContent, ai: JSON.parse(localStorage.getItem('lk.talk') || '{}').ai, slim: localStorage.getItem('lk.slim') }));
+    check(/ポチを軽くしたよ/.test(r.log) && r.ai === 'off' && r.slim === '1', `減らして固める：前に AI を使っていた端末も1回だけ AI を切り、そう言う（${r.ai}）`);
+    await pg.evaluate(() => localStorage.removeItem('lk.talk'));
     await pg.close();
   }
-
   // ---------- 会話モード（talk.js）：耳・頭・口をにせものに差し替えて、流れと「外に出さない」を確かめる ----------
   const talkPage = async ({ heard = [], replies = null, sr = true }, label) => {
     const pg = await context.newPage();
     pg.on('pageerror', (e) => errors.push(`pageerror(${label}): ${e.message}`));
     const outside = [];
     pg.on('request', (r) => { const h = new URL(r.url()).host; if (!/^127\.0\.0\.1(:\d+)?$/.test(h) && h !== 'api.github.com' && !r.url().startsWith('data:')) outside.push(r.url()); });
-    await pg.addInitScript(({ heard, replies, sr }) => {
+    if (sr) await pg.addInitScript(fakeEar); // 耳（Whisper）のにせもの。sr: false なら耳が無い端末
+    await pg.addInitScript(({ heard, replies }) => {
       window.__heard = heard; window.__spoken = []; window.__prompts = []; window.__system = '';
-      if (sr) {
-        class FakeSR {
-          static available() { return Promise.resolve('available'); }
-          start() {
-            // 押している間だけ聞く（continuous）：stop()（離した）で聞いた分を返す
-            if (this.continuous) { window.__srHold = (window.__srHold || 0) + 1; this.stop = () => { const t = window.__heard.shift(); setTimeout(() => { if (t) this.onresult({ resultIndex: 0, results: [Object.assign([{ transcript: t }], { isFinal: true })] }); this.onend(); }, 30); }; return; }
-            const t = window.__heard.shift(); setTimeout(() => { if (t) this.onresult({ results: [[{ transcript: t }]] }); this.onend(); }, t ? 80 : 400);
-          }
-          abort() {}
-        }
-        window.webkitSpeechRecognition = FakeSR;
-      } else delete window.webkitSpeechRecognition;
-      delete window.SpeechRecognition;
+      delete window.webkitSpeechRecognition; delete window.SpeechRecognition;
+      { const t = JSON.parse(localStorage.getItem('lk.talk') || '{}'); t.ai = replies ? 'auto' : 'off'; localStorage.setItem('lk.talk', JSON.stringify(t)); } // AI は入れた人だけ（⚙ で AI を使う）
       window.speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }];
       window.__boundaries = [];
       window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => { u.onboundary?.({ charIndex: 2 }); u.onend?.(); }, 5); };
@@ -669,7 +678,9 @@ try {
           create: (o) => { window.__system = JSON.stringify(o.initialPrompts); return Promise.resolve({ prompt: (t) => { window.__prompts.push(t); return Promise.resolve(JSON.stringify(replies.shift() || { say: 'うん', action: null })); }, destroy() {} }); },
         };
       } else delete window.LanguageModel;
-    }, { heard, replies, sr });
+    }, { heard, replies });
+    // lk.talk は端末どうしで同じにする設定（local-board/settings.json）。前の検査が保存した AI の入り切りが勝たないよう、ここでは消しておく
+    try { const sj = JSON.parse(files['local-board/settings.json']); if (sj.values?.['lk.talk']) { delete sj.values['lk.talk']; if (sj.at) delete sj.at['lk.talk']; files['local-board/settings.json'] = JSON.stringify(sj); } } catch { /* なくてよい */ }
     await pg.goto(base);
     await ready(pg);
     return { pg, outside };
@@ -692,7 +703,7 @@ try {
     const spoken = await pg.evaluate(() => window.__spoken.join(''));
     check(/見本のカード、?今やる/.test(spoken), '会話（AI なし）：最初に「今やる」の1枚目を読み上げた');
     check(/AI なし/.test(await pg.textContent('#talkMode')), '会話（AI なし）：内蔵 AI が無い端末では AI なしで動く');
-    check(/AI を入れると/.test(await pg.textContent('#talkLog')), '会話（AI なし）：AI なしで話していることと、AI を入れられることを伝えた');
+    check(/AI なし/.test(await pg.textContent('#talkMode')) && !/AI を入れると/.test(await pg.textContent('#talkLog')), '会話（AI なし）：AI なしで話していることは上の札だけで伝え、会話の中で同じことを言わない');
     const phr = await pg.evaluate(() => Talk.PHRASES.done);
     check(phr.some((p) => spoken.includes(p)), '会話（AI なし）：「済み」でほめた');
     const moods = await pg.evaluate(() => ({ m: window.__moods, c: window.__confetti }));
@@ -729,6 +740,11 @@ try {
     check(+(three.match(/今日は([123])つ/) || [])[1] === new Set(picked).size && !picked.some((x) => /エージェント|予定待ち|済み/.test(x)) && picked[0] === '見本のカード（今やる）' && /まずは1つ目から/.test(three), `会話：「今日なにする？」で、やることを3つにしぼって言い、最初の1つをすすめる（${three.slice(0, 90)}）`);
     await say('2つ目を保留へ');
     await waitCards((cs) => cs.find((c) => c.title === picked[1])?.lane === 'hold', `「今日なにする？」のあと「2つ目を保留へ」で、言った2つ目（${picked[1]}）を動かす`);
+    await say('戻す');
+    // 「済み」だけでも1つ目を済みにする（会話の一覧の写しには id が無いので、本物のカードに引き直す。CodeRabbit #52）
+    await say('今日なにする？');
+    await say('済み');
+    await waitCards((cs) => cs.find((c) => c.title === picked[0])?.lane === 'done', `「今日なにする？」のあと「済み」で、1つ目（${picked[0]}）を済みにする`);
     await say('戻す');
     await say('終わり');
     check(outside.length === 0, '会話（AI なし・打つ）：自分のサイトと GitHub 以外へ通信していない');
@@ -787,7 +803,7 @@ try {
     await pg.evaluate(() => LK.memory.put({ id: 'qa-note', kind: 'note', text: '見本の覚えたこと' }));
     await pg.click('#talkBtn');
     await waitTalkEnd(pg);
-    check(/内蔵 AI/.test(await pg.textContent('#talkMode')), '会話（AI）：内蔵 AI があれば使う');
+    check(/内蔵 AI/.test(await pg.textContent('#talkMode')), `会話（AI）：内蔵 AI があれば使う（${await pg.textContent('#talkMode')}｜${(await pg.textContent('#talkLog')).slice(0, 160)}）`);
     await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold' && cs.find((c) => c.doc_id === 's4')?.deleted === true, '会話（AI）の「保留」と「消す」');
     const spoken = await pg.evaluate(() => window.__spoken.join(''));
     check(!/消しますか|消していい/.test(spoken) && /見本のカード（エージェント）/.test(await pg.textContent('#talkLog')), '会話（AI）：「消して」は聞き返さずに消し、どのカードを消したか一言添えた');
@@ -1173,7 +1189,7 @@ try {
         const today = new Date(), ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         const later = new Date(today.getTime() + 20 * 864e5), past = new Date(today.getTime() - 864e5);
         const tt = T.create({ settings: { ai: 'off', reply: 'text', tidy: false, cue: false, followUp: false }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']],
-          board: () => [{ title: 'A 今やる', lane: 'now', due: '' }, { title: 'B 寝かせ', lane: 'later', due: '' }, { title: 'C 期限すぎ', lane: 'next', due: ymd(past) }, { title: 'D 先の期限', lane: 'next', due: ymd(later) }, { title: 'E エージェント', lane: 'agent', due: ymd(past) }, { title: 'F 予定待ち', lane: 'wait', due: ymd(past) }, { title: 'G 面接', lane: 'wait', due: '', event_start: ymd(today) + 'T15:00:00+09:00' }],
+          board: () => [{ title: 'A 今やる', lane: 'now', due: '' }, { title: 'B 寝かせ', lane: 'later', due: '' }, { title: 'C 期限すぎ', lane: 'next', due: ymd(past) }, { title: 'D 先の期限', lane: 'next', due: ymd(later) }, { title: 'E エージェント', lane: 'agent', due: ymd(past) }, { title: 'F 予定待ち', lane: 'wait', due: ymd(past) }, { title: 'G 面接', lane: 'wait', due: '', event_start: ymd(today) + 'T15:00:00' }],
           queue: () => [], weekDone: () => [], run: (x) => { runs.push(x); return '「' + x + '」をやりました。'; }, act: () => 'ok', pending: () => false, onLine: (k, x) => { if (k === 'ai') said.push(x); }, onState() {} });
         await tt.start('text'); said.length = 0;
         await tt.hear('今日は何する？');
@@ -1514,7 +1530,7 @@ try {
     });
     await pg.goto(base);
     await ready(pg);
-    check(await pg.evaluate(() => !Voice.supported) && /AI の部品/.test(await pg.textContent('#talkWhy')), '端末の中の AI（入れる前）：耳が無いので🎤は使えないと出し、AI の部品の場所を案内する');
+    check(await pg.evaluate(() => !Voice.supported && document.querySelector('#talkWhy').hidden), `耳（Whisper）を入れる前も、ボードに説明の文を足さない（🎤を押すと入れる場所を開く。${await pg.textContent('#talkWhy')}）`);
     await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
     check(/約 0\.5GB/.test(await pg.textContent('#aiGet')), `端末の中の AI：入れる前に大きさの目安を出す（${await pg.textContent('#aiGet')}）`);
     check(net.length === 0, '端末の中の AI：ボタンを押す前はモデルを取りに行かない');
@@ -1565,20 +1581,17 @@ try {
     await pg.close();
   }
 
-  // E. 端末の音声認識が話す前にエラーで終わる端末（Pixel のまね）でも、耳（Whisper）が入っていれば聞き直して文字にし、その日は耳で聞く。
-  // 切り替えたことと、🎤がすぐ止まったので診断を送ったことを一言出す（2026-10-21 satouさん「マイクを押してもすぐ OFF」）
+  // E. 🎤が聞き取りの途中でエラーで止まった日は、この端末の様子を1回だけ自動で送り、送ったと言う（2026-10-21 satouさん「マイクを押してもすぐ OFF」）。
+  // 端末の音声認識（SpeechRecognition）があっても使わない（Android で🎤がすぐ止まった。耳は Whisper だけ）
   {
-    fakeVendor = true;
     const pg = await context.newPage();
-    pg.on('pageerror', (e) => errors.push(`pageerror(🎤 耳に切り替え): ${e.message}`));
-    await pg.route(/^https:\/\/([a-z0-9-]+\.)*(huggingface\.co|hf\.co)\//, (route) => route.fulfill({ json: {} }));
+    pg.on('pageerror', (e) => errors.push(`pageerror(🎤 止まった): ${e.message}`));
+    await pg.addInitScript(fakeEar);
     await pg.addInitScript(() => {
-      window.__heard = ['今やるを読んで', '終わり']; window.__spoken = []; window.__asrCalls = []; window.__srStarts = 0;
-      localStorage.setItem('lk.ai', JSON.stringify({ ear: true, at: '2026-10-20', from: ['huggingface.co/x'], pinned: true }));
-      localStorage.removeItem('lk.srBad'); localStorage.removeItem('lk.micLog'); localStorage.removeItem('lk.diagAuto');
-      class FakeSR { static available() { return Promise.resolve('available'); } start() { window.__srStarts++; setTimeout(() => { this.onerror?.({ error: 'audio-capture' }); this.onend?.(); }, 200); } stop() {} abort() {} }
+      window.__heard = []; window.__spoken = []; window.__srUsed = 0; window.__earFail = 'audio-capture';
+      localStorage.removeItem('lk.micLog'); localStorage.removeItem('lk.diagAuto');
+      class FakeSR { static available() { return Promise.resolve('available'); } start() { window.__srUsed++; } stop() {} abort() {} }
       window.webkitSpeechRecognition = FakeSR; window.SpeechRecognition = FakeSR; delete window.LanguageModel;
-      navigator.mediaDevices.getUserMedia = async () => { const ac = new AudioContext(); const o = ac.createOscillator(); const d = ac.createMediaStreamDestination(); o.connect(d); o.start(); return d.stream; };
       window.speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }];
       window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); setTimeout(() => u.onend && u.onend(), 5); };
       window.speechSynthesis.cancel = () => {};
@@ -1586,16 +1599,12 @@ try {
     await pg.goto(base); await ready(pg);
     const b = puts.length;
     await pg.click('#micBtn');
-    await pg.waitForFunction(() => window.__asrCalls.length >= 1 && [...document.querySelectorAll('#talkLog .you')].length >= 1, null, { timeout: 20000 }).catch(() => {});
-    await pg.waitForFunction(() => /Claude に送った/.test(document.querySelector('#talkLog')?.textContent || ''), null, { timeout: 8000 }).catch(() => {});
-    const r = await pg.evaluate(() => ({ asr: window.__asrCalls.length, sr: window.__srStarts, bad: localStorage.getItem('lk.srBad') || '', you: [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent.replace(/^あなた：/, '')), log: document.querySelector('#talkLog').textContent }));
-    check(r.asr >= 1 && r.sr === 1 && /^\d{4}-\d\d-\d\d audio-capture/.test(r.bad) && r.you[0] === '今やるを読んで', `🎤（端末の音声認識がすぐ終わる端末）：耳（Whisper）で聞き直して文字にし、その日は耳で聞く（端末の認識 ${r.sr} 回・耳 ${r.asr} 回・${r.bad}・${r.you.join('|')}）`);
-    check(/今日はもう一つの耳（Whisper）で聞くね/.test(r.log), '🎤：耳に切り替えたことを一言出す');
+    await pg.waitForFunction(() => /Claude に送った/.test(document.querySelector('#talkLog')?.textContent || ''), null, { timeout: 10000 }).catch(() => {});
+    const r = await pg.evaluate(() => ({ sr: window.__srUsed, ear: window.__earCalls.length, log: document.querySelector('#talkLog')?.textContent || '' }));
+    check(r.sr === 0 && r.ear >= 1, `🎤：端末の音声認識があっても使わず、耳（Whisper）で聞く（端末の認識 ${r.sr} 回・耳 ${r.ear} 回）`);
     const diag = puts.slice(b).find((p) => /^local-board\/diagnostics\//.test(p.path));
     const dj = diag ? JSON.parse(diag.text) : {};
-    check(!!diag && /Claude に送った/.test(r.log) && dj['聞き取りの失敗']?.[0]?.code === 'audio-capture' && !JSON.stringify(dj).includes('今やるを読んで') && !JSON.stringify(dj).includes('見本'), `🎤がすぐ止まった日は、この端末の様子を1回だけ自動で送り、送ったと言う。話した中身・カードは入れない（${diag?.path || 'なし'}）`);
-    await pg.evaluate(() => caches.delete('kanban-vendor'));
-    fakeVendor = false;
+    check(!!diag && /Claude に送った/.test(r.log) && dj['聞き取りの失敗']?.[0]?.code === 'audio-capture' && !JSON.stringify(dj).includes('見本'), `🎤が止まった日は、この端末の様子を1回だけ自動で送り、送ったと言う。カードは入れない（${diag?.path || 'なし'}）`);
     await pg.close();
   }
 
@@ -1609,10 +1618,7 @@ try {
     await pg.route(/^https:\/\/([a-z0-9-]+\.)*(huggingface\.co|hf\.co)\//, (route) => route.fulfill({ json: {} }));
     await pg.addInitScript(() => {
       window.__heard = []; window.__spoken = []; window.__llmReq = []; window.__llmReplies = []; window.__asrCalls = []; window.__tried = [];
-      // 本物の音声認識は使わない（CI の Chrome が落ちた）。Pixel のように、端末の中で聞く関数はあるが日本語は 'unavailable' と答えるにせもの
-      delete window.webkitSpeechRecognition; delete window.LanguageModel;
-      window.__srState = 'unavailable';
-      window.SpeechRecognition = class { static async available() { return window.__srState; } static async install() { if (window.__srInstallOk) window.__srState = 'available'; return !!window.__srInstallOk; } start() { this.onerror?.({ error: 'not-allowed' }); } stop() {} abort() {} };
+      delete window.webkitSpeechRecognition; delete window.SpeechRecognition; delete window.LanguageModel;
       navigator.mediaDevices.getUserMedia = async () => { const ac = new AudioContext(); const o = ac.createOscillator(); const d = ac.createMediaStreamDestination(); o.connect(d); o.start(); return d.stream; };
       Object.defineProperty(navigator, 'gpu', { configurable: true, value: { requestAdapter: async (o) => { window.__tried.push(JSON.stringify(o || {})); return null; } } });
       window.speechSynthesis.getVoices = () => [{ name: '端末の声', lang: 'ja-JP', localService: true }];
@@ -1623,15 +1629,7 @@ try {
     await ready(pg);
     await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
     await pg.waitForFunction(() => /CPU で動く AI/.test(document.querySelector('#aiStat').textContent), null, { timeout: 5000 }).catch(() => {});
-    check(/耳 Whisper/.test(await pg.textContent('#aiStat')) && /約 0\.5GB/.test(await pg.textContent('#aiGet')), `CPU 版の AI：端末の中で聞く関数があっても日本語が使えなければ、耳（Whisper）も入れると出す（${await pg.textContent('#aiGet')}）`);
-    const earQ = await pg.evaluate(async () => {
-      const out = {};
-      window.__srState = 'available'; out.available = await LocalAI.earNeeded({ tryInstall: true });
-      window.__srState = 'downloadable'; window.__srInstallOk = true; out.downloadable = await LocalAI.earNeeded({ tryInstall: true });
-      window.__srState = 'unavailable'; window.__srInstallOk = false; out.unavailable = await LocalAI.earNeeded({ tryInstall: true });
-      return out;
-    });
-    check(earQ.available === false && earQ.downloadable === false && earQ.unavailable === true, `耳が要るかは、端末の音声認識の実際の答えで決める（使える→不要・入れて使えた→不要・使えない→要る：${JSON.stringify(earQ)}）`);
+    check(/耳 Whisper/.test(await pg.textContent('#aiStat')) && /約 0\.5GB/.test(await pg.textContent('#aiGet')), `CPU 版の AI：耳（Whisper）もいっしょに入れると出す（${await pg.textContent('#aiGet')}）`);
     check(/WebGPU が使えないので、CPU で動く AI/.test(await pg.textContent('#aiStat')), `CPU 版の AI：WebGPU が使えない端末では、入れる前に CPU 版になる・ゆっくりと出す（${await pg.textContent('#aiStat')}）`);
     const tried = await pg.evaluate(() => window.__tried);
     check(tried.some((t) => /compatibility/.test(t)) && tried.some((t) => /low-power/.test(t)), `CPU 版の AI：あきらめる前に WebGPU を別の指定（互換モード・電力）でも探した（${tried.join(' ')}）`);
@@ -1683,16 +1681,16 @@ try {
     await pg.click('#aiDel'); await pg.click('#aiDel');
     await pg.waitForFunction(() => /消しました/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 10000 }).catch(() => {});
     await pg.click('#talkSetForm button[value=cancel]');
-    // 頭だけ入れてある端末（耳を入れる前の版で入れた）：「耳だけ足す」で Whisper だけ取る
+    // 頭だけ入れてある端末（耳を入れる前の版で入れた）：「聞き取りを入れる」で Whisper だけ取る（頭は取り直さない）
     await pg.evaluate(() => { localStorage.setItem('lk.ai', JSON.stringify({ llm: LocalAI.CPU.label, engine: 'cpu', at: '2026-10-20', from: ['huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF'] })); window.__cpu = null; window.__asr = null; });
     await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
-    await pg.waitForFunction(() => /耳.*だけ足す/.test(document.querySelector('#aiGet').textContent), null, { timeout: 5000 }).catch(() => {});
-    check(/耳（声の聞き取り）だけ足す/.test(await pg.textContent('#aiGet')), `頭だけ入れた端末では「耳だけ足す」を出す（${await pg.textContent('#aiGet')}）`);
-    await pg.click('#aiGet');
-    await pg.waitForFunction(() => /入りました|入れられません/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 15000 }).catch(() => {});
+    check(/聞き取りを入れる/.test(await pg.textContent('#earGet')), `頭だけ入れた端末でも、聞き取り（耳）だけを入れるボタンを出す（${await pg.textContent('#earGet')}）`);
+    await pg.click('#earGet');
+    await pg.waitForFunction(() => /入りました|入れられません/.test(document.querySelector('#earMsg').textContent), null, { timeout: 15000 }).catch(() => {});
     const earOnly = await pg.evaluate(() => ({ ear: LocalAI.status().ear, llm: LocalAI.status().llm, asr: !!window.__asr, cpu: !!window.__cpu }));
-    check(earOnly.ear && earOnly.asr && !earOnly.cpu && !!earOnly.llm, `「耳だけ足す」で Whisper だけ取り、頭は取り直さない（${JSON.stringify(earOnly)}）`);
-    await pg.click('#talkSetForm button[value=cancel]');
+    check(earOnly.ear && earOnly.asr && !earOnly.cpu && !!earOnly.llm, `「聞き取りを入れる」で Whisper だけ取り、頭は取り直さない（${JSON.stringify(earOnly)}）`);
+    const after = await pg.evaluate(() => ({ open: document.querySelector('#talkSet').open, vs: document.querySelector('#vstatus')?.textContent || '' }));
+    check(!after.open && /入りました.*🎤を押して/.test(after.vs), `聞き取りが入ったら設定を閉じ、ボードの1行で「🎤を押して」と言う（${JSON.stringify(after)}）`);
     await pg.evaluate(() => caches.delete('kanban-vendor'));
     fakeVendor = false;
     await pg.close();

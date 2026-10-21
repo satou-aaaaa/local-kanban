@@ -1,7 +1,7 @@
 // 端末の中で動く AI の部品。Chrome の内蔵 AI や端末内の音声認識が無い端末（スマホなど）でも、会話モードで AI と話せるようにする。
 //   頭       … WebLLM（WebGPU で小さな言葉のモデル Qwen2.5 を動かす）。返事の形は talk.js の Prompt API と同じ（session.prompt）
 //              WebGPU が使えない端末（Chrome の対象外の GPU など）は wllama（llama.cpp の wasm。CPU で動く。GGUF）で同じモデルを動かす。遅いが動く
-//   耳       … Whisper（transformers.js。声→文字）。端末内の音声認識が使えない端末だけで使う
+//   耳       … Whisper（transformers.js。声→文字）。🎤と会話の耳はこれだけ（voice.js は Chrome の音声認識を使わない）
 //   割り込み … Silero VAD（transformers.js。声が始まったかを見る）。入っていなければ talk.js の音の大きさの VAD を使う
 // 部品の JS と wasm は vendor/ に同梱（版を固定）。モデル本体は「AI の部品を入れる」を押したときだけ、
 // Hugging Face（WebLLM のモデル用 wasm は raw.githubusercontent.com）から GET で取り、ブラウザの Cache API に保存する。以後はオフラインで動く。
@@ -61,28 +61,10 @@
   // ---------- 端末の下調べ ----------
   // いつも 0.5B（約0.4GB）。1.5B（約1GB）は PC で断りなく大きいものを取ってしまったので既定にしない（PC はふつう C ドライブに入る）
   function pickModel() { return MODELS.small; }
-  // 端末内の音声認識（Chrome 139 以降）で日本語を聞き取れない端末だけ Whisper を入れる。
-  // 関数（SpeechRecognition.available）があっても、Android の Chrome は日本語が 'unavailable' のことがある（2026-10-20 Pixel 6a）ので、
-  // 実際の答えで決める。'downloadable' なら入れてみて、EAR_WAIT ミリ秒たっても使えなければ Whisper にする
-  const EAR_WAIT = 20000;
-  const needEar = () => !g.Voice?.localApi; // すぐ答えが要るとき（画面の目安）の仮の判定
-  async function earNeeded({ tryInstall = false } = {}) {
-    const V = g.Voice;
-    if (!V?.localApi) return true;
-    let st = await V.localStatus('ja-JP').catch(() => 'unavailable');
-    if (st === 'available') return false;
-    if (!tryInstall || (st !== 'downloadable' && st !== 'downloading')) return true;
-    const t0 = Date.now();
-    if (st === 'downloadable') V.install('ja-JP').catch(() => false);
-    // install の終わりは待たず、毎回1秒おいて聞き直す（終わったあとも状態が変わらないと、待たずに聞き続けてしまうため）
-    while (Date.now() - t0 < EAR_WAIT) {
-      await new Promise((ok) => setTimeout(ok, 1000));
-      st = await V.localStatus('ja-JP').catch(() => 'unavailable');
-      if (st === 'available') return false;
-      if (st === 'unavailable') return true;
-    }
-    return true;
-  }
+  // 耳はいつも Whisper（voice.js は Chrome の音声認識を使わない。2026-10-21「減らして固める」）。
+  // 前の版は端末の音声認識で日本語を聞き取れるかで決めていたが、Android の Chrome で🎤がすぐ止まったのでやめた。
+  const needEar = () => true;
+  async function earNeeded() { return true; }
   // 入れる前に見せる大きさ（目安）。GPU にはまだ触らない（押したときに調べる）
   function plan() {
     const m = brainPick() === 'sarashina' ? JA : g.navigator?.gpu ? pickModel() : CPU;
@@ -428,7 +410,7 @@
     const ear = await earNeeded({ tryInstall: true });
     const step = (base, part) => (p, what) => onProgress?.(base + part * Math.max(0, Math.min(1, p || 0)), what);
     if (ear && !load().ear) save({ pinned: true });
-    if (earOnly && load().llm) {
+    if (earOnly) { // 耳だけ（AI の頭が無くても入れられる。🎤の聞き取り）
       if (ear) {
         await loadEar(step(0, 1));
         save({ ear: true, earCache: await hasTfCache(), from: [...new Set([...(load().from || []), `huggingface.co/${EAR.id}`, ...(earVad ? [`huggingface.co/${VAD.id}`] : [])])] });
@@ -548,6 +530,6 @@
     prepareEar: () => (load().ear ? loadEar().catch(() => {}) : Promise.resolve()),
   };
   g.LocalAI = LocalAI;
-  // 端末内の音声認識が無い端末では、入れた Whisper を🎤と会話モードの耳にする
+  // 入れた Whisper を🎤と会話モードの耳にする（耳はこの1本だけ）
   g.Voice?.useEar?.({ ready: () => !!load().ear, listen: (o) => listen(o), cancel, release });
 })(typeof window !== 'undefined' ? window : globalThis);

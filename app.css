@@ -188,3 +188,6 @@ dialog.lk input:not([type=checkbox]):not([type=radio]):not([type=range]):not([ty
 
 /* 読み上げだけに出す文字（会話の行の「あなた：」「ポチ：」。v36） */
 .sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* 🎤から開いたときの耳の欄（どこを押せばよいかを目立たせる。v40 の点検） */
+#earBox.lk-hl { outline: 3px solid var(--accent, #3b82f6); outline-offset: 2px; border-radius: 8px; }

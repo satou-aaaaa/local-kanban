@@ -1,6 +1,7 @@
 // 会話モード：キャラと声でやりとりしながらカードを片づける。すべて端末の中で動く（声も会話も外に出さない）。外部ライブラリなし。
-//   耳  … voice.js の Voice.listen()（端末の中だけで聞き取る音声認識。無い端末は localai.js で入れた Whisper）。どちらも無ければ文字を打って話す
-//   頭  … Chrome の内蔵 AI（Prompt API の LanguageModel、Gemini Nano）。無ければ localai.js で入れた WebLLM。どちらも無ければ AI なしの「1枚ずつ読み上げ」
+//   耳  … voice.js の Voice.listen()（localai.js で入れた Whisper の1本だけ）。入れていなければ文字を打って話す
+//   頭  … ふだんは AI なし（決まった言い方と返事）。⚙ で AI を入れた人だけ、Chrome の内蔵 AI（Gemini Nano）か localai.js の WebLLM
+//   （2026-10-21 satouさん「減らして固める」：部品の組み合わせが多いほど壊れたので、AI と気持ちの声は入れたい人だけ）
 //   口  … voice.js の Voice.speak()（端末の中の声だけ）。文ごとに区切ってすぐ話し始める
 //   割り込み … 話している間だけマイクを見て、声が続いたら読み上げを止めて聞き始める（localai.js の Silero VAD。無ければ音の大きさを見る自作の簡単な VAD）
 // アプリ側（index.html）から渡すもの:
@@ -36,7 +37,7 @@
     bargeIn: true,
     reply: 'match', // match = 声で話しかけたら声でも返し、打ったら文字だけ / voice = いつも声でも / text = いつも文字だけ
     tidy: true, // 話し始めたら、ポチがボードを自分で整理して報告する（host.tidy。「戻す」で戻せる）
-    ai: 'auto', // auto = 端末の中の AI（内蔵 AI か、入れた WebLLM）があれば使う / off = 使わない
+    ai: 'off', // off = 使わない（標準）/ auto = 端末の中の AI（内蔵 AI か、入れた WebLLM）があれば使う
     endWait: 'normal', // 話し終わりの待ち時間（Whisper の耳）：normal = 0.7秒 / slow = 1.2秒（間をとって話す人向け）
     cue: true, // 聞き始め「ポン」・聞き終わり「ポロン」の音と短い振動（音は端末の中で作る。ファイルも通信も無し）
     waitMore: true, // 言いかけ（〜て・〜けど・〜から・えっと）で終わったら、答えずに続きを聞いてつなげる
@@ -604,8 +605,11 @@
       const all = host.board().filter((c) => !handled.has(c.title));
       const cs = all.filter((c) => ['now', 'next', 'later'].includes(c.lane));
       // 予定待ちの列の、今日の予定（面接など）は先に一言（「今日の予定は？」で予定が出ないと「無い」と受け取ってしまう）
-      const ev = all.filter((c) => c.lane === 'wait' && String(c.event_start || '').slice(0, 10) === d0);
-      const evLine = ev.length ? '今日の予定は' + ev.slice(0, 2).map((c) => `「${c.title}」${/T\d\d:\d\d/.test(c.event_start) ? `（${c.event_start.slice(11, 16)}）` : ''}`).join('と') + '。 ' : '';
+      // 予定の日時は端末の時刻で読む（+09:00 付きでも、ほかの時間帯の端末で日がずれない）。早い順に2つ、残りは数だけ
+      const at = (c) => { const v = String(c.event_start || ''); if (!v) return null; const d = /^\d{4}-\d\d-\d\d$/.test(v) ? new Date(v + 'T00:00:00') : new Date(v); return Number.isNaN(d.getTime()) ? null : d; };
+      const hm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      const ev = all.filter((c) => c.lane === 'wait' && at(c) && ymdOf(at(c)) === d0).sort((a, b) => at(a) - at(b));
+      const evLine = ev.length ? '今日の予定は' + ev.slice(0, 2).map((c) => `「${c.title}」${/T\d\d:\d\d/.test(c.event_start) ? `（${hm(at(c))}）` : ''}`).join('と') + (ev.length > 2 ? `、ほか${ev.length - 2}つ` : '') + '。 ' : '';
       const rank = (c) => (c.due && c.due.slice(0, 10) <= d1 ? 0 : c.lane === 'now' ? 1 : c.due ? 2 : c.lane === 'next' ? 3 : 4);
       const n = Math.min(3, goal || 3); // しんどい日に「1枚だけ」と決めたら、すすめるのも1枚
       three = cs.map((c, i) => ({ c, i })).sort((a, b) => rank(a.c) - rank(b.c) || String(a.c.due || '9999').localeCompare(String(b.c.due || '9999')) || a.i - b.i).slice(0, n).map((x) => x.c);
@@ -970,16 +974,11 @@
       if (!on) return;
       g.LocalAI?.prepareEar(); // Whisper・Silero を入れてあれば先に読み込んでおく
       host.onMode?.(mode, brain, s.ai === 'off' ? 'off' : 'none');
-      if (mode !== 'ai') log('sys', s.ai === 'off' ? 'AI は設定で切っています。決まった返事で話します。' : 'いまは AI なし（決まった返事）です。⚙ 設定で AI を入れると、自由に話せます。');
+      // AI を切っているときは上の札（📋 AI なし）だけで足りる。入れたのに使えないときだけ一言（同じことを何度も言わない。v40 の点検）
+      if (mode !== 'ai' && s.ai !== 'off') log('sys', 'いまは AI なし（決まった返事）です。⚙ 設定で AI を入れると、自由に話せます。');
     }
     // 割り込み用のマイク（使えなければ割り込みなし）。声で話すときだけ取る（打つだけなら許可を聞かない）
-    // 端末の音声認識（Chrome）で聞くときは、割り込み用のマイクを持たない。Android ではマイクの取り合いになり、
-    // 話す前に聞き取りが終わって🎤がすぐ OFF になる（2026-10-21 Pixel）。Whisper で聞くときは同じページの中なので持ってよい
-    async function micFor() {
-      let r = 'ear'; try { r = (await g.Voice.route?.()) || 'ear'; } catch { /* 分からなければ持つ */ }
-      if (r === 'local') { stream?.getTracks().forEach((t) => t.stop()); stream = null; return; }
-      await mic();
-    }
+    // 耳は Whisper だけ（同じページの中で聞く）なので、割り込み用のマイクと取り合いにならない
     async function mic() {
       if (stream || !s.bargeIn || !g.navigator?.mediaDevices?.getUserMedia) return;
       try { stream = await g.navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); } catch { stream = null; }
@@ -1052,9 +1051,8 @@
       if (listening || !on) return;
       if (!g.Voice.supported) { state('typing'); return; } // 耳が無い端末は文字で（hear() を呼んでもらう）
       listening = true; const my = ++gen; let miss = 0;
-      await micFor();
+      await mic();
       while (on && my === gen) {
-        await micFor(); // 途中で耳が替わることがある（端末の音声認識 → Whisper）ので毎回
         state('listening');
         await cue('start');
         if (!on || my !== gen) break;
@@ -1070,11 +1068,9 @@
         catch (e) {
           if (!on || my !== gen) break;
           const msg = String(e?.message || e || '');
-          if (!e?.code) g.Voice?.note?.({ via: 'ear', code: msg.slice(0, 60), ms: Math.round(performance.now() - t0) }); // 端末の音声認識の失敗は voice.js が残す
+          if (!e?.code) g.Voice?.note?.({ via: 'ear', code: msg.slice(0, 60), ms: Math.round(performance.now() - t0) }); // 失敗の理由と秒数だけ残す（聞いた中身は残さない）
           // 割り込まれたのに何も言われなかった（物音だった）→ 続きを話す
           if (resume && /聞き取れませんでした/.test(msg)) { cut = false; await say('ごめん、続けるね。' + resume, true); await speech; continue; }
-          // 話す前にすぐ終わった（端末の音声認識）で、ほかの耳も無い → 2回待たずに、理由と次にどうするかを言って止める
-          if (e?.fast) { log('sys', msg + '。' + (g.LocalAI ? '「⋯ → 🎤と会話・AI の設定」で耳（Whisper）を入れると、この端末の中で聞けるよ。' : '') + 'いまは打って話してね。'); listening = false; state('typing'); return; }
           if (/端末の中だけで聞き取れません|部品|マイク|準備が終わりません/.test(msg)) { log('sys', msg + ' 文字を打って話してね。'); listening = false; state('typing'); return; }
           // 「聞こえなかった」以外のエラーは黙らずに出す（何が起きたか分からないまま止まらないように）
           if (!/聞き取れませんでした/.test(msg)) log('sys', '聞き取れなかった：' + msg);
@@ -1116,7 +1112,7 @@
       if (!g.Voice.supported) { state('typing'); return; }
       holding = true; listening = true; const my = ++gen;
       state('listening');
-      await micFor();
+      await mic();
       await cue('start');
       let text = '';
       if (on && my === gen && !letGo) {
@@ -1124,7 +1120,7 @@
         catch (e) {
           const msg = String(e?.message || e || '');
           if (!e?.code) g.Voice?.note?.({ via: 'ear', code: msg.slice(0, 60), ms: 0 });
-          if (on && my === gen && (e?.fast || !/聞き取れませんでした/.test(msg))) log('sys', e?.fast ? msg + '。もう一度押すか、打って話してね。' : '聞き取れなかった：' + msg); // 長押しでもすぐ止まったときは黙らない
+          if (on && my === gen && !/聞き取れませんでした/.test(msg)) log('sys', '聞き取れなかった：' + msg);
         }
       }
       holding = false;
