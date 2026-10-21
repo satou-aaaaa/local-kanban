@@ -1,0 +1,26 @@
+name: Setup check
+
+# 準備の1コマンド（scripts/setup.sh）がまっさらな環境で通るかを確かめる（Claude は使わない）。中身は共通部品 satou-aaaaa/shared-workflows。
+# 準備に関わるファイルを変えた PR と、月1回（外の変化で壊れていないか）に動く。
+on:
+  pull_request:
+    paths:
+      - scripts/setup.sh
+      - .nvmrc
+      - .python-version
+      - "**/package.json"
+      - "**/package-lock.json"
+      - requirements.txt
+      - pyproject.toml
+      - .github/workflows/setup-check.yml
+  schedule:
+    # 毎月2日 07:23 JST（= 1日 22:23 UTC）
+    - cron: "23 22 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    uses: satou-aaaaa/shared-workflows/.github/workflows/setup-check.yml@main

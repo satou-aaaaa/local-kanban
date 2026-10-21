@@ -12,7 +12,7 @@
 ## push する前の確認
 
 ```bash
-cd qa && npm ci && npx playwright install chromium && cd ..   # 最初に一度（PW_CHROMIUM にブラウザのパスがあればそれを使う）
+bash scripts/setup.sh   # 最初に一度（Node と qa/ の部品・ブラウザ。クラウドのセッションでは自動で動く）
 node qa/run.mjs        # にせもののボード（qa/board.fixture.html）と見本データで：壁紙・設定の同期・保存・ぶつかったとき・知らせ・鍵の送り先・オフライン・スマホ幅（390px）
 LK_BOARD=<board-src/kanban.html> node qa/run.mjs   # 本物のボードで（写しはこのリポジトリに入れない）
 node qa/check-uiux.mjs   # 使いやすさの数字（名前・押す所・はみ出し・字・明るさの差・文字の量）。本物のボードでも LK_BOARD=… で。良くなったら --update-baseline
