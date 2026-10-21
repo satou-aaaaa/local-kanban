@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # 点検の記録の検査（check-review）が PR の元と比べるので、履歴ごと取る
+          fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -35,8 +37,15 @@ jobs:
           cd qa
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
+      - name: 点検の記録（画面を変えた PR に reviews/v<版>.md と2役の点検があるか。手順は reviews/README.md）
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: node qa/check-review.mjs "$BASE"
       - name: 検査
         run: node qa/run.mjs --out qa-report
+      - name: 使いやすさの数字（名前・押す所・はみ出し・字の大きさ・明るさの差・文字の量。基準は qa/uiux-baseline.json）
+        run: node qa/check-uiux.mjs
       - name: 結果をまとめに出す
         if: always()
         run: test -f qa-report/report.md && cat qa-report/report.md >> "$GITHUB_STEP_SUMMARY" || true

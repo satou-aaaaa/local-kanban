@@ -15,7 +15,11 @@
 cd qa && npm ci && npx playwright install chromium && cd ..   # 最初に一度（PW_CHROMIUM にブラウザのパスがあればそれを使う）
 node qa/run.mjs        # にせもののボード（qa/board.fixture.html）と見本データで：壁紙・設定の同期・保存・ぶつかったとき・知らせ・鍵の送り先・オフライン・スマホ幅（390px）
 LK_BOARD=<board/index.html> node qa/run.mjs   # 本物のボードの写しで（写しはこのリポジトリに入れない）
+node qa/check-uiux.mjs   # 使いやすさの数字（名前・押す所・はみ出し・字・明るさの差・文字の量）。本物のボードでも LK_BOARD=… で。良くなったら --update-baseline
+node qa/check-review.mjs origin/main   # 画面を変えたら：版（sw.js の CACHE）を上げ、reviews/v<版>.md に2役の点検を書いたか
 ```
+
+- 画面に出るファイルを変えたら、`reviews/README.md` の手順で点検する（2026-10-21 satouさん「LAST TELL と同じようなチェック機構を」「定期的なチェックも」）。2つの役（使う人の目線＝satouさん役・UI/UX 専門家）を別々の Agent が画面写真で見て、重さ 3・4 は公開前に直す。記録が無いと CI の QA が赤になる。毎日の定期の点検も同じ手順（`reviews/daily-<日付>.md`）。
 
 - CI は Playwright の headless shell で回る（本物の Chrome より部品が少なく、本物の音声認識を呼ぶとタブごと落ちる）。CI だけ「Target crashed」で落ちたら、`PW_CHROMIUM` に headless shell（`chromium_headless_shell-*/…/headless_shell`）を指して再現する。端末の機能はにせものに替えて調べる（`qa/run.mjs` の先頭で全コンテキストに入れている）。
 - app.js が当てにするボードの部品（`move`・`remove`・`say`・`render`・`openDetail`・`cards`・`WPS`・`#micBtn`・`#voice`・`#vstatus`・`.hbtns`・`#board` の `lane-<列>`・`#jump`・`#compose-btn`・`#toast-msg`・`#toast-undo`・`#wall`・`dialog#detail`。あれば使う：`repliedToYou`＝返事が来た印。アプリのアイコンの数にする）は `qa/board.fixture.html` に同じ名前で置く。増やしたらにせものにも、データ側の `tools/local_board.py` の相性の検査にも足す。

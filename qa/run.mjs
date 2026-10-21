@@ -1114,6 +1114,15 @@ try {
     check((await pg.textContent('#talkName')) === 'テスト名', 'キャラの設定：名前を変えると会話の画面に出る');
     check(await pg.evaluate(() => JSON.parse(localStorage.getItem('lk.talk')).icon === 'kaku'), 'キャラの設定：アイコンの選択を端末に保存した');
     await pg.click('#talkEnd');
+    // v35 の点検：設定の欄と見出し（label）がつながっている・⋯ は Esc で閉じて ⋯ に戻る
+    check(await pg.evaluate(() => ['name', 'persona', 'color', 'voice', 'reply', 'endWait'].every((n) => document.querySelector(`#talkSetForm [name=${n}]`).labels.length > 0) && document.querySelector('#ghForm [name=owner]').labels.length > 0), '設定：欄と見出し（label）がつながっている（読み上げで欄の名前が出る）');
+    await pg.click('#lkMenu summary'); await pg.keyboard.press('Escape');
+    check(await pg.evaluate(() => !document.querySelector('#lkMenu').open && document.activeElement === document.querySelector('#lkMenu summary')), '⋯ のメニュー：Esc で閉じて ⋯ にキーボードの位置が戻る');
+    await pg.evaluate(() => localStorage.setItem('kanban-keys', '0')); await pg.keyboard.press('t'); await pg.waitForTimeout(300);
+    check(!(await pg.evaluate(() => document.querySelector('#talkDlg').open)), '1文字のキー：ボードの「？ 印」で「使う」を外すと t でも会話を開かない（WCAG 2.1.4）');
+    await pg.evaluate(() => localStorage.removeItem('kanban-keys')); await pg.keyboard.press('t');
+    check(await pg.waitForFunction(() => document.querySelector('#talkDlg').open, null, { timeout: 5000 }).then(() => true, () => false), '1文字のキー：ふだんは t で会話を開く');
+    await pg.click('#talkEnd');
     check(outside.length === 0, '会話（耳なし）：自分のサイトと GitHub 以外へ通信していない');
     await pg.close();
   }
@@ -1415,6 +1424,8 @@ try {
     check(net.length === 0, `会話（入れた AI）：会話中は外へ通信していない${net.length ? '（' + net.map((x) => x.url).join(', ') + '）' : ''}`);
     await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
     await pg.click('#aiDel');
+    check(await pg.evaluate(() => !!localStorage.getItem('lk.ai') && /もう一度/.test(document.querySelector('#aiDel').textContent)), '消すボタン：1回押しただけでは消さず「もう一度押すと…」に変わる（押し間違えで消さない）');
+    await pg.click('#aiDel');
     await pg.waitForFunction(() => /消しました/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 10000 }).catch(() => {});
     check(await pg.evaluate(() => !localStorage.getItem('lk.ai') && window.__deleted === 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC'), '端末の中の AI：「入れた AI を消す」でモデルと印を消した');
     check(await pg.evaluate(() => !Voice.supported), '端末の中の AI：消したら🎤も使えなくなる');
@@ -1487,7 +1498,7 @@ try {
     check(req.length >= 1 && req[0].response_format?.type === 'json_schema' && req[0].response_format.json_schema?.schema?.required?.includes('say') && req[0].temp === 0.7 && req[0].penalty_repeat === 1.1, `会話（CPU 版の AI）：JSON の形と返事の出し方を wllama の形で渡した（${JSON.stringify(req[0]?.response_format)?.slice(0, 80)}）`);
     check(net.length === 0, `会話（CPU 版の AI）：会話中は外へ通信していない${net.length ? '（' + net.map((x) => x.url).join(', ') + '）' : ''}`);
     await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
-    await pg.click('#aiDel');
+    await pg.click('#aiDel'); await pg.click('#aiDel');
     await pg.waitForFunction(() => /消しました/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 10000 }).catch(() => {});
     check(await pg.evaluate(() => !localStorage.getItem('lk.ai') && window.__cpuCleared === true), 'CPU 版の AI：「入れた AI を消す」でモデル（wllama の保存）と印を消した');
     // 日本語が得意な頭（sarashina2.2）を選んで入れる・Qwen に戻すと前の頭を消してから入れる
@@ -1505,7 +1516,7 @@ try {
     await pg.waitForFunction(() => /入りました|入れられません/.test(document.querySelector('#aiMsg').textContent) && !/sarashina/.test(window.__cpu?.url || 'sarashina'), null, { timeout: 15000 }).catch(() => {});
     const back = await pg.evaluate(() => ({ url: window.__cpu?.url || '', cleared: window.__cpuCleared, brain: LocalAI.status().brain }));
     check(back.cleared === true && /qwen2\.5-0\.5b-instruct-q4_0\.gguf$/.test(back.url) && back.brain === 'qwen', `日本語の頭：Qwen に戻すと、前の頭を消してから入れる（${JSON.stringify(back)}）`);
-    await pg.click('#aiDel');
+    await pg.click('#aiDel'); await pg.click('#aiDel');
     await pg.waitForFunction(() => /消しました/.test(document.querySelector('#aiMsg').textContent), null, { timeout: 10000 }).catch(() => {});
     await pg.click('#talkSetForm button[value=cancel]');
     // 頭だけ入れてある端末（耳を入れる前の版で入れた）：「耳だけ足す」で Whisper だけ取る
