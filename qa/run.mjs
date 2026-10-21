@@ -1958,6 +1958,8 @@ try {
       pg.on('pageerror', (e) => errors.push(`pageerror(基本 ${tag}): ${e.message}`));
       pg.on('dialog', (d) => { errors.push(`ブラウザのダイアログが出た(基本 ${tag}): ${d.message()}`); d.dismiss(); });
       await pg.setViewportSize({ width: w, height: h });
+      // ボード v53 から「エージェント」「保留」「済み」の列は最初は畳まれ、カードが描かれない。基本の検査は全部の列を開いて見る
+      await pg.addInitScript(() => { try { localStorage.setItem('kanban-folded2', '{}'); } catch { /* なくてよい */ } });
       await pg.goto(base);
       await ready(pg);
       await pg.evaluate(() => { const d = document.getElementById('talkDlg'); if (d?.open) d.close(); });
