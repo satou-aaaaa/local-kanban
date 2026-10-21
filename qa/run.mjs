@@ -1181,7 +1181,7 @@ try {
     const ymd = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
     await pg.evaluate(async ({ yesterday }) => {
       const t = new Date().toISOString();
-      const body = (title, lane, due, o) => ({ type: 'task', title, owner: 'you', lane, priority: 'mid', order: o, created: t, updated: t, moves: [{ at: t, to: lane }], due, history: [{ at: t, who: 'you', text: '検査で足した' }] });
+      const body = (title, lane, due, o) => ({ type: 'task', title, owner: 'you', lane, priority: 'mid', order: o, created: t, updated: t, moves: [{ at: t, to: lane }], due, history: [{ at: t, who: 'claude', text: '検査で足した' }] }); // 本人が触ったばかりのカードはポチが下ろさないので、Claude が足した形にする
       await LK.add(body('見本の今やる1', 'now', '2099-02-01', 10)); // 見本の s1・s2 と合わせて今やるは3枚
       await LK.add(body('見本の期限すぎ', 'next', yesterday, 20));
       await LK.add(body('見本の調べもの', 'later', null, 21));
@@ -1216,6 +1216,14 @@ try {
       return { p, again, one, nextDay };
     });
     check(many.p.length <= 2 && many.p.every((id) => /^(low|mid)/.test(id)) && many.again === 0 && many.one === 1 && many.nextDay >= 1, `任せる：今やるが12枚でも下ろすのは急ぎでない2枚まで・ほかの端末と合わせて1日2枚（下ろした ${many.p.join(',') || 'なし'}、ほかの端末で2枚済み ${many.again}・1枚済み ${many.one}・次の日 ${many.nextDay}）`);
+    // 本人がこの1日にコメントしたカード・返事待ちのカードは下ろさない（2026-10-21 「それで進めて」の2分後に下ろした）
+    const touched = await pg.evaluate(() => {
+      const t = Date.now();
+      const c = (id, extra = {}) => ({ id, title: id, lane: 'now', owner: 'you', order: 1, priority: 'mid', ...extra });
+      const list = [c('said', { history: [{ at: new Date(t - 120e3).toISOString(), who: 'you', text: 'それで進めて' }] }), c('wait', { comment_status: 'local' }), c('old', { history: [{ at: new Date(t - 3 * 864e5).toISOString(), who: 'you', text: 'x' }], comment_status: 'done' }), c('m1'), c('m2')];
+      return LK.tidyPlan(list, '2026-10-20', t, new Set()).down.map((x) => x.id);
+    });
+    check(!touched.includes('said') && !touched.includes('wait') && touched.includes('old'), `任せる：本人がこの1日にコメントしたカード・返事待ちのカードは今やるから下ろさない（下ろした ${touched.join(',') || 'なし'}）`);
     const msg = puts.find((p) => p.path === 'local-board/cards.json' && /ポチ：.*ほか \d+ 件/.test(p.body.message))?.body.message || [...puts].reverse().find((p) => /ポチ：/.test(p.body.message))?.body.message || '';
     check(/ポチ：/.test(msg) && /ほか \d+ 件/.test(msg), `保存の題（コミット）に、ポチが動かしたことと、まとめて何件かが出る（${msg}）`);
     const agent = await pg.evaluate(() => LK.cards.find((c) => c.title === '見本の調べもの'));
