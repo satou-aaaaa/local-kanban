@@ -166,15 +166,57 @@
   // hold: true なら、release() を呼ぶまで聞き続ける（間があっても切らない）。waitMs は別の耳（Whisper）で話し始めを待つ長さ
   // endMs は別の耳（Whisper）の話し終わりの待ち。phrases は Chrome の音声認識に「出やすい言葉」として渡す（あれば）。
   // 返り値の via は 'ear'（Whisper）か 'local'（Chrome の端末内の音声認識）
+  // 端末の音声認識がすぐ終わる・エラーになる端末（2026-10-21 Pixel「マイクを押してもすぐ OFF」）は、その日は耳（Whisper）で聞く。
+  // Android の Chrome は聞き取りを別の部品（端末の音声認識サービス）に任せるので、マイクの取り合いなどで、話す前に終わることがある。
+  const BAD_KEY = 'lk.srBad';
+  const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }; // 端末の時刻の日付
+  const srBad = () => { try { return (localStorage.getItem(BAD_KEY) || '').startsWith(today()); } catch { return false; } };
+  // 聞き取りに失敗した記録（理由・どの耳・何秒で終わったか。聞いた中身は入れない）。診断で送る
+  const LOG_KEY = 'lk.micLog';
+  function note(v) {
+    try { const l = JSON.parse(localStorage.getItem(LOG_KEY) || '[]'); l.push({ at: new Date().toISOString(), ...v }); localStorage.setItem(LOG_KEY, JSON.stringify(l.slice(-20))); } catch { /* 残せなくてもよい */ }
+    try { g.dispatchEvent?.(new CustomEvent('voice:fail', { detail: v })); } catch { /* なくてよい */ }
+  }
+  const micLog = () => { try { return JSON.parse(localStorage.getItem(LOG_KEY) || '[]'); } catch { return []; } };
+  // どの耳で聞くか：'local'（Chrome の端末内の音声認識）・'ear'（Whisper）・'none'
+  async function route(lang = 'ja-JP') {
+    const st = await localStatus(lang);
+    if (st === 'available' && !(srBad() && earReady())) return 'local';
+    return earReady() ? 'ear' : 'none';
+  }
   async function listen({ lang = 'ja-JP', hold = false, waitMs, endMs, phrases } = {}) {
     letGo = false;
     const st = await localStatus(lang);
-    if (st !== 'available' && earReady()) return { ...(await ear.listen({ lang, hold, waitMs, endMs })), via: 'ear' };
+    if ((st !== 'available' || srBad()) && earReady()) return { ...(await ear.listen({ lang, hold, waitMs, endMs })), via: 'ear' };
+    try { return await localListen({ lang, hold, phrases, st }); }
+    catch (e) {
+      // 話す前に終わった・エラーになった（「聞こえなかった」で 6 秒以上待ったもの以外）→ 耳があれば今日は耳で聞き直す
+      if (e?.fast && earReady() && !letGo) {
+        try { localStorage.setItem(BAD_KEY, today() + ' ' + (e.code || '')); } catch { /* 覚えられなくても今回は耳で聞く */ }
+        try { g.dispatchEvent?.(new CustomEvent('voice:switch', { detail: { code: e.code } })); } catch { /* なくてよい */ }
+        return { ...(await ear.listen({ lang, hold, waitMs, endMs })), via: 'ear' };
+      }
+      throw e;
+    }
+  }
+  const HARD = ['audio-capture', 'network', 'start', 'service-not-allowed', 'language-not-supported', 'bad-grammar'];
+  // 失敗の理由を、使う人の言葉で（次にどうするかも）
+  const WHY = { 'audio-capture': 'マイクを使えなかったよ（ほかのアプリがマイクを使っているかも）', network: '聞き取りの部品とつながらなかったよ', start: '聞き取りを始められなかったよ', 'service-not-allowed': 'この端末では聞き取りが止められているみたい', 'language-not-supported': 'この端末の聞き取りは日本語に対応していないみたい' };
+  async function localListen({ lang, hold, phrases, st }) {
     if (st === 'downloadable' || st === 'downloading') {
       if (st === 'downloadable') install(lang);
       throw new Error('日本語の聞き取りの部品を端末に入れています。少し待ってからもう一度押してください。');
     }
     if (st !== 'available') throw new Error('この端末では、声を端末の中だけで聞き取れません。' + (g.LocalAI ? '「⋯ → 🎤と会話・AI の設定」で AI の部品（耳）を入れると聞き取れます。' : ''));
+    const t0 = Date.now();
+    const fail = (msg, code) => {
+      const ms = Date.now() - t0, e = new Error(msg);
+      // 「すぐ終わった」（話す前に終わった）：マイク・通信・始められない・言葉が無いのエラーか、1.5 秒たたずに終わったもの。
+      // 「聞こえなかった」（no-speech・何も言わずに終わった）は、黙っていただけのこともあるので 1.5 秒以上なら数えない
+      e.code = code; e.fast = !letGo && code !== 'not-allowed' && code !== 'aborted' && (HARD.includes(code) || ms < 1500);
+      note({ via: 'local', code: code || 'end', ms, fast: e.fast });
+      return e;
+    };
     return new Promise((ok, ng) => {
       const r = new SR(); rec = r;
       r.lang = lang; r.interimResults = false; r.maxAlternatives = 1; r.continuous = !!hold;
@@ -187,15 +229,16 @@
         if (!hold) { got = true; ok({ text: e.results[0][0].transcript, via: 'local' }); return; }
         for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) parts.push(e.results[i][0].transcript);
       };
-      r.onerror = (e) => { if (hold && e.error === 'no-speech') return; ng(new Error(e.error === 'not-allowed' ? 'マイクが許可されていません' : e.error === 'no-speech' ? '聞き取れませんでした' : '音声認識のエラー: ' + e.error)); };
+      let failed = false;
+      r.onerror = (e) => { if (hold && e.error === 'no-speech') return; failed = true; ng(fail(e.error === 'not-allowed' ? 'マイクが許可されていません' : e.error === 'no-speech' ? '聞き取れませんでした' : (WHY[e.error] || '聞き取りが止まったよ（' + e.error + '）'), e.error)); };
       r.onend = () => {
         if (rec === r) rec = null;
         clearTimeout(cap);
         if (hold && parts.join('').trim()) { got = true; ok({ text: parts.join('').trim(), via: 'local' }); }
-        if (!got) ng(new Error('聞き取れませんでした'));
+        if (!got && !failed) ng(fail('聞き取れませんでした', 'end'));
       };
       const cap = hold ? setTimeout(() => { try { r.stop(); } catch { /* なくてよい */ } }, 60000) : 0; // 押しっぱなしでも 1 分で区切る
-      r.start();
+      try { r.start(); } catch (e) { failed = true; ng(fail('音声認識を始められませんでした', 'start')); return; }
       if (hold && letGo) { try { r.stop(); } catch { /* なくてよい */ } } // 始まる前に離していた
     });
   }
@@ -280,6 +323,6 @@
     try { g.speechSynthesis?.cancel(); } catch { /* なくてよい */ }
   }
 
-  const api = { mood: 'normal', stop, cancelListen, release, parse, dueDate, split, match, nearest, laneOf, listen, localStatus, install, speak, speakAll, speechText, chunks, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm };
+  const api = { mood: 'normal', stop, cancelListen, release, parse, dueDate, split, match, nearest, laneOf, listen, localStatus, install, speak, speakAll, speechText, chunks, localVoice, useEar, localApi: canLocal, get supported() { return canLocal || earReady(); }, norm, route, micLog, note };
   g.Voice = api;
 })(typeof window !== 'undefined' ? window : globalThis);
