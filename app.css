@@ -193,10 +193,16 @@ dialog.lk input:not([type=checkbox]):not([type=radio]):not([type=range]):not([ty
 
 /* v42：上の段を1段に（ボードの「見た目」「表示」は ⋯ の中から押す）。うまくいった知らせは消す */
 header .hbtns #lookBtn,header .hbtns #theme{display:none}
-#lkStatus.gone{display:none}
+#lkStatus.gone,#lkStatus.gone:not(.warn):not(.err){display:none} /* スマホの2行の決まり（:not が2つ）より強くする */
 /* 設定の下の固定の帯の下（画面の余白）に文がはみ出して見えないよう、帯の下も塗る（v42 の点検） */
 #talkSetForm>.lk-actions:last-child{box-shadow:0 24px 0 var(--card)}
 /* スマホでは ⋯ の中身が左にはみ出さないよう、画面の中に収める（v42 の点検） */
 @media (max-width:760px){#lkMenu .items{position:fixed;left:8px;right:8px;top:auto;min-width:0;max-height:70vh;overflow:auto}}
 /* スマホで隅のポチを出しているときは、上の 💬 を隠す（会話の入口を1つに。v42 の点検） */
 @media (max-width:760px){body:has(#lkPochi:not([hidden])) #talkBtn{display:none}}
+/* 🤖 ほかの AI に渡す・AI の返事を貼る */
+#lkHand,#lkHandPaste{min-height:44px;margin:8px 8px 0 0}
+#lkPaste button,#lkHandDlg button{min-height:44px}
+#lkPasteIn,#lkHandText{min-height:140px}
+#lkPasteList{margin:4px 0;padding-left:1.2em;font-size:.9rem}
+#lkPasteMsg.lk-err{color:var(--you-ink,var(--you))}

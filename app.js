@@ -25,6 +25,7 @@
       <button type="button" data-m="file">cards.json を選ぶ</button>
       <button type="button" data-m="cmd" hidden>打って話す・命令（Ctrl+K）</button>
       <button type="button" data-m="aiset">🎤と会話・AI の設定</button>
+      <button type="button" data-m="aipaste" hidden>🤖 AI の返事を貼る</button>
       <button type="button" data-m="phone" hidden>スマホでも開く（QR）</button>
       <button type="button" data-m="download" hidden>ダウンロードで保存</button>
       <button type="button" data-m="notify" hidden>🔔 知らせを受け取る</button>
@@ -140,6 +141,20 @@
       <span><button value="cancel" formnovalidate>やめる</button> <button value="ok" class="primary">保存</button></span></div>
   </form>
 </dialog>
+<dialog id="lkPaste" class="lk" aria-labelledby="lkPasteTtl">
+  <h3 id="lkPasteTtl">🤖 AI の返事を貼る</h3>
+  <textarea id="lkPasteIn" aria-label="AI の返事" placeholder="ChatGPT・Gemini などの返事をそのまま貼る"></textarea>
+  <p id="lkPasteMsg" class="help" aria-live="polite"></p>
+  <ul id="lkPasteList" hidden></ul>
+  <div class="lk-actions"><button type="button" id="lkPasteClip" aria-label="貼る（クリップボードから）">📋 貼る</button>
+    <span><button type="button" id="lkPasteNo">やめる</button> <button type="button" id="lkPasteGo" class="primary" disabled>取り込む</button></span></div>
+</dialog>
+<dialog id="lkHandDlg" class="lk" aria-labelledby="lkHandTtl">
+  <h3 id="lkHandTtl">🤖 この文を AI に貼る</h3>
+  <p class="help">コピーできませんでした。長押し（PC は Ctrl+A・Ctrl+C）で全部選んでコピーしてね。</p>
+  <textarea id="lkHandText" readonly aria-label="AI に渡す文"></textarea>
+  <div class="lk-actions"><span></span><button type="button" id="lkHandClose" class="primary">閉じる</button></div>
+</dialog>
 <dialog id="qrDlg" class="lk" aria-labelledby="qrTtl">
   <h3 id="qrTtl">スマホでも開く</h3>
   <p class="help">スマホのカメラでこの QR を読んで開くと、つなぎ先（持ち主・リポジトリ）が入った状態で始まります。鍵は入っていないので、スマホでも「鍵を作るページを開く」から1つ作って貼ってください。</p>
@@ -164,7 +179,7 @@
   window.addEventListener('lk:connected', e => {
     $('#lkIntro').hidden = true;
     $('#reloadBtn').hidden = e.detail.kind === 'file' || e.detail.kind === 'cache';
-    $('[data-m=download]').hidden = false; $('[data-m=cmd]').hidden = false;
+    $('[data-m=download]').hidden = false; $('[data-m=cmd]').hidden = false; $('[data-m=aipaste]').hidden = false;
     $('[data-m=phone]').hidden = e.detail.kind !== 'github';
     // ボードの「見た目」「表示」は毎日は使わないので ⋯ にしまう（2026-10-21 satouさん「ボタンが増えたことによって、UI/UXに影響」。上の段を1段に）
     $('[data-m=look]').hidden = !document.getElementById('lookBtn'); $('[data-m=theme]').hidden = !document.getElementById('theme');
@@ -901,7 +916,7 @@
     else if (e.key === 't' || e.key === 'T') { e.preventDefault(); openTalk('talk'); }
   });
   const proxy = id => () => document.getElementById(id)?.click();
-  const actions = { look: proxy('lookBtn'), theme: proxy('theme'), notify: toggleNotify, aiset: openTalkSet, github: openGithub, phone: showPhoneQr, cmd: openCmd, folder: openFolder, file: () => $('#fileInput').click(), download,
+  const actions = { look: proxy('lookBtn'), theme: proxy('theme'), aipaste: openPaste, notify: toggleNotify, aiset: openTalkSet, github: openGithub, phone: showPhoneQr, cmd: openCmd, folder: openFolder, file: () => $('#fileInput').click(), download,
     install: async () => { if (installEvt) { installEvt.prompt(); installEvt = null; $('[data-m=install]').hidden = true; } } };
   // メニューから開いた画面を閉じたら ⋯ にキーボードの位置を戻す（閉じた details の中には戻れない。v35 の点検）
   document.querySelectorAll('[data-m]').forEach(b => b.addEventListener('click', () => { const inMenu = $('#lkMenu').contains(b); $('#lkMenu').open = false; if (inMenu) $('#lkMenu summary').focus(); actions[b.dataset.m](); }));
@@ -1021,6 +1036,199 @@
     try { window.openDetail(id); } catch {}
   }
   navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.card) openCard(e.data.card); });
+
+  // ---------- 🤖 ほかの AI に渡す（ChatGPT・Gemini などの無料版でも使える。2026-10-21 satouさん「claude 以外の AI も」） ----------
+  // カード1枚と短い指示文を1つの文にして、共有（navigator.share）かコピーで渡す。AI の返事は「⋯ → 🤖 AI の返事を貼る」で取り込む。
+  // アプリから外へは通信しない（渡すのは人が押したときだけ・人の手で）。渡す文に入れないもの：鍵・データのリポジトリ名・ポチの会話・リンク。
+  // メモと記録の電話番号・メールアドレス・住所らしきものは伏せ字にする（受信メールの本文・連絡先は外の AI に出さない）
+  const HAND_LANES = ['now', 'next', 'later', 'hold', 'done'];
+  const D = '[0-9０-９]';
+  const MASKS = [
+    [/[\w.+-]+[@＠][\w-]+(?:\.[\w-]+)+/g, '［メール］'],
+    [/(?:github_pat_|gh[pousr]_)\w+/g, '［鍵］'],
+    // 住所らしきもの：（都道府県）市区町村 ＋ 番地（1-2-3・1丁目2番3号）
+    [new RegExp(`(?:〒\\s*${D}{3}[-‐−－]?${D}{4}\\s*)?(?:(?:東京都|北海道|大阪府|京都府|[^\\s\\d、。,「」（）()]{2,3}県)[^\\s、。,「」]{0,20}?)?[^\\s\\d、。,「」（）()]{1,8}?[市区町村郡][^\\s、。,「」]{0,15}?${D}+(?:丁目|番地?|号|[-‐−－ー]${D}+)(?:${D}+(?:番地?|号)|[-‐−－ー]${D}+)*`, 'g'), '［住所］'],
+    [new RegExp(`〒\\s*${D}{3}[-‐−－]?${D}{4}`, 'g'), '［住所］'],
+    // 電話番号：0 か +81 で始まり、数字が10〜11桁
+    [new RegExp(`(?<![0-9０-９])(?:\\+81[-‐−\\s]?${D}{1,4}|[0０]${D}{1,4})(?:[-‐−－\\s(（)）]{0,2}${D}{1,4}){1,2}(?![0-9０-９])`, 'g'), m => (m.replace(/[^0-9０-９]/g, '').length >= 10 ? '［電話］' : m)],
+  ];
+  function mask(s) {
+    let t = String(s ?? '');
+    for (const [re, to] of MASKS) t = t.replace(re, to);
+    // 鍵・データのリポジトリの名前（この端末の設定から）も消す
+    const gh = ls.get('gh') || {};
+    for (const x of [gh.token, gh.owner && gh.repo ? gh.owner + '/' + gh.repo : '', gh.repo]) if (x && String(x).length >= 3) t = t.split(String(x)).join('＊＊＊');
+    return t;
+  }
+  L.mask = mask; // 検査用
+  const md = s => (s ? `${+String(s).slice(5, 7)}/${+String(s).slice(8, 10)}` : '');
+  function handText(c) {
+    const who = w => (w === 'you' ? '本人' : w === 'claude' ? 'Claude' : w || '本人');
+    const hist = (c.history || []).slice().sort((a, b) => String(a.at).localeCompare(String(b.at))).slice(-5)
+      .map(h => `・${md(h.at)} ${who(h.who)}：${String(h.text || '').slice(0, 200)}`);
+    const dc = c.decision && !c.answer ? c.decision : null;
+    const opts = dc ? (dc.options || []).map(o => o.label).filter(Boolean) : [];
+    // 伏せ字はカードの中身だけにかける（ID と返事の形はそのまま）
+    const card = mask([
+      `題：${c.title || ''}`, `列：${LANE_LABEL[c.lane] || c.lane || '次にやる'}`,
+      c.due ? `期限：${c.due}` : '', c.note ? `メモ：${String(c.note).slice(0, 1500)}` : '',
+      hist.length ? '最近の記録：\n' + hist.join('\n') : '',
+      dc ? `確認：${dc.question || ''}\n選択肢：${opts.join('／')}` : '',
+    ].filter(Boolean).join('\n'));
+    const form = { kanban_reply: 1, card: c.doc_id, note_add: 'メモに足す一言', lane: 'now|next|later|hold|done（任意）', due: 'YYYY-MM-DD（任意）', answer: dc ? `${mask(opts.join('|'))} のどれか（任意）` : '選んだ選択肢の label（任意）', comment: '…（任意）' };
+    return [
+      'カンバンのカードを1枚渡します。読んで、次の一手を日本語で短く提案してください。',
+      '最後に、変えたい所だけを下の形の JSON にして、```json で囲んで1つだけ返して。要らない項目は書かない。',
+      '', '【カード】', `ID：${c.doc_id}`, card, '', '【返事の形】',
+      '```json', JSON.stringify(form), '```',
+      'lane：now＝今やる・next＝次にやる・later＝時間があるとき・hold＝保留・done＝済み',
+    ].join('\n');
+  }
+  L.handText = id => { const c = L.cards.find(x => x.doc_id === id); return c ? handText(c) : ''; }; // 検査用
+  const handed = new Set();
+  async function handOff(id) {
+    const c = L.cards.find(x => x.doc_id === id && !x.deleted);
+    if (!c) return;
+    const text = handText(c);
+    const done = m => (typeof say === 'function' ? say(m) : setStatus(m, 'ok'));
+    handed.add(id); // このカードの詳細に「返事を貼る」も出す（戻ってきて迷わないように。v43 の点検）
+    // 共有の画面はスマホだけ（PC はコピーして AI のタブに貼るほうが早い。v43 の点検）
+    if (navigator.share && matchMedia('(pointer:coarse)').matches) {
+      try { await navigator.share({ text }); done('渡しました（電話・メール・住所は伏せました。名前は残っています）。返事は「くわしく」の「🤖 返事を貼る」へ'); return; }
+      catch (e) { if (e?.name === 'AbortError') return; }
+    }
+    try { await navigator.clipboard.writeText(text); done('コピーしました（電話・メール・住所は伏せました。名前は残っています）。AI に貼ってね。返事は「くわしく」の「🤖 返事を貼る」へ'); }
+    catch { $('#lkHandText').value = text; $('#lkHandDlg').showModal(); $('#lkHandText').select(); }
+  }
+  $('#lkHandClose').onclick = () => $('#lkHandDlg').close();
+  // カードの詳細（ボードの dialog#detail。開くたびにボードが作り直す）にボタンを差し込む。どのカードかは openDetail を包んで覚える
+  let detailId = null;
+  if (typeof window.openDetail === 'function' && !window.openDetail.__lk) {
+    const orig = window.openDetail;
+    const wrap = function (id, ...a) { detailId = id; return orig.call(this, id, ...a); };
+    wrap.__lk = true; window.openDetail = wrap;
+  }
+  const curDetail = () => detailId ?? (typeof lastOpen !== 'undefined' ? lastOpen : null); // eslint-disable-line no-undef
+  {
+    const dlg = document.getElementById('detail');
+    const put = () => {
+      if (!dlg?.open || !L.ready) return;
+      const id = curDetail(), old = dlg.querySelector('#lkHand');
+      // 詳細を作り直さないボードでも、カードが替わったら「返事を貼る」を付け外しする
+      if (old) { const op = dlg.querySelector('#lkHandPaste'); if (!handed.has(id)) op?.remove(); else if (!op) old.after(Object.assign(document.createElement('button'), { type: 'button', id: 'lkHandPaste', textContent: '🤖 返事を貼る', onclick: openPaste })); return; }
+      const b = document.createElement('button');
+      b.type = 'button'; b.id = 'lkHand'; b.textContent = '🤖 AI に渡す'; b.setAttribute('aria-label', 'AI に渡す（ほかの AI）');
+      b.title = 'このカードと決まった返事の形を、ChatGPT・Gemini などに渡す（共有かコピー）';
+      b.onclick = () => handOff(curDetail());
+      // 毎日は使わないので、ボードの「くわしく」（details.dmore）の中にしまう（閉じているときは押す所が増えない。v43 の点検）
+      const more = dlg.querySelector('details.dmore');
+      const p = handed.has(id) ? Object.assign(document.createElement('button'), { type: 'button', id: 'lkHandPaste', textContent: '🤖 返事を貼る', onclick: openPaste }) : null;
+      if (more) { more.append(b); if (p) more.append(p); }
+      else {
+        const host = dlg.querySelector('.dmain') || dlg.querySelector('form') || dlg;
+        const foot = host.querySelector(':scope > .dfoot');
+        if (foot) host.insertBefore(b, foot); else host.append(b);
+        if (p) b.after(p);
+      }
+    };
+    if (dlg) new MutationObserver(put).observe(dlg, { childList: true, attributes: true, attributeFilter: ['open'] });
+  }
+
+  // ---------- AI の返事を取り込む（変わる所を見せてから。履歴に who「AI」で1行。「戻す」で戻せる） ----------
+  // 文の中で、括弧の対応をたどって { … } を1つ取り出す（文字列の中の括弧は数えない）
+  function objAt(s, i) {
+    let depth = 0, str = false, esc2 = false;
+    for (let j = i; j < s.length; j++) {
+      const ch = s[j];
+      if (str) { if (esc2) esc2 = false; else if (ch === '\\') esc2 = true; else if (ch === '"') str = false; continue; }
+      if (ch === '"') str = true; else if (ch === '{') depth++; else if (ch === '}' && --depth === 0) return s.slice(i, j + 1);
+    }
+    return '';
+  }
+  function findReply(text) {
+    const s = String(text || '').replace(/[“”＂]/g, '"');
+    const cands = [...s.matchAll(/```[a-zA-Z]*[ \t]*\n?([\s\S]*?)```/g)].map(m => m[1].trim()).filter(x => /kanban_reply/.test(x));
+    const k = s.indexOf('kanban_reply');
+    if (k >= 0) { const a = s.lastIndexOf('{', k); if (a >= 0) cands.push(objAt(s, a)); }
+    if (!cands.length) return { why: '決まった形の返事（```json で囲んだ所）が見つかりません。AI の返事を最後まで全部貼ったか確かめてね。無ければ AI に「最後の JSON だけもう一度」と頼んでね。' };
+    for (const x of cands) { try { const o = JSON.parse(x); if (o && typeof o === 'object' && !Array.isArray(o) && 'kanban_reply' in o) return { obj: o }; } catch {} }
+    return { why: '決まった形の返事が途中で崩れていて読めません。AI に「最後の JSON だけもう一度」と頼んでね。何も変えていません。' };
+  }
+  const str = v => (typeof v === 'string' ? v.trim() : '');
+  function planReply(text) {
+    const f = findReply(text); if (!f.obj) return { why: f.why };
+    const o = f.obj;
+    if (+o.kanban_reply !== 1) return { why: '別の形の返事です。カードを渡し直して、もう一度頼んでね。何も変えていません。' };
+    const id = str(o.card);
+    const c = id && L.cards.find(x => x.doc_id === id && !x.deleted);
+    if (!c) return { why: id ? `カード「${id.slice(0, 40)}」が見つかりません。何も変えていません。` : 'どのカードの返事か書かれていません。カードを渡し直して、もう一度頼んでね。何も変えていません。' };
+    const p0 = [];
+    const p = { id, lines: [], dropped: p0 };
+    // 無料版の AI が返事の形の見本をそのまま返すことがある。見本の文・「（任意）」の付いた値は捨てる（v43 の点検）
+    const sample = v => /（任意）|^メモに足す一言$|^…$/.test(v);
+    for (const k of ['note_add', 'comment', 'lane', 'due', 'answer']) { const v = str(o[k]); if (v && sample(v)) { p0.push(`${k}「${v.slice(0, 20)}」（見本の文のまま）`); o[k] = ''; } }
+    const note = str(o.note_add).slice(0, 1000), comment = str(o.comment).slice(0, 300);
+    if (note) { p.note = note; p.lines.push('メモに足す：' + note.slice(0, 80)); }
+    const lane = str(o.lane);
+    if (lane) { if (HAND_LANES.includes(lane)) { if (lane !== c.lane) { p.lane = lane; p.lines.push(`列：${LANE_LABEL[c.lane] || c.lane} → ${LANE_LABEL[lane]}`); } } else p.dropped.push(`列「${lane.slice(0, 20)}」`); }
+    const due = str(o.due);
+    if (due) { if (/^\d{4}-\d{2}-\d{2}$/.test(due) && !isNaN(Date.parse(due + 'T00:00:00Z')) && new Date(due + 'T00:00:00Z').toISOString().slice(0, 10) === due) { if (due !== c.due) { p.due = due; p.lines.push(`期限：${c.due || 'なし'} → ${due}`); } } else p.dropped.push(`期限「${due.slice(0, 20)}」`); }
+    const ans = str(o.answer);
+    if (ans) { const ok = c.decision && !c.answer && (c.decision.options || []).some(x => x.label === ans); if (ok) { p.answer = ans; p.lines.push(`答え：${ans}（Claude に回す）`); if (!p.lane && c.lane !== 'agent') p.lines.push(`列：${LANE_LABEL[c.lane] || c.lane} → ${LANE_LABEL.agent || 'エージェント'}`); } else p.dropped.push(`答え「${ans.slice(0, 20)}」`); }
+    if (comment) { p.comment = comment; p.lines.push('記録：' + comment.slice(0, 80)); }
+    if (!p.lines.length) return { why: '変える所がありません。' + (p.dropped.length ? `（${p.dropped.join('・')}は決まった値でないので使いませんでした）` : ''), dropped: p.dropped };
+    p.title = c.title;
+    return p;
+  }
+  L.planReply = planReply; // 検査用
+  function applyReply(p) {
+    const c = L.cards.find(x => x.doc_id === p.id && !x.deleted); if (!c) return false;
+    const t = now(), patch = { updated: t }, what = [];
+    if (p.note) { patch.note = (c.note ? c.note + '\n' : '') + 'AI：' + p.note; what.push('メモ'); }
+    let lane = p.lane;
+    if (p.answer) { patch.answer = p.answer; patch.answer_status = 'new'; what.push('答え'); if (!lane) { lane = 'agent'; patch.owner = 'agent'; } }
+    if (lane && lane !== c.lane) {
+      Object.assign(patch, { lane, order: Date.now() / 1e6, moves: [...(c.moves || []), { at: t, from: c.lane || 'next', to: lane }].slice(-50), done_at: lane === 'done' ? t : null });
+      if (!c.started_at && ['now', 'agent', 'done'].includes(lane)) patch.started_at = t;
+      what.push(LANE_LABEL[lane] + 'へ');
+    }
+    if (p.due) { patch.due = p.due; what.push('期限 ' + md(p.due)); }
+    patch.history = [...(c.history || []), { at: t, who: 'AI', text: 'AI の返事を取り込んだ（' + (what.join('・') || '記録') + '）' + (p.comment ? '：' + p.comment : '') }].slice(-50);
+    L.as('AI', () => L.update(c.doc_id, patch, `AI の返事を「${String(c.title).slice(0, 30)}」に取り込んだ`)).catch(() => {});
+    return true;
+  }
+  let pastePlan = null;
+  function drawPaste() {
+    const t = $('#lkPasteIn').value, msg = $('#lkPasteMsg'), list = $('#lkPasteList');
+    pastePlan = null; $('#lkPasteGo').disabled = true; list.hidden = true; list.innerHTML = '';
+    if (!t.trim()) { msg.textContent = ''; return; }
+    const p = planReply(t);
+    if (p.why) { msg.textContent = p.why; msg.className = 'help lk-err'; return; }
+    pastePlan = p;
+    msg.className = 'help';
+    msg.textContent = `「${String(p.title).slice(0, 40)}」がこう変わります` + (p.dropped.length ? `（${p.dropped.join('・')}は決まった値でないので使いません）` : '');
+    list.innerHTML = p.lines.map(x => `<li>${esc(x)}</li>`).join(''); list.hidden = false;
+    $('#lkPasteGo').disabled = false;
+  }
+  function openPaste() {
+    if (!L.ready) return;
+    $('#lkPasteIn').value = ''; drawPaste();
+    $('#lkPaste').showModal();
+  }
+  $('#lkPasteIn').addEventListener('input', drawPaste);
+  $('#lkPasteClip').onclick = async () => {
+    try { $('#lkPasteIn').value = await navigator.clipboard.readText(); drawPaste(); }
+    catch { $('#lkPasteMsg').textContent = '読めませんでした。欄を長押し（PC は Ctrl+V）して貼ってね。'; $('#lkPasteMsg').className = 'help lk-err'; $('#lkPasteIn').focus(); }
+  };
+  $('#lkPasteNo').onclick = () => $('#lkPaste').close();
+  $('#lkPasteGo').onclick = () => {
+    const p = pastePlan; if (!p) return;
+    if (!L.writable()) { $('#lkPasteMsg').textContent = 'いまは保存できないので取り込めません。⋯ でつなぎ直してから、もう一度押してね。'; $('#lkPasteMsg').className = 'help lk-err'; return; }
+    if (!applyReply(p)) { $('#lkPasteMsg').textContent = 'カードが見つかりません。何も変えていません。'; $('#lkPasteMsg').className = 'help lk-err'; return; }
+    $('#lkPaste').close();
+    const m = `「${String(p.title).slice(0, 30)}」に AI の返事を取り込みました。`;
+    if (typeof say === 'function') say(m, () => L.undo()); else setStatus(m, 'ok');
+  };
 
   // ---------- PWA（https か localhost で開いたときだけ。ファイルを直に開いたときは使わない） ----------
   if (location.protocol !== 'file:' && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

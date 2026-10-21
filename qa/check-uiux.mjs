@@ -146,11 +146,12 @@ for (const [tag, w, h, mobile, scheme] of VIEWS) {
       // 最初の画面の数は、端末の字の形（CI と手元で日本語の字が違う）で画面の下の端の1つが出入りする。だから 1 だけ見逃す。
       // 押せる部品の全部の数（taps）は字の形で変わらないので、1つでも増えたら止める（ボタンを足したことはこちらで必ず分かる）
       ok(m.first <= bs.first + 1, `${key}：最初の画面で押せる部品 ${m.first}（基準 ${bs.first}。字の形の違いで1つまでは出入りする。増やすなら点検の記録に理由）`);
+      ok(bs.taps != null, `${key}：基準に押せる部品の全部の数（taps）がある`);
       if (bs.taps != null) ok(m.taps <= bs.taps, `${key}：押せる部品 全部で ${m.taps}（基準 ${bs.taps}。増やすなら点検の記録に理由）`);
       ok(m.small <= bs.small, `${key}：12px 未満の文字 ${m.small}（基準 ${bs.small}）${m.small > bs.small ? ' 例: ' + m.smallEx.join(' ') : ''}`);
       ok(m.lowC <= bs.lowC, `${key}：明るさの差が足りない文字 ${m.lowC}（基準 ${bs.lowC}）${m.lowC > bs.lowC ? ' 例: ' + m.lowCEx.join(' ') : ''}`);
       ok(m.chrome <= Math.round(bs.chrome * 1.1) + 5, `${key}：カードの中身以外の文字 ${m.chrome} 字（基準 ${bs.chrome}、1.1 倍まで）`);
-    } else if (!bs && !update) console.log('・', key, 'の基準がまだ無い（--update-baseline で作る）');
+    } else if (!bs && !update) ok(false, `${key}：基準が無い（node qa/check-uiux.mjs --update-baseline で作り、増えたなら点検の記録に理由）`);
     if (update || show) console.log('・', key, JSON.stringify(now[key]), '小さい字', m.smallEx.join(' '), '／差が足りない', m.lowCEx.join(' '));
     if (shotsDir) { mkdirSync(shotsDir, { recursive: true }); await p.screenshot({ path: join(shotsDir, `${tag.replace(/[（）]/g, '')}-${scene}.png`) }); }
     if (scene === 'ボード' && shotsDir) {

@@ -30,7 +30,7 @@ if (changed.includes(BASE)) {
   let b0 = {}; try { b0 = JSON.parse(git('show', `${baseRef}:${BASE}`)); } catch { /* 元に無ければ増えていない */ }
   const b1 = JSON.parse(readFileSync(resolve(root, BASE), 'utf8'));
   for (const [kind, scenes] of Object.entries(b1)) for (const [k, m] of Object.entries(scenes)) for (const f of ['first', 'taps']) {
-    const was = b0[kind]?.[k]?.[f]; if (was != null && m[f] > was) grown.push(`${kind}・${k} の${f === 'first' ? '最初の画面' : '全部'} ${was}→${m[f]}`);
+    const was = b0[kind]?.[k]?.[f]; if ((was == null && m[f] > 0) || (was != null && m[f] > was)) grown.push(`${kind}・${k} の${f === 'first' ? '最初の画面' : '全部'} ${was ?? '新規'}→${m[f]}`);
   }
 }
 if (!screen.length && !grown.length) { console.log('✓ 画面のファイルは変わっていない（点検の記録は要らない）'); process.exit(0); }

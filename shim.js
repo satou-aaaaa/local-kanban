@@ -237,7 +237,7 @@
       ops = ops.slice(sent); dirty = ops.length > 0; keepOps(); whys = whys.slice(sentWhys); relabel();
       try { await store.write(MD, boardMd(cards), why); } catch {}
       status(`保存しました（${why}）${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
-      wakeClaude();
+      if (!dirty) wakeClaude(); // 保存待ちの変更があるあいだは印を付けない（次の保存のあとで付ける）
     } catch (e) {
       if (e.conflict) {
         // ほかの端末か AI が先に書いていた：読み直して、まだ保存していない変更をその上にかけ直す
@@ -248,7 +248,7 @@
           const n = ops.length, nWhys = whys.length;
           await store.write(LOCAL, JSON.stringify(cards, null, 2) + '\n', why + '（読み直してかけ直した）');
           ops = ops.slice(n); dirty = ops.length > 0; keepOps(); whys = whys.slice(nWhys); relabel(); try { await store.write(MD, boardMd(cards), why); } catch {}
-          status('ほかの端末の変更と合わせて保存しました。', 'ok'); wakeClaude();
+          status('ほかの端末の変更と合わせて保存しました。', 'ok'); if (!dirty) wakeClaude();
         } catch (e2) { status('保存できませんでした（ほかの端末と同時に書いたため）。↻ で読み直してください: ' + (e2.message || e2), 'err'); }
       } else if (!navigator.onLine) status('オフラインのため、まだ保存していません。つながったら自動で保存します。', 'warn');
       else status('保存できませんでした: ' + e.message, 'err');

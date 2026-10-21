@@ -8,18 +8,18 @@
    "chrome": 129
   },
   "スマホ・詳細": {
-   "first": 2,
-   "taps": 2,
+   "first": 3,
+   "taps": 3,
    "small": 0,
    "lowC": 0,
-   "chrome": 15
+   "chrome": 24
   },
   "スマホ・会話": {
    "first": 4,
    "taps": 4,
    "small": 0,
    "lowC": 0,
-   "chrome": 196
+   "chrome": 189
   },
   "スマホ・設定": {
    "first": 16,
@@ -36,18 +36,18 @@
    "chrome": 131
   },
   "PC・詳細": {
-   "first": 2,
-   "taps": 2,
+   "first": 3,
+   "taps": 3,
    "small": 0,
    "lowC": 0,
-   "chrome": 15
+   "chrome": 24
   },
   "PC・会話": {
    "first": 4,
    "taps": 4,
    "small": 0,
    "lowC": 0,
-   "chrome": 196
+   "chrome": 204
   },
   "PC・設定": {
    "first": 17,
@@ -64,18 +64,18 @@
    "chrome": 129
   },
   "スマホ（暗い色）・詳細": {
-   "first": 2,
-   "taps": 2,
+   "first": 3,
+   "taps": 3,
    "small": 0,
    "lowC": 0,
-   "chrome": 15
+   "chrome": 24
   },
   "スマホ（暗い色）・会話": {
    "first": 4,
    "taps": 4,
    "small": 0,
    "lowC": 0,
-   "chrome": 202
+   "chrome": 200
   },
   "スマホ（暗い色）・設定": {
    "first": 16,
@@ -105,7 +105,7 @@
    "taps": 4,
    "small": 0,
    "lowC": 0,
-   "chrome": 189
+   "chrome": 206
   },
   "スマホ・設定": {
    "first": 16,
@@ -122,18 +122,18 @@
    "chrome": 295
   },
   "PC・詳細": {
-   "first": 11,
-   "taps": 11,
+   "first": 12,
+   "taps": 12,
    "small": 2,
    "lowC": 0,
-   "chrome": 159
+   "chrome": 168
   },
   "PC・会話": {
    "first": 4,
    "taps": 4,
    "small": 0,
    "lowC": 0,
-   "chrome": 200
+   "chrome": 206
   },
   "PC・設定": {
    "first": 16,
@@ -161,7 +161,7 @@
    "taps": 4,
    "small": 0,
    "lowC": 0,
-   "chrome": 189
+   "chrome": 206
   },
   "スマホ（暗い色）・設定": {
    "first": 16,
