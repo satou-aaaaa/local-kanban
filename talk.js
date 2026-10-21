@@ -838,7 +838,7 @@
       if (!on) return;
       g.LocalAI?.prepareEar(); // Whisper・Silero を入れてあれば先に読み込んでおく
       host.onMode?.(mode, brain, s.ai === 'off' ? 'off' : 'none');
-      if (mode !== 'ai') log('sys', s.ai === 'off' ? 'AI は設定で切っています。決まった返事で話します。' : 'いまは AI なし（決まった返事）です。⚙ キャラの設定で AI を入れると、自由に話せます。');
+      if (mode !== 'ai') log('sys', s.ai === 'off' ? 'AI は設定で切っています。決まった返事で話します。' : 'いまは AI なし（決まった返事）です。⚙ 設定で AI を入れると、自由に話せます。');
     }
     // 割り込み用のマイク（使えなければ割り込みなし）。声で話すときだけ取る（打つだけなら許可を聞かない）
     async function mic() {

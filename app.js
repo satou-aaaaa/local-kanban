@@ -48,9 +48,9 @@
     </section>
     <input type="file" id="fileInput" accept=".json,application/json,.html,text/html" multiple hidden>`);
   document.body.insertAdjacentHTML('beforeend', `
-<dialog id="ghDlg" class="lk">
+<dialog id="ghDlg" class="lk" aria-labelledby="ghTtl">
   <form method="dialog" id="ghForm">
-    <h3>GitHub でつなぐ</h3>
+    <h3 id="ghTtl">GitHub でつなぐ</h3>
     <div class="lk-row">
       <div><label>持ち主</label><input name="owner" required placeholder="GitHub のユーザー名"></div>
       <div><label>リポジトリ</label><input name="repo" required placeholder="データのある非公開リポジトリ"></div>
@@ -69,11 +69,11 @@
   <div class="who"><span id="talkAva"></span><div><p id="talkName"></p><div id="talkState"></div><div id="talkMode" class="help"></div><button type="button" id="talkAiGet" hidden>🧠 AI を入れて自由に話す</button><progress id="talkAiProg" max="1" value="0" hidden></progress></div></div>
   <div id="talkLog" aria-live="polite"></div>
   <form id="talkForm"><input id="talkIn" autocomplete="off" aria-label="ポチに話す" placeholder="打っても🎤で話してもOK（例：牛乳を買うを追加・済み・今やるを読んで）"><button type="button" id="talkMic" aria-pressed="false" aria-label="声で話す" title="声で話す（押すと聞き続ける・もう一度押すと止める。長押しなら離すまで聞く）">🎤</button><button class="primary">送る</button></form>
-  <div class="lk-actions"><button type="button" id="talkSetBtn">⚙ キャラの設定</button><button type="button" id="talkEnd">終わる</button></div>
+  <div class="lk-actions"><button type="button" id="talkSetBtn">⚙ 設定</button><button type="button" id="talkEnd">終わる</button></div>
 </dialog>
-<dialog id="talkSet" class="lk">
+<dialog id="talkSet" class="lk" aria-labelledby="talkSetTtl">
   <form method="dialog" id="talkSetForm">
-    <h3>キャラの設定</h3>
+    <h3 id="talkSetTtl">🎤と会話・AI の設定</h3>
     <label>名前</label><input name="name" maxlength="20" required>
     <label>性格と話し方（AI への指示）</label><textarea name="persona" maxlength="600"></textarea>
     <label>アイコン</label>
@@ -92,7 +92,7 @@
     <label class="chk"><input type="checkbox" name="corner"> ボードの隅に小さなポチを出す（しゃべりません。済みにすると跳ねる・夜は眠そう・押すと会話）</label>
     <label class="chk"><input type="checkbox" name="followUp"> 前回の続きから話す（終わりに一言まとめて覚え、次に「昨日の〇〇、どうなった？」と聞く）</label>
     <label class="chk"><input type="checkbox" name="ai"> 端末の中の AI（Chrome の内蔵 AI か、下で入れた AI）があれば使う</label>
-    <p class="help">声も会話も端末の外に出しません。AI が無い端末では、カードを1枚ずつ読み上げて「済み・あとで・保留・次」で片づけます。キャラの設定は、つないでいればデータのリポジトリにも置き、PC とスマホで同じになります。</p>
+    <p class="help">声も会話も端末の外に出しません。AI が無い端末では、カードを1枚ずつ読み上げて「済み・あとで・保留・次」で片づけます。この設定は、つないでいればデータのリポジトリにも置き、PC とスマホで同じになります。</p>
     <fieldset id="memBox">
       <legend>ポチが覚えたこと</legend>
       <p class="help">会話で「〇〇って呼んで」「〇〇って覚えて」と言うと覚えます。言い直しが2回あった言葉と、よく片づける時間帯も覚えます。置き場所はデータのリポジトリの local-board/pochi-memory.json だけです（外には送りません）。会話で「〇〇を忘れて」と言っても消せます。</p>
@@ -130,12 +130,20 @@
       <span><button value="cancel" formnovalidate>やめる</button> <button value="ok" class="primary">保存</button></span></div>
   </form>
 </dialog>
-<dialog id="qrDlg" class="lk">
-  <h3>スマホでも開く</h3>
+<dialog id="qrDlg" class="lk" aria-labelledby="qrTtl">
+  <h3 id="qrTtl">スマホでも開く</h3>
   <p class="help">スマホのカメラでこの QR を読んで開くと、つなぎ先（持ち主・リポジトリ）が入った状態で始まります。鍵は入っていないので、スマホでも「鍵を作るページを開く」から1つ作って貼ってください。</p>
   <div id="qrBox"></div>
   <div class="lk-actions"><span></span><button type="button" id="qrClose" class="primary">閉じる</button></div>
 </dialog>`);
+
+  // 設定の欄と見出し（label）をつなぐ。placeholder だけでは読み上げで名前にならない（WCAG 4.1.2。v35 の点検）
+  document.querySelectorAll('dialog.lk label:not(.chk)').forEach((lb, i) => {
+    if (lb.control || lb.htmlFor) return;
+    const f = lb.nextElementSibling;
+    if (f && /^(INPUT|SELECT|TEXTAREA)$/.test(f.tagName)) { if (!f.id) f.id = 'lkf' + i; lb.htmlFor = f.id; }
+    else if (f && f.id === 'talkIcons') { lb.id = 'talkIconsTtl'; f.setAttribute('role', 'group'); f.setAttribute('aria-labelledby', lb.id); }
+  });
 
   function setStatus(msg, kind = '') { const s = $('#lkStatus'); s.textContent = msg; s.className = kind; }
   L.onStatus(setStatus);
@@ -770,6 +778,17 @@
     L.connect(L.ghStore(cfg)).catch(() => {});
   };
   $('#ghForget').onclick = () => { ls.set('gh', null); ls.set('cache', null); if (ls.get('mode') === 'github') ls.set('mode', null); $('#ghDlg').close(); setStatus('この端末の鍵を消しました。', 'warn'); };
+  // 消す・戻すボタンは2回押しで（1回目は「もう一度押すと…」に変わり、4秒で元に戻る）。ブラウザの確かめる窓は出さない（v35 の点検：押し間違えで消えた）
+  function twoStep(sel, again) {
+    const b = $(sel); const go = b.onclick; let t = 0, label = '';
+    b.onclick = e => {
+      if (b.dataset.sure) { clearTimeout(t); delete b.dataset.sure; b.textContent = label; return go.call(b, e); }
+      label = b.textContent; b.dataset.sure = '1'; b.textContent = again;
+      t = setTimeout(() => { delete b.dataset.sure; b.textContent = label; }, 4000);
+    };
+  }
+  twoStep('#talkReset', 'もう一度押すと元に戻します'); twoStep('#ghForget', 'もう一度押すと鍵を消します');
+  twoStep('#memAll', 'もう一度押すと全部忘れます'); twoStep('#aiDel', 'もう一度押すと AI を消します'); twoStep('#koeDel', 'もう一度押すと声を消します');
   async function openFolder() {
     if (!window.showDirectoryPicker) { setStatus('このブラウザは PC のフォルダを開けません（スマホ・Firefox・Safari）。「GitHub でつなぐ」を使ってください。', 'err'); return; }
     try { await useFolder(await window.showDirectoryPicker({ id: 'kanban-data', mode: 'readwrite' })); }
@@ -801,13 +820,17 @@
   document.addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); openCmd(); return; }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.querySelector('dialog[open]');
-    if (typing || e.ctrlKey || e.metaKey || e.altKey || !L.ready) return;
+    // ボードの「？ 印」の「使う」を外すと 1文字のキーは止まる（ボード v51 と同じ localStorage。WCAG 2.1.4）
+    let keysOff = false; try { keysOff = localStorage.getItem('kanban-keys') === '0'; } catch {}
+    if (typing || keysOff || e.isComposing || e.ctrlKey || e.metaKey || e.altKey || !L.ready) return;
     if (e.key === 'm' || e.key === 'M') { e.preventDefault(); micGo(); }
     else if (e.key === 't' || e.key === 'T') { e.preventDefault(); openTalk('talk'); }
   });
   const actions = { notify: toggleNotify, aiset: openTalkSet, github: openGithub, phone: showPhoneQr, cmd: openCmd, folder: openFolder, file: () => $('#fileInput').click(), download,
     install: async () => { if (installEvt) { installEvt.prompt(); installEvt = null; $('[data-m=install]').hidden = true; } } };
-  document.querySelectorAll('[data-m]').forEach(b => b.addEventListener('click', () => { $('#lkMenu').open = false; actions[b.dataset.m](); }));
+  // メニューから開いた画面を閉じたら ⋯ にキーボードの位置を戻す（閉じた details の中には戻れない。v35 の点検）
+  document.querySelectorAll('[data-m]').forEach(b => b.addEventListener('click', () => { const inMenu = $('#lkMenu').contains(b); $('#lkMenu').open = false; if (inMenu) $('#lkMenu summary').focus(); actions[b.dataset.m](); }));
+  $('#lkMenu').addEventListener('keydown', e => { if (e.key === 'Escape' && $('#lkMenu').open) { e.preventDefault(); e.stopPropagation(); $('#lkMenu').open = false; $('#lkMenu summary').focus(); } });
   document.addEventListener('click', e => { if (!$('#lkMenu').contains(e.target)) $('#lkMenu').open = false; });
   $('#reopenBtn').onclick = async () => { const h = await loadHandle(); if (h) { try { await useFolder(h); } catch { setStatus('前回のフォルダを開けませんでした。「PC のフォルダを開く」から選び直してください。', 'err'); } } };
   $('#reloadBtn').onclick = () => L.reload().catch(e => setStatus('読めませんでした: ' + e.message, 'err'));

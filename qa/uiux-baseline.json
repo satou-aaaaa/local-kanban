@@ -1,0 +1,114 @@
+{
+ "にせもののボード": {
+  "スマホ・ボード": {
+   "first": 20,
+   "small": 0,
+   "lowC": 1,
+   "chrome": 133
+  },
+  "スマホ・会話": {
+   "first": 6,
+   "small": 0,
+   "lowC": 0,
+   "chrome": 300
+  },
+  "スマホ・設定": {
+   "first": 16,
+   "small": 0,
+   "lowC": 0,
+   "chrome": 1683
+  },
+  "PC・ボード": {
+   "first": 22,
+   "small": 0,
+   "lowC": 1,
+   "chrome": 133
+  },
+  "PC・会話": {
+   "first": 6,
+   "small": 0,
+   "lowC": 0,
+   "chrome": 301
+  },
+  "PC・設定": {
+   "first": 17,
+   "small": 0,
+   "lowC": 0,
+   "chrome": 1683
+  },
+  "スマホ（暗い色）・ボード": {
+   "first": 20,
+   "small": 0,
+   "lowC": 1,
+   "chrome": 133
+  },
+  "スマホ（暗い色）・会話": {
+   "first": 6,
+   "small": 0,
+   "lowC": 0,
+   "chrome": 294
+  },
+  "スマホ（暗い色）・設定": {
+   "first": 16,
+   "small": 0,
+   "lowC": 0,
+   "chrome": 1683
+  }
+ },
+ "本物のボード": {
+  "スマホ・ボード": {
+   "first": 33,
+   "small": 11,
+   "lowC": 0,
+   "chrome": 298
+  },
+  "スマホ・会話": {
+   "first": 6,
+   "small": 0,
+   "lowC": 0,
+   "chrome": 287
+  },
+  "スマホ・設定": {
+   "first": 16,
+   "small": 0,
+   "lowC": 0,
+   "chrome": 1683
+  },
+  "PC・ボード": {
+   "first": 45,
+   "small": 16,
+   "lowC": 0,
+   "chrome": 300
+  },
+  "PC・会話": {
+   "first": 6,
+   "small": 0,
+   "lowC": 0,
+   "chrome": 287
+  },
+  "PC・設定": {
+   "first": 16,
+   "small": 0,
+   "lowC": 0,
+   "chrome": 1683
+  },
+  "スマホ（暗い色）・ボード": {
+   "first": 33,
+   "small": 11,
+   "lowC": 0,
+   "chrome": 298
+  },
+  "スマホ（暗い色）・会話": {
+   "first": 6,
+   "small": 0,
+   "lowC": 0,
+   "chrome": 280
+  },
+  "スマホ（暗い色）・設定": {
+   "first": 16,
+   "small": 0,
+   "lowC": 0,
+   "chrome": 1683
+  }
+ }
+}
