@@ -386,6 +386,7 @@
     if (e.form) document.getElementById('compose-btn')?.click();
     if (e.voice) micGo();
     if (e.talk) openTalk('talk');
+    if (e.card) openCard(e.card);
   }
 
   // ---------- 会話モード（talk.js。すべて端末の中） ----------
@@ -865,7 +866,7 @@
 
   // ---------- スマホ：カードの所を左右になぞると、隣の列へ ----------
   (() => {
-    let s = null;
+    let s = null, last = null;
     const board = document.getElementById('board'); if (!board) return;
     board.addEventListener('pointerdown', e => { s = (e.pointerType === 'touch' && matchMedia('(max-width:760px)').matches) ? { x: e.clientX, y: e.clientY, t: Date.now() } : null; });
     board.addEventListener('pointercancel', () => { s = null; });
@@ -876,13 +877,24 @@
       const lanes = [...board.querySelectorAll('.lane')]; if (!lanes.length) return;
       const top = 70; // 一番上に見えている列
       let i = lanes.findIndex(l => l.getBoundingClientRect().bottom > top); if (i < 0) i = lanes.length - 1;
+      // 下の列が畳まれて短いと（ボード v53）、次の列まで上に送れず、見た目の一番上の列が変わらない。
+      // 前になぞってから画面が動いていなければ、前に移った列から数える（でないと2つ目より先へ進めない）
+      // （なぞってから2.5秒以内か、そのあと画面が動いていなければ。手で動かしたあとは見た目の列から数える）
+      if (last && (last.y === null || Math.abs(scrollY - last.y) < 4 || Date.now() - last.at < 2500)) { const k = lanes.findIndex(l => l.id === last.id); if (k >= 0) i = k; }
       const j = Math.min(lanes.length - 1, Math.max(0, i + (dx < 0 ? 1 : -1))); if (j === i) return;
-      document.querySelector(`#jump a[href="#${lanes[j].id}"]`)?.click() || lanes[j].scrollIntoView({ block: 'start' });
+      const id = lanes[j].id, a = document.querySelector(`#jump a[href="#${id}"]`);
+      if (a) a.click(); else lanes[j].scrollIntoView({ block: 'start' });
+      board.dataset.swipeLane = id; // 検査が「どの列へ移ったか」を見る
+      // 移った列はすぐ覚え、画面の位置は動きが止まってから覚える（続けて速くなぞっても、なめらかに動く途中でも数え違えない）
+      const mark = last = { id, y: null, at: Date.now() }; let t = 0;
+      const settle = () => { clearTimeout(t); removeEventListener('scrollend', settle); if (last === mark) mark.y = scrollY; };
+      addEventListener('scrollend', settle); t = setTimeout(settle, 1000);
     });
   })();
 
   // ---------- 知らせ（通知）：アプリを開いているあいだ（裏に回していても）、端末の通知で知らせる ----------
-  // 知らせるもの：押して答える確認が来た・エージェントから satouさんの番に戻ってきた・今日が期限（1日1回）。
+  // 知らせるもの：押して答える確認が来た・エージェントから satouさんの番に戻ってきた・Claude が答えを待っている・今日が期限（1日1回）。
+  // 次の行動が要るものだけ知らせる。済んだものは知らせない（ボードの「✓ 済み 今日N」でまとめて見る。2026-10-21 satouさん）。
   // 通知は端末の中で作る（Web Push のようにサーバーを通さない）。閉じているあいだは届かない（予定の前の知らせは Google カレンダーに任せる）。
   const canNotify = () => 'Notification' in window && location.protocol !== 'file:';
   const notifyOn = () => canNotify() && ls.get('notify') === true && Notification.permission === 'granted';
@@ -892,7 +904,7 @@
     const p = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
     if (p !== 'granted') { setStatus('通知が許可されませんでした（ブラウザかスマホの設定で、このアプリの通知を許可してね）。', 'warn'); drawNotify(); return; }
     ls.set('notify', true); drawNotify(); scanNotify(L.cards, true);
-    setStatus('知らせを受け取ります：確認が来たとき・satouさんの番に戻ったとき・今日が期限のとき（アプリを開いているあいだ）。', 'ok');
+    setStatus('知らせを受け取ります：確認が来たとき・satouさんの番に戻ったとき・Claude が答えを待っているとき・今日が期限のとき（アプリを開いているあいだ）。', 'ok');
   }
   const today = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10); // 日本の日付
   function noteKeys(c) {
@@ -904,6 +916,15 @@
     const back = (c.moves || []).at(-1);
     if (c.owner !== 'agent' && back && back.from === 'agent') k.push(['back:' + c.doc_id + ':' + back.at, p + 'satouさんの番だよ', c.title]);
     if (c.due && c.due <= today() && c.lane !== 'wait') k.push(['due:' + c.doc_id + ':' + today(), p + (c.due < today() ? '期限すぎちゃってるよ' : '今日までだよ！'), c.title]);
+    // 担当（Claude）が satouさんの答え・確認を待っている（ボード v53 の needsYou。畳んだ進行中の列に隠れていても知らせる）
+    // 鍵には satouさんが最後に書いた時刻を入れる（答えたあとにまた待ちになったら、もう一度知らせる）
+    if (c.owner === 'agent' && typeof window.needsYou === 'function') {
+      try {
+        const n = window.needsYou({ ...c, id: c.id || c.doc_id });
+        const mine = (c.history || []).filter(h => h.who === 'you').at(-1)?.at || c.answer?.at || '';
+        if (n && n.why === '答える') k.push(['wait:' + c.doc_id + ':' + mine, p + 'Claude が待ってるよ', c.title]);
+      } catch {}
+    }
     return k;
   }
   // 初めては今あるものを「知らせ済み」にするだけ（いっぺんに鳴らさない。期限だけは知らせる）
@@ -914,7 +935,7 @@
     // 知らせたものを覚える（同じことを二度鳴らさない。古いものから捨てて 500 件まで）
     ls.set('notified', Object.fromEntries(Object.entries({ ...seen, ...fresh }).slice(-500)));
     for (const n of out.slice(0, 5)) {
-      const opt = { body: n.body, tag: n.key, icon: 'icon-192.png', badge: 'icon-192.png', data: { url: './' } };
+      const opt = { body: n.body, tag: n.key, icon: 'icon-192.png', badge: 'icon-192.png', data: { url: './', card: n.id } };
       (navigator.serviceWorker?.ready || Promise.reject()).then(r => r.showNotification(n.head, opt)).catch(() => { try { new Notification(n.head, opt); } catch {} });
     }
   }
@@ -926,13 +947,26 @@
       // インストールしたアプリのアイコンに数を出す（Badging API。対応していない端末では何もしない）。
       // ボードに「返事が来た」の印（repliedToYou・ボード版44）があれば、「返事あり＋答える」の枚数（ボード版45）。無い古いボードでは「今やる」の枚数
       const ask = c => !c.deleted && c.decision && !c.answer && !['done', 'hold', 'wait'].includes(c.lane);
-      const n = typeof window.repliedToYou === 'function'
+      // ボードに needsYou（v45〜）があれば、ボードの「返事あり・答える」と同じ数え方にする（v53 から担当の答え待ちも入る）
+      const yours = c => { try { const r = window.needsYou({ ...c, id: c.id || c.doc_id }); return !!r && /返事あり|答える/.test(r.why); } catch { return false; } };
+      const n = typeof window.needsYou === 'function' ? L.cards.filter(yours).length
+        : typeof window.repliedToYou === 'function'
         ? L.cards.filter(c => { try { if (window.repliedToYou({ ...c, id: c.id || c.doc_id })) return true; } catch {} return ask(c); }).length
         : L.cards.filter(c => !c.deleted && c.lane === 'now').length;
       try { if (navigator.setAppBadge) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); } catch {}
     }); });
   });
   drawNotify();
+  // 知らせを押したら、そのカードを開く（畳んだ列の中なら列も開く）。sw.js が #card=<id>（shim.js の entry.card）か postMessage で渡す
+  // ボードがカードを受け取るまで少し待つ（開いた直後はボードの cards がまだ空のことがある）
+  function openCard(id, tries = 25) {
+    const ready = typeof cards !== 'undefined' && Array.isArray(cards) && cards.some(x => x.id === id); // ボードの cards（AGENTS.md の当てにする部品）
+    if (!ready || typeof window.openDetail !== 'function') { if (tries > 0) setTimeout(() => openCard(id, tries - 1), 200); return; }
+    const lane = document.querySelector('#board .card[data-id="' + CSS.escape(id) + '"]')?.closest('.lane.folded');
+    if (lane) document.querySelector(`#jump a[href="#${lane.id}"]`)?.click();
+    try { window.openDetail(id); } catch {}
+  }
+  navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.card) openCard(e.data.card); });
 
   // ---------- PWA（https か localhost で開いたときだけ。ファイルを直に開いたときは使わない） ----------
   if (location.protocol !== 'file:' && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

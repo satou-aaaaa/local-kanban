@@ -60,6 +60,8 @@ async function answer(id,i){const c=cards.find(x=>x.id===id),o=c.decision.option
 function openDetail(id){const c=cards.find(x=>x.id===id);const d=document.getElementById("detail");d.querySelector("#dTitle").textContent=c.title;d.querySelector("[name=title]").value=c.title;d.showModal()}
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // ボード版44の「返事が来た」（satouさんのコメントのあとに Claude の返事があり、まだ開いていない・7日以内）。アプリのアイコンの数に使う
+/* ボードの needsYou（v53）の要るところだけ：答える・担当の答え待ち（live_bucket） */
+function needsYou(c){if(c.deleted||["done","hold","wait"].includes(c.lane))return null;if(repliedToYou(c))return{why:"返事あり"};if(c.decision&&!c.answer)return{why:"答える"};if(c.owner==="agent"&&/BLOCKED|REVIEW_READY/.test(c.live_bucket||""))return{why:"答える"};return null}
 function repliedToYou(c){if(c.deleted||c.lane==="done")return "";const h=c.history||[];let i=-1;for(let j=h.length-1;j>=0;j--)if(h[j].who==="you"){i=j;break}if(i<0)return "";
   let t="";for(const e of h.slice(i+1))if(e.who==="claude"&&String(e.at)>t)t=String(e.at);if(!t||Date.now()-Date.parse(t)>7*864e5)return "";return t>(c.reply_seen_at||"")?t:""}
 function render(){
