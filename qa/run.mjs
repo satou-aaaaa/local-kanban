@@ -643,6 +643,27 @@ try {
     await pg.close();
   }
 
+  // A2. AI なしで打って話す（2026-10-21 satouさん「会話の部分が上手く動いていない」：あいさつ・「何からやる？」・「それは済みにして」が通じなかった）
+  {
+    const { pg, outside } = await talkPage({ sr: false }, '会話 AI なし・打つ');
+    await pg.click('#talkBtn');
+    await pg.waitForFunction(() => document.querySelectorAll('#talkLog .l.ai').length > 0, null, { timeout: 8000 }).catch(() => {});
+    const say = async (t) => { const n = await pg.$$eval('#talkLog .l.ai', (l) => l.length); await pg.fill('#talkIn', t); await pg.press('#talkIn', 'Enter'); await pg.waitForFunction((k) => document.querySelectorAll('#talkLog .l.ai').length > k, n, { timeout: 5000 }).catch(() => {}); return (await pg.$$eval('#talkLog .l.ai', (l) => l.map((x) => x.textContent))).at(-1) || ''; };
+    const hi = await say('おはよう');
+    check(/おはよう/.test(hi) && !/もう一回|分からな/.test(hi), `会話（AI なし）：「おはよう」にあいさつを返す（${hi.slice(0, 60)}）`);
+    const what = await say('今日は何からやる？');
+    check(/「[^」]+」/.test(what) && !/もう一回|分からな/.test(what), `会話（AI なし）：「今日は何からやる？」にカードで答える（${what.slice(0, 60)}）`);
+    const st = await say('見本のカード（次にやる・毎週）はどうなった');
+    check(/「見本のカード（次にやる・毎週）」/.test(st), `会話：「〇〇はどうなった」で様子を答える（${st.slice(0, 60)}）`);
+    const it = await say('それは保留にして');
+    await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold', '「それは保留にして」');
+    check(lastCards().find((c) => c.doc_id === 's3')?.lane === 'hold' && !/見つからない/.test(it), `会話：「それ」は直前に話に出たカードを指す（${it.slice(0, 60)}）`);
+    await say('戻す');
+    await say('終わり');
+    check(outside.length === 0, '会話（AI なし・打つ）：自分のサイトと GitHub 以外へ通信していない');
+    await pg.close();
+  }
+
   // B. 端末の中の AI（Prompt API）：JSON の命令でカードを動かす。消すのは本人が「消して」と言ったときだけ（聞き返さない）。AI に補足を渡さない
   {
     const { pg, outside } = await talkPage({
