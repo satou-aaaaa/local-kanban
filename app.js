@@ -146,12 +146,12 @@
   <textarea id="lkPasteIn" aria-label="AI の返事" placeholder="ChatGPT・Gemini などの返事をそのまま貼る"></textarea>
   <p id="lkPasteMsg" class="help" aria-live="polite"></p>
   <ul id="lkPasteList" hidden></ul>
-  <div class="lk-actions"><button type="button" id="lkPasteClip" aria-label="クリップボードから貼る">📋 貼る</button>
+  <div class="lk-actions"><button type="button" id="lkPasteClip" aria-label="貼る（クリップボードから）">📋 貼る</button>
     <span><button type="button" id="lkPasteNo">やめる</button> <button type="button" id="lkPasteGo" class="primary" disabled>取り込む</button></span></div>
 </dialog>
 <dialog id="lkHandDlg" class="lk" aria-labelledby="lkHandTtl">
   <h3 id="lkHandTtl">🤖 この文を AI に貼る</h3>
-  <p class="help">コピーできませんでした。長押しで全部選んでコピーしてね。</p>
+  <p class="help">コピーできませんでした。長押し（PC は Ctrl+A・Ctrl+C）で全部選んでコピーしてね。</p>
   <textarea id="lkHandText" readonly aria-label="AI に渡す文"></textarea>
   <div class="lk-actions"><span></span><button type="button" id="lkHandClose" class="primary">閉じる</button></div>
 </dialog>
@@ -1078,23 +1078,26 @@
     const form = { kanban_reply: 1, card: c.doc_id, note_add: 'メモに足す一言', lane: 'now|next|later|hold|done（任意）', due: 'YYYY-MM-DD（任意）', answer: dc ? `${mask(opts.join('|'))} のどれか（任意）` : '選んだ選択肢の label（任意）', comment: '…（任意）' };
     return [
       'カンバンのカードを1枚渡します。読んで、次の一手を日本語で短く提案してください。',
-      '最後に、変えたい所だけを下の形の JSON にして、```json で囲んで1つだけ返して（この形で返して）。要らない項目は書かない。',
+      '最後に、変えたい所だけを下の形の JSON にして、```json で囲んで1つだけ返して。要らない項目は書かない。',
       '', '【カード】', `ID：${c.doc_id}`, card, '', '【返事の形】',
       '```json', JSON.stringify(form), '```',
       'lane：now＝今やる・next＝次にやる・later＝時間があるとき・hold＝保留・done＝済み',
     ].join('\n');
   }
   L.handText = id => { const c = L.cards.find(x => x.doc_id === id); return c ? handText(c) : ''; }; // 検査用
+  const handed = new Set();
   async function handOff(id) {
     const c = L.cards.find(x => x.doc_id === id && !x.deleted);
     if (!c) return;
     const text = handText(c);
     const done = m => (typeof say === 'function' ? say(m) : setStatus(m, 'ok'));
-    if (navigator.share) {
-      try { await navigator.share({ text }); done('渡しました。返事は「⋯ → 🤖 AI の返事を貼る」へ'); return; }
+    handed.add(id); // このカードの詳細に「返事を貼る」も出す（戻ってきて迷わないように。v43 の点検）
+    // 共有の画面はスマホだけ（PC はコピーして AI のタブに貼るほうが早い。v43 の点検）
+    if (navigator.share && matchMedia('(pointer:coarse)').matches) {
+      try { await navigator.share({ text }); done('渡しました（電話・メール・住所は伏せました。名前は残っています）。返事は「くわしく」の「🤖 返事を貼る」へ'); return; }
       catch (e) { if (e?.name === 'AbortError') return; }
     }
-    try { await navigator.clipboard.writeText(text); done('コピーしました。AI に貼ってね。返事は「⋯ → 🤖 AI の返事を貼る」へ'); }
+    try { await navigator.clipboard.writeText(text); done('コピーしました（電話・メール・住所は伏せました。名前は残っています）。AI に貼ってね。返事は「くわしく」の「🤖 返事を貼る」へ'); }
     catch { $('#lkHandText').value = text; $('#lkHandDlg').showModal(); $('#lkHandText').select(); }
   }
   $('#lkHandClose').onclick = () => $('#lkHandDlg').close();
@@ -1109,14 +1112,24 @@
   {
     const dlg = document.getElementById('detail');
     const put = () => {
-      if (!dlg?.open || dlg.querySelector('#lkHand') || !L.ready) return;
+      if (!dlg?.open || !L.ready) return;
+      const id = curDetail(), old = dlg.querySelector('#lkHand');
+      // 詳細を作り直さないボードでも、カードが替わったら「返事を貼る」を付け外しする
+      if (old) { const op = dlg.querySelector('#lkHandPaste'); if (!handed.has(id)) op?.remove(); else if (!op) old.after(Object.assign(document.createElement('button'), { type: 'button', id: 'lkHandPaste', textContent: '🤖 返事を貼る', onclick: openPaste })); return; }
       const b = document.createElement('button');
-      b.type = 'button'; b.id = 'lkHand'; b.textContent = '🤖 ほかの AI に渡す'; b.setAttribute('aria-label', 'ほかの AI に渡す');
+      b.type = 'button'; b.id = 'lkHand'; b.textContent = '🤖 AI に渡す'; b.setAttribute('aria-label', 'AI に渡す（ほかの AI）');
       b.title = 'このカードと決まった返事の形を、ChatGPT・Gemini などに渡す（共有かコピー）';
       b.onclick = () => handOff(curDetail());
-      const host = dlg.querySelector('.dmain') || dlg.querySelector('form') || dlg;
-      const foot = host.querySelector(':scope > .dfoot');
-      if (foot) host.insertBefore(b, foot); else host.append(b);
+      // 毎日は使わないので、ボードの「くわしく」（details.dmore）の中にしまう（閉じているときは押す所が増えない。v43 の点検）
+      const more = dlg.querySelector('details.dmore');
+      const p = handed.has(id) ? Object.assign(document.createElement('button'), { type: 'button', id: 'lkHandPaste', textContent: '🤖 返事を貼る', onclick: openPaste }) : null;
+      if (more) { more.append(b); if (p) more.append(p); }
+      else {
+        const host = dlg.querySelector('.dmain') || dlg.querySelector('form') || dlg;
+        const foot = host.querySelector(':scope > .dfoot');
+        if (foot) host.insertBefore(b, foot); else host.append(b);
+        if (p) b.after(p);
+      }
     };
     if (dlg) new MutationObserver(put).observe(dlg, { childList: true, attributes: true, attributeFilter: ['open'] });
   }
@@ -1137,19 +1150,23 @@
     const cands = [...s.matchAll(/```[a-zA-Z]*[ \t]*\n?([\s\S]*?)```/g)].map(m => m[1].trim()).filter(x => /kanban_reply/.test(x));
     const k = s.indexOf('kanban_reply');
     if (k >= 0) { const a = s.lastIndexOf('{', k); if (a >= 0) cands.push(objAt(s, a)); }
-    if (!cands.length) return { why: '返事の中に kanban_reply の JSON が見つかりません。AI に「決まった形で返して」と頼んでね。' };
+    if (!cands.length) return { why: '決まった形の返事（```json で囲んだ所）が見つかりません。AI の返事を最後まで全部貼ったか確かめてね。無ければ AI に「最後の JSON だけもう一度」と頼んでね。' };
     for (const x of cands) { try { const o = JSON.parse(x); if (o && typeof o === 'object' && !Array.isArray(o) && 'kanban_reply' in o) return { obj: o }; } catch {} }
-    return { why: '返事の JSON の形が崩れていて読めません。AI に「決まった形で返して」と頼んでね。' };
+    return { why: '決まった形の返事が途中で崩れていて読めません。AI に「最後の JSON だけもう一度」と頼んでね。何も変えていません。' };
   }
   const str = v => (typeof v === 'string' ? v.trim() : '');
   function planReply(text) {
     const f = findReply(text); if (!f.obj) return { why: f.why };
     const o = f.obj;
-    if (+o.kanban_reply !== 1) return { why: '形が違います（kanban_reply が 1 ではありません）。何も変えていません。' };
+    if (+o.kanban_reply !== 1) return { why: '別の形の返事です。カードを渡し直して、もう一度頼んでね。何も変えていません。' };
     const id = str(o.card);
     const c = id && L.cards.find(x => x.doc_id === id && !x.deleted);
-    if (!c) return { why: id ? `カード「${id.slice(0, 40)}」が見つかりません。何も変えていません。` : 'card（カードの ID）がありません。何も変えていません。' };
-    const p = { id, lines: [], dropped: [] };
+    if (!c) return { why: id ? `カード「${id.slice(0, 40)}」が見つかりません。何も変えていません。` : 'どのカードの返事か書かれていません。カードを渡し直して、もう一度頼んでね。何も変えていません。' };
+    const p0 = [];
+    const p = { id, lines: [], dropped: p0 };
+    // 無料版の AI が返事の形の見本をそのまま返すことがある。見本の文・「（任意）」の付いた値は捨てる（v43 の点検）
+    const sample = v => /（任意）|^メモに足す一言$|^…$/.test(v);
+    for (const k of ['note_add', 'comment', 'lane', 'due', 'answer']) { const v = str(o[k]); if (v && sample(v)) { p0.push(`${k}「${v.slice(0, 20)}」（見本の文のまま）`); o[k] = ''; } }
     const note = str(o.note_add).slice(0, 1000), comment = str(o.comment).slice(0, 300);
     if (note) { p.note = note; p.lines.push('メモに足す：' + note.slice(0, 80)); }
     const lane = str(o.lane);
@@ -1157,9 +1174,9 @@
     const due = str(o.due);
     if (due) { if (/^\d{4}-\d{2}-\d{2}$/.test(due) && !isNaN(Date.parse(due + 'T00:00:00Z')) && new Date(due + 'T00:00:00Z').toISOString().slice(0, 10) === due) { if (due !== c.due) { p.due = due; p.lines.push(`期限：${c.due || 'なし'} → ${due}`); } } else p.dropped.push(`期限「${due.slice(0, 20)}」`); }
     const ans = str(o.answer);
-    if (ans) { const ok = c.decision && !c.answer && (c.decision.options || []).some(x => x.label === ans); if (ok) { p.answer = ans; p.lines.push(`答え：${ans}（Claude に回す）`); } else p.dropped.push(`答え「${ans.slice(0, 20)}」`); }
+    if (ans) { const ok = c.decision && !c.answer && (c.decision.options || []).some(x => x.label === ans); if (ok) { p.answer = ans; p.lines.push(`答え：${ans}（Claude に回す）`); if (!p.lane && c.lane !== 'agent') p.lines.push(`列：${LANE_LABEL[c.lane] || c.lane} → ${LANE_LABEL.agent || 'エージェント'}`); } else p.dropped.push(`答え「${ans.slice(0, 20)}」`); }
     if (comment) { p.comment = comment; p.lines.push('記録：' + comment.slice(0, 80)); }
-    if (!p.lines.length) return { why: '変える所がありません。' + (p.dropped.length ? `（${p.dropped.join('・')}は決まった値でないので捨てました）` : ''), dropped: p.dropped };
+    if (!p.lines.length) return { why: '変える所がありません。' + (p.dropped.length ? `（${p.dropped.join('・')}は決まった値でないので使いませんでした）` : ''), dropped: p.dropped };
     p.title = c.title;
     return p;
   }
@@ -1189,7 +1206,7 @@
     if (p.why) { msg.textContent = p.why; msg.className = 'help lk-err'; return; }
     pastePlan = p;
     msg.className = 'help';
-    msg.textContent = `「${String(p.title).slice(0, 40)}」がこう変わります` + (p.dropped.length ? `（${p.dropped.join('・')}は決まった値でないので捨てます）` : '');
+    msg.textContent = `「${String(p.title).slice(0, 40)}」がこう変わります` + (p.dropped.length ? `（${p.dropped.join('・')}は決まった値でないので使いません）` : '');
     list.innerHTML = p.lines.map(x => `<li>${esc(x)}</li>`).join(''); list.hidden = false;
     $('#lkPasteGo').disabled = false;
   }
@@ -1201,13 +1218,13 @@
   $('#lkPasteIn').addEventListener('input', drawPaste);
   $('#lkPasteClip').onclick = async () => {
     try { $('#lkPasteIn').value = await navigator.clipboard.readText(); drawPaste(); }
-    catch { $('#lkPasteMsg').textContent = '読めませんでした。欄を長押しして貼ってね。'; $('#lkPasteIn').focus(); }
+    catch { $('#lkPasteMsg').textContent = '読めませんでした。欄を長押し（PC は Ctrl+V）して貼ってね。'; $('#lkPasteMsg').className = 'help lk-err'; $('#lkPasteIn').focus(); }
   };
   $('#lkPasteNo').onclick = () => $('#lkPaste').close();
   $('#lkPasteGo').onclick = () => {
     const p = pastePlan; if (!p) return;
-    if (!L.writable()) { $('#lkPasteMsg').textContent = 'いまは保存できないので取り込めません。'; return; }
-    if (!applyReply(p)) { $('#lkPasteMsg').textContent = 'カードが見つかりません。何も変えていません。'; return; }
+    if (!L.writable()) { $('#lkPasteMsg').textContent = 'いまは保存できないので取り込めません。⋯ でつなぎ直してから、もう一度押してね。'; $('#lkPasteMsg').className = 'help lk-err'; return; }
+    if (!applyReply(p)) { $('#lkPasteMsg').textContent = 'カードが見つかりません。何も変えていません。'; $('#lkPasteMsg').className = 'help lk-err'; return; }
     $('#lkPaste').close();
     const m = `「${String(p.title).slice(0, 30)}」に AI の返事を取り込みました。`;
     if (typeof say === 'function') say(m, () => L.undo()); else setStatus(m, 'ok');

@@ -468,6 +468,9 @@ try {
     pg.on('pageerror', (e) => errors.push(`pageerror(AI に渡す): ${e.message}`));
     await pg.addInitScript(() => {
       window.__shared = []; window.__clip = '';
+      // 共有の画面はスマホ（指で押す端末）だけで使う。ここではスマホのふりをする
+      window.__coarse = true; const mm = window.matchMedia.bind(window);
+      window.matchMedia = (q) => (q === '(pointer:coarse)' ? { matches: window.__coarse, media: q, onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; } } : mm(q));
       navigator.share = async (d) => { window.__shared.push(d.text); };
       Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { window.__clip = t; }, readText: async () => window.__clipIn || '' } });
     });
@@ -481,21 +484,34 @@ try {
     await pg.evaluate(() => { const d = document.createElement('div'); d.className = 'l you'; d.textContent = '会話のひみつの話'; document.querySelector('#talkLog').appendChild(d); });
     await pg.evaluate(() => openDetail('s12'));
     const hb = await pg.waitForSelector('dialog#detail[open] #lkHand', { timeout: 5000 }).then((h) => h.boundingBox(), () => null);
-    check(!!hb && hb.height >= 44 && hb.width >= 44 && await pg.getAttribute('#lkHand', 'aria-label') === 'ほかの AI に渡す', `カードの詳細に「🤖 ほかの AI に渡す」が出る（44px 以上・名前つき。${hb ? Math.round(hb.width) + 'x' + Math.round(hb.height) : 'なし'}）`);
+    check(!!hb && hb.height >= 44 && hb.width >= 44 && await pg.getAttribute('#lkHand', 'aria-label') === 'AI に渡す（ほかの AI）', `カードの詳細に「🤖 ほかの AI に渡す」が出る（44px 以上・名前つき。${hb ? Math.round(hb.width) + 'x' + Math.round(hb.height) : 'なし'}）`);
     await pg.click('#lkHand');
     await pg.waitForFunction(() => window.__shared.length > 0, null, { timeout: 3000 }).catch(() => {});
     const t1 = await pg.evaluate(() => window.__shared[0] || '');
-    check(/題：見本の渡すカード/.test(t1) && /ID：s12/.test(t1) && /```json\n\{"kanban_reply":1,"card":"s12"/.test(t1) && /この形で返して/.test(t1) && /期限：2099-01-10/.test(t1), '渡す文に題・ID・期限・返事の決まった形（```json の kanban_reply）がある（共有で渡した）');
+    check(/題：見本の渡すカード/.test(t1) && /ID：s12/.test(t1) && /```json\n\{"kanban_reply":1,"card":"s12"/.test(t1) && /1つだけ返して/.test(t1) && /期限：2099-01-10/.test(t1), '渡す文に題・ID・期限・返事の決まった形（```json の kanban_reply）がある（共有で渡した）');
     check(!/qa-dummy-token|example-data/.test(t1), '渡す文に鍵・データのリポジトリ名が入らない');
     check(!/090-1234-5678|03-1234-5678|taro@example\.com|丸の内1-2-3/.test(t1) && /［電話］/.test(t1) && /［メール］/.test(t1) && /［住所］/.test(t1), '渡す文の電話番号・メールアドレス・住所は伏せ字になる');
     check(/2026-10-21 に 3 件/.test(t1), '日付や数は伏せ字にしない');
     check(!/ひみつの話/.test(t1) && /本人：/.test(t1) && /Claude：見本の返事/.test(t1), '渡す文に最近の記録は入り、ポチの会話の中身は入らない');
-    // 共有が無い端末ではコピー
-    await pg.evaluate(() => { navigator.share = undefined; });
+    // PC（指で押さない端末）では、共有があってもコピー（v43 の点検：PC で OS の共有画面が出て迷う）
+    await pg.evaluate(() => { window.__coarse = false; });
     await pg.click('#lkHand');
     await pg.waitForFunction(() => !!window.__clip, null, { timeout: 3000 }).catch(() => {});
     const t2 = await pg.evaluate(() => window.__clip);
-    check(t2 === t1, '共有が無い端末では、同じ文をクリップボードにコピーする');
+    check(t2 === t1 && await pg.evaluate(() => window.__shared.length === 1), 'PC では共有の画面を出さず、同じ文をクリップボードにコピーする');
+    // 共有が無いスマホでもコピー
+    await pg.evaluate(() => { window.__coarse = true; window.__clip = ''; navigator.share = undefined; });
+    await pg.click('#lkHand');
+    await pg.waitForFunction(() => !!window.__clip, null, { timeout: 3000 }).catch(() => {});
+    check(await pg.evaluate(() => window.__clip) === t1, '共有が無い端末では、同じ文をクリップボードにコピーする');
+    // 渡したカードの詳細には「🤖 返事を貼る」も出る（行きと帰りを同じ所に。v43 の点検）
+    check(/伏せました/.test(await pg.evaluate(() => document.querySelector('#toast-msg')?.textContent || document.querySelector('#lkStatus')?.textContent || '')), '渡したら、伏せ字にしたものと残るものを知らせる');
+    await pg.evaluate(() => { document.querySelector('dialog#detail').close(); openDetail('s12'); });
+    const hp = await pg.waitForSelector('dialog#detail[open] #lkHandPaste', { timeout: 3000 }).then(() => true, () => false);
+    check(hp, '渡したカードの詳細に「🤖 返事を貼る」が出る');
+    if (hp) { await pg.click('#lkHandPaste'); check(await pg.evaluate(() => document.querySelector('#lkPaste').open), '「🤖 返事を貼る」で貼る欄が開く'); await pg.evaluate(() => document.querySelector('#lkPaste').close()); }
+    check(await pg.evaluate(async () => { document.querySelector('dialog#detail').close(); openDetail('s1'); await new Promise((r) => setTimeout(r, 50)); return !document.querySelector('dialog#detail #lkHandPaste'); }), '渡していないカードには「返事を貼る」を出さない（押す所を増やさない）');
+    await pg.evaluate(() => { document.querySelector('dialog#detail').close(); openDetail('s12'); });
     const t3 = await pg.evaluate(() => LK.handText('s2'));
     check(/確認：見本の問い\n選択肢：はい／いいえ/.test(t3), '確認のカードは、問いと選択肢も渡す');
     const m = await pg.evaluate(() => [LK.mask('〒100-0005 東京都千代田区丸の内1丁目2番3号'), LK.mask('さいたま市大宮区桜木町1-7-5 に行く'), LK.mask('+81 90 1234 5678'), LK.mask('第1-2回の会議・10-21・0120-12-345'), LK.mask('鍵 github_pat_ABC123')]);
@@ -511,9 +527,9 @@ try {
     const bad = [
       ['返事に JSON が無い', 'そうですね、まずは資料を集めましょう。', /見つかりません/],
       ['JSON が崩れている', '```json\n{"kanban_reply":1,"card":"s12",}\n```', /崩れて/],
-      ['kanban_reply が違う', '```json\n{"kanban_reply":2,"card":"s12","note_add":"x"}\n```', /形が違います/],
+      ['kanban_reply が違う', '```json\n{"kanban_reply":2,"card":"s12","note_add":"x"}\n```', /別の形/],
       ['知らないカード', '```json\n{"kanban_reply":1,"card":"nope","note_add":"x"}\n```', /「nope」が見つかりません/],
-      ['card が無い', '```json\n{"kanban_reply":1,"note_add":"x"}\n```', /card/],
+      ['card が無い', '```json\n{"kanban_reply":1,"note_add":"x"}\n```', /どのカード/],
     ];
     for (const [label, txt, re] of bad) { const r = await paste(txt); check(re.test(r.msg) && !r.go && !r.items.length, `形が違う返事（${label}）は理由を日本語で言い、取り込めない（${r.msg}）`); }
     check(await pg.evaluate(() => JSON.stringify(LK.cards.find((c) => c.doc_id === 's12'))) === before, '形が違う返事では何も変えない');
@@ -539,6 +555,9 @@ try {
     check(lastCards().find((c) => c.doc_id === 's12')?.lane === 'now', '決まった値でない lane は捨て、列は変えない');
     const ans = await pg.evaluate(() => [LK.planReply('```json\n{"kanban_reply":1,"card":"s2","answer":"はい"}\n```'), LK.planReply('```json\n{"kanban_reply":1,"card":"s2","answer":"たぶん"}\n```')]);
     check(ans[0].answer === 'はい' && !ans[1].answer && /変える所がありません/.test(ans[1].why || ''), '答えは確認の選択肢の label だけ受け取る');
+    check(ans[0].lines.some((x) => /^列：/.test(x)), `答えだけの返事でも、Claude の列へ移ることを一覧で見せる（${ans[0].lines.join(' / ')}）`);
+    const smp = await pg.evaluate(() => LK.planReply('```json\n{"kanban_reply":1,"card":"s12","note_add":"メモに足す一言","lane":"now|next|later|hold|done（任意）","comment":"…（任意）"}\n```'));
+    check(!smp.note && !smp.comment && /変える所がありません/.test(smp.why || '') && /見本の文のまま/.test(smp.why || ''), `返事の形の見本の文をそのまま返されても取り込まない（${smp.why}）`);
     check(await pg.evaluate(() => { const d = document.querySelector('#lkPaste'); return d.open ? false : true; }), '取り込んだら貼る欄を閉じる');
     await pg.waitForTimeout(1500);
     cardsText = null;
