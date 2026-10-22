@@ -2161,7 +2161,8 @@ try {
       for (const [how, act] of [['✕', () => pg.locator('#detail .dx').click({ timeout: 2000 })], ['下の「閉じる」', () => pg.locator('#detail button', { hasText: /^閉じる$/ }).click({ timeout: 2000 })], ['Esc', () => pg.keyboard.press('Escape')], ['外を押す', outside]]) {
         let why = '';
         try {
-          if (!(await openC('見本のカード（今やる）'))) why = '詳細が開かない';
+          // ボード v59 から、答え待ちでないカードの下は「閉じる」の代わりに「✓ 済み」。下の「閉じる」は確認のカードで見る
+          if (!(await openC(how === '下の「閉じる」' ? '見本の確認' : '見本のカード（今やる）'))) why = '詳細が開かない';
           else {
             await act(); await pg.waitForTimeout(250);
             if (await shown()) why = '閉じても詳細が画面に残る';
