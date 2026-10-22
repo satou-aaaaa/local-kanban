@@ -437,6 +437,39 @@ try {
       await pg2.close();
     }
 
+    // 保存は届いたのに、返事を受け取る前に画面が閉じられた（スマホで隠したときなど）：開き直しても、もう入っている変更はかけ直さない。
+    // かけ直すと中身の変わらない空のコミットができ、Claude を起こす印も立て直していた（2026-10-22 ops-backup に空のコミットが2つ）
+    {
+      const pg = await context.newPage();
+      pg.on('pageerror', (e) => errors.push(`pageerror(保存済みの控え): ${e.message}`));
+      await pg.goto(base); await ready(pg);
+      await pg.evaluate(() => { const g = JSON.parse(localStorage.getItem('lk.gh')); localStorage.setItem('lk.pending', JSON.stringify({ where: 'github:' + g.owner + '/' + g.repo, ops: [{ kind: 'update', id: 's3', patch: { lane: 'next', answer_status: 'local' } }] })); });
+      await pg.close();
+      const n0 = puts.length;
+      const pg2 = await context.newPage();
+      pg2.on('pageerror', (e) => errors.push(`pageerror(保存済みの控えで開き直す): ${e.message}`));
+      await pg2.goto(base); await ready(pg2);
+      await pg2.waitForTimeout(1500);
+      const extra = puts.slice(n0).map((p) => p.path);
+      check(!extra.length, `もう入っている変更は、開き直してもかけ直さない（空のコミット・Claude を起こす印を作らない）（${extra.join(', ') || '書かなかった'}）`);
+      check(await pg2.evaluate(() => !JSON.parse(localStorage.getItem('lk.pending') || 'null')), 'もう入っている変更の控えは消す');
+      const st = (await pg2.textContent('#lkStatus').catch(() => '')) || '';
+      check(!/かけ直しました/.test(st), `もう入っている変更では「かけ直しました」と出さない（${st.trim().slice(0, 40)}）`);
+      mkdirSync(OUT, { recursive: true }); await pg2.screenshot({ path: resolve(OUT, 'reopen-landed.png') });
+      // 同じ中身は書かない（移して戻すと中身は同じ → 2回目は cards.json を書かない）
+      await pg2.evaluate(() => move('s3', 'next'));
+      await pg2.waitForTimeout(2000);
+      check(!puts.slice(n0).some((p) => p.path === 'local-board/cards.json'), '中身が変わらない保存は GitHub に書かない');
+      // 見分けを誤って、まだ入っていない変更まで消さない：届けた印だけ違う控えは消し、ほかの欄が1つでも違う控えはかけ直す（v49 の点検）
+      await pg2.evaluate(() => { const g = JSON.parse(localStorage.getItem('lk.gh')); localStorage.setItem('lk.pending', JSON.stringify({ where: 'github:' + g.owner + '/' + g.repo, ops: [{ kind: 'update', id: 's3', patch: { lane: 'next', answer_status: 'local' } }, { kind: 'update', id: 's3', patch: { qa_mark: '控え' } }] })); });
+      await pg2.close();
+      const pg3 = await context.newPage();
+      pg3.on('pageerror', (e) => errors.push(`pageerror(入っていない控えで開き直す): ${e.message}`));
+      await pg3.goto(base); await ready(pg3);
+      await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.qa_mark === '控え', 'ほかの欄が違う控え（開き直したとき）');
+      await pg3.close();
+    }
+
     // 知らせ（通知）：確認が来た・satouさんの番に戻った・今日が期限。アプリの中で作り、外へは送らない
     {
       const pg = await context.newPage();
