@@ -2405,10 +2405,11 @@ try {
       if (await pg.evaluate(() => typeof snoozed === 'function')) {
         await step('ひと押しの返事が保存に届く', async () => {
           if (!(await openC('見本のカード（今やる）'))) return '詳細が開かない';
-          const b = pg.locator('#detail .qreply button', { hasText: '進めて' });
+          // ボード v60 から、satouさんの番のカードと問いのあるカードには「👍 進めて」が出ない。どのカードにもある「❓ くわしく」で見る
+          const b = pg.locator('#detail .qreply button', { hasText: 'くわしく' });
           if (!(await b.count())) return 'ひと押しの返事のボタンが無い';
-          await b.click();
-          return (await saved((cs) => cs.some((c) => c.doc_id === 's1' && (c.history || []).some((x) => /you|satou/.test(x.who) && x.text === 'それで進めて')))) ? '' : '履歴に書かれない';
+          await b.first().click();
+          return (await saved((cs) => cs.some((c) => c.doc_id === 's1' && (c.history || []).some((x) => /you|satou/.test(x.who) && x.text === 'くわしく教えて')))) ? '' : '履歴に書かれない';
         });
         await step('寝かせると列から消え、保存に届き、やめると戻る', async () => {
           const t = '見本のカード（エージェント）';
