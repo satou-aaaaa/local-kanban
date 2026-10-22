@@ -937,6 +937,39 @@ try {
     await pg.close();
   }
 
+  // A3. ポチが聞いたら、押して答えるボタン（済み・あとで・次）を出す。押すと打ったのと同じに動き、押した言葉が会話に残る（2026-10-22 点検・重さ3）
+  {
+    const { pg } = await talkPage({ heard: [], sr: false }, '会話 押して答える');
+    const q1 = (await pg.evaluate(() => LK.queueTitles('now')))[0];
+    await pg.click('#talkBtn');
+    await pg.waitForSelector('#talkLog .picks button', { timeout: 8000 }).catch(() => {});
+    const picks = await pg.evaluate(() => [...document.querySelectorAll('#talkLog .picks button')].map((b) => ({ t: b.textContent, h: b.getBoundingClientRect().height })));
+    check(picks.map((p) => p.t).join('|') === '済み|あとで|保留|次' && picks.every((p) => p.h >= 44), `ポチが聞いたら、押して答えるボタンを出す（44px 以上：${JSON.stringify(picks)}）`);
+    check(await pg.evaluate(() => document.querySelector('#talkLog .picks').getAttribute('aria-label') === 'ポチに答える'), '押して答えるボタンの組に名前がある（読み上げ）');
+    await pg.click('#talkLog .picks button:first-child');
+    await waitCards((cs) => cs.find((c) => c.title === q1)?.lane === 'done', `押して答える：「済み」を押すと1枚目（${q1}）を済みにする`);
+    const after = await pg.evaluate(() => ({ you: [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent.replace(/^あなた：/, '')), n: document.querySelectorAll('#talkLog .picks').length }));
+    check(after.you.includes('済み') && after.n === 1, `押した言葉が会話に残り、ボタンは最後の問いの下の1組だけ（${JSON.stringify(after)}）`);
+    // キーで押したら、フォーカスは打つ欄へ（消えたボタンから飛ばない。WCAG 2.4.3）
+    await pg.focus('#talkLog .picks button:nth-child(4)'); await pg.keyboard.press('Enter');
+    await pg.waitForTimeout(300);
+    check(await pg.evaluate(() => document.activeElement?.id === 'talkIn'), 'キーで答えのボタンを押したら、フォーカスは打つ欄へ移る');
+    // 雑談が続いたあとの「カードも見る？」には「見る」「今はいい」。「今はいい」を押すとカードの話に戻らない
+    let offer = [];
+    for (let i = 0; i < 8 && !offer.includes('見る'); i++) {
+      await pg.fill('#talkIn', ['最近どう？', '今日は晴れてるね', 'お腹すいた', '猫かわいい'][i % 4]); await pg.press('#talkIn', 'Enter'); await pg.waitForTimeout(250);
+      offer = await pg.evaluate(() => [...document.querySelectorAll('#talkLog .picks button')].map((b) => b.textContent));
+    }
+    check(offer.join('|') === '見る|今はいい', `雑談のあとの「カードも見る？」に「見る」「今はいい」のボタン（${offer.join('|')}）`);
+    if (offer.length) {
+      await pg.click('#talkLog .picks button:nth-child(2)'); await pg.waitForTimeout(300);
+      const last = await pg.evaluate(() => [...document.querySelectorAll('#talkLog .ai')].pop()?.textContent || '');
+      check(/またあとで|ゆっくり話そ/.test(last), `「今はいい」を押すと、カードの話にしない（${last.slice(0, 40)}）`);
+    }
+    await pg.evaluate(() => LK.undo());
+    await pg.close();
+  }
+
   // B. 端末の中の AI（Prompt API）：JSON の命令でカードを動かす。消すのは本人が「消して」と言ったときだけ（聞き返さない）。AI に補足を渡さない
   {
     const { pg, outside } = await talkPage({

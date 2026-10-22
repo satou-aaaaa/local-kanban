@@ -445,7 +445,17 @@
     if (who === 'you' || who === 'ai') { const w = document.createElement('span'); w.className = 'sr'; w.textContent = who === 'you' ? 'あなた：' : 'ポチ：'; d.prepend(w); } // 読み上げで誰の発言か分かるように（v36 点検）
     if (who === 'you') talkUndo = null;
     if (who === 'ai' && talkUndo) { const u = talkUndo; talkUndo = null; const b = document.createElement('button'); b.type = 'button'; b.className = 'undo'; b.textContent = '戻す'; b.setAttribute('aria-label', '今のを戻す'); b.onclick = () => { b.remove(); u(); }; d.append(' ', b); }
-    const box = $('#talkLog'); box.appendChild(d); while (box.children.length > 30) box.firstChild.remove(); box.scrollTop = box.scrollHeight;
+    const box = $('#talkLog'); box.querySelector('.picks')?.remove();
+    box.appendChild(d);
+    // ポチが聞いたときは、押して答えるボタンを出す（打たなくても話さなくても答えられる。押した言葉は会話に残る）
+    const opts = who === 'ai' ? (talk?.choices || []) : [];
+    if (opts.length) {
+      const p = document.createElement('div'); p.className = 'picks'; p.setAttribute('role', 'group'); p.setAttribute('aria-label', 'ポチに答える'); p.setAttribute('aria-live', 'off'); // ボタンの字を発言の続きとして読み上げない
+      for (const o of opts) { const b = document.createElement('button'); b.type = 'button'; b.textContent = o; if (o === '次') b.setAttribute('aria-label', '次のカードへ');
+        b.onclick = (e) => { p.remove(); if (!e.pointerType) $('#talkIn')?.focus({ preventScroll: true }); talk?.hear(o, { voice: false }); }; p.appendChild(b); } // キーで押したときは打つ欄へ（消えたボタンからフォーカスが飛ばない）
+      box.appendChild(p);
+    }
+    while (box.children.length > 30) box.firstChild.remove(); box.scrollTop = box.scrollHeight;
   }
   const TALK_STATE = { starting: '準備しています…', listening: '聞いてるよ（話してね。打ってもいいよ）', thinking: '考え中…', speaking: '話しています（話しかけても、打っても割り込めます）', typing: '下の欄に打って話してね', idle: '打つか、🎤を押して話してね', off: '' };
   // 表情（data-mood）。少しのあいだだけ見せて、ふつうに戻す。うれしいときは紙吹雪（動きを減らす設定のときは出さない）
@@ -602,7 +612,7 @@
       onMode: (m, brain, why) => {
         $('#talkMode').textContent = m === 'ai'
           ? '🧠 AI と話しています（' + (brain === 'cpu' ? '入れた AI・CPU で動かしています（ゆっくり）' : brain === 'webllm' ? '入れた WebLLM' : 'Chrome の内蔵 AI') + '・端末の中だけ）'
-          : why === 'off' ? '📋 AI なし：設定で切っています（決まった返事でおしゃべり・カードの確認）' : '📋 AI なし：決まった返事でおしゃべり・カードの確認';
+          : (why === 'off' ? '📋 AI なし（設定で切っています）' : '📋 AI なし（決まった返事）');
         $('#talkMode').dataset.ai = m === 'ai' ? 'on' : 'off';
         // AI なしで、入れれば使える端末（WebGPU がある）なら、入れる場所への近道を出す
         $('#talkAiGet').hidden = m === 'ai' || why === 'off' || !window.LocalAI || LocalAI.llmReady(); // WebGPU が無くても CPU 版を入れられる
@@ -613,7 +623,7 @@
     $('#talkIn').placeholder = window.Voice?.supported ? '打っても🎤で話してもOK（例：牛乳を買うを追加・済み・今やるを読んで）' : '打って話してね（例：牛乳を買うを追加・済み・今やるを読んで）';
     if (via === 'text') $('#talkIn').focus();
     talk.start(via);
-    try { if (localStorage.getItem('lk.slimSay')) { localStorage.removeItem('lk.slimSay'); talkLine('sys', 'ポチを軽くしたよ。🎤の聞き取りは端末の中の部品だけにして、AI と気持ちの声は切ったよ。⚙ でいつでも戻せるよ。'); } } catch {}
+    try { if (localStorage.getItem('lk.slimSay')) { localStorage.removeItem('lk.slimSay'); talkLine('sys', 'ポチを軽くしたよ（AI と気持ちの声は ⚙ で戻せる）。'); } } catch {}
   }
   $('#talkBtn').onclick = () => openTalk('talk');
   // 🎤：押すと聞き続ける（もう一度押すと止める）。長押しなら離すまで聞く（考えながら話しても途中で切らない）

@@ -785,7 +785,7 @@
       const wasAsked = asked; asked = false;
       const wasAgain = againSaid; againSaid = false;
       if (!wasAgain) lastUnknown = ''; // 覚えるのは「もう一回言って」と聞き返した直後の答えだけ（雑談の言葉を済みと覚えない。10/21）
-      if (offer) { offer = false; if (/^(うん|はい|いいよ|見る|みる|そうしよ|そうする|オッケー|おっけー|ok)/i.test(t)) return pick('okc', ['よし！', 'オッケー！', 'いこっか！']) + ' ' + askCard(); if (/^(いや|ううん|あとで|まだ|いい|やめ)/.test(t)) { chatRun = -4; return pick('nok', ['オッケー、またあとでね。', 'うん、ゆっくり話そ。']); } }
+      if (offer) { offer = false; if (/^(うん|はい|いいよ|見る|みる|そうしよ|そうする|オッケー|おっけー|ok)/i.test(t)) return pick('okc', ['よし！', 'オッケー！', 'いこっか！']) + ' ' + askCard(); if (/^(いや|ううん|あとで|まだ|いい|やめ|今はいい|いまはいい)/.test(t)) { chatRun = -4; return pick('nok', ['オッケー、またあとでね。', 'うん、ゆっくり話そ。']); } }
       if (host.pending()) return host.run(text);
       if (/^(ありがとう|ありがと|サンキュー|助かる|助かった)/.test(t)) return pick('thanks', PHRASES.thanks); // お礼のあとにすぐ次のカードを聞かない（人どうしの会話の間。10/21）
       if (GREET.test(t)) return (/^おはよ/.test(t) ? 'おはよう！' : /^こんにち/.test(t) ? 'こんにちは！' : /^こんばん/.test(t) ? 'こんばんは！' : /^ただいま/.test(t) ? 'おかえり！' : withName(pick('greet', PHRASES.greet[partOfDay()]), '')) + ' ' + pick('howru', ['調子どう？', '今日はどんな日？', '元気してた？']);
@@ -989,7 +989,7 @@
     async function start(via = 'talk') {
       if (on) return;
       on = true; idx = 0; cur = null; doneCount = 0; fails = 0; cut = false; lastOpen = ''; turns = 0; follow = ''; extra = false; letGo = false;
-      chatRun = 0; tired = false; askedFollow = false; awaitMood = false; goalSaid = false;
+      chatRun = 0; tired = false; askedFollow = false; awaitMood = false; goalSaid = false; three = []; pinRef = ''; // 前の会話の「今日の3つ」を持ち越さない（CodeRabbit ops-backup #49）
       goal = (lsGet('lk.moodDay').startsWith(ymd() + ':') && +lsGet('lk.moodDay').split(':')[1]) || 0;
       const quiet = quietToday();
       state('starting');
@@ -1025,11 +1025,12 @@
       const qMood = !back && !tidied?.changed ? moodQuestion() : '';
       const body = tidied?.changed ? tidied.text : back || qMood || (mode === 'ai'
         ? `今やるは${nowN}枚${q[0] ? `、まずは「${q[0].title}」から？` : '。'}`
-        : (() => { const c = nextCard(); if (!c) return askCard(); asked = true; return `今やるは${nowN}枚。まずは「${c.title}」から見る？`; })());
+        : (() => { const c = nextCard(); if (!c) return askCard(); asked = true; return `今やるは${nowN}枚。まずは「${c.title}」。もう済んでる？`; })());
       // 問いは1回に1つ（あいさつの「今日どれからやる？」と本文の問いを重ねない。10/21）
       const hi1 = /[？?]\s*$/.test(body || '') ? (hi.replace(/\s*[^。！!？?]*[？?]\s*$/, '').trim() || hi) : hi;
       const extraT = tidied?.text && !tidied.changed ? (/[？?]\s*$/.test(body || '') ? tidied.text.replace(/[^。！!]*[？?]/g, '').trim() : tidied.text) : '';
-      const first = [hi1, week, body, extraT].filter(Boolean).join(' ');
+      // 問いはいつも最後に（答えのボタンがどのカードの話か迷わないよう、ほかのカードの一言は問いの前へ。10/22 点検）
+      const first = (/[？?]\s*$/.test(body || '') ? [hi1, week, extraT, body] : [hi1, week, body, extraT]).filter(Boolean).join(' ');
       await say(first, s.reply !== 'text');
       note('', first);
       await speech;
@@ -1279,7 +1280,15 @@
       state('off');
     }
 
-    return { start, stop, hear, listen, hold, release, get holding() { return holding; }, get on() { return on; }, get speaking() { return speaking; }, get listening() { return listening; }, set settings(v) { s = settingsOf(v); } };
+    // 押して答えるボタンの候補（決まった返事のときだけ。いまの問いに合う言い方を、そのまま hear に渡せる言葉で）
+    // 2026-10-22 点検（重さ3）：ポチが聞くのに、毎回打つか話す必要があった
+    function choices() {
+      if (!on || mode === 'ai') return [];
+      if (offer) return ['見る', '今はいい'];
+      if (cur && asked) return ['済み', 'あとで', '保留', '次']; // 問いの言い方（PHRASES.ask）に出てくる答えと同じ
+      return [];
+    }
+    return { start, stop, hear, listen, hold, release, get choices() { return choices(); }, get holding() { return holding; }, get on() { return on; }, get speaking() { return speaking; }, get listening() { return listening; }, set settings(v) { s = settingsOf(v); } };
   }
 
   g.Talk = { withName, metrics, cueLog, recentStore, kindly, quietToday, weeklyText, streakText, fixTitles, seasonOf, vowels, PERSONA, GROWTH, growthOf, growthText, buddyDays, wearSvg, settingsOf, unfinished, joinHeard, create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, EXAMPLES_ALL, pickExamples, PHRASES, picker, partOfDay, dueWords, dueShort, BOARD_MAX, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
