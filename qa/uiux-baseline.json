@@ -15,8 +15,8 @@
    "chrome": 24
   },
   "スマホ・会話": {
-   "first": 4,
-   "taps": 4,
+   "first": 8,
+   "taps": 8,
    "small": 0,
    "lowC": 0,
    "chrome": 189
@@ -43,8 +43,8 @@
    "chrome": 24
   },
   "PC・会話": {
-   "first": 4,
-   "taps": 4,
+   "first": 8,
+   "taps": 8,
    "small": 0,
    "lowC": 0,
    "chrome": 204
@@ -71,8 +71,8 @@
    "chrome": 24
   },
   "スマホ（暗い色）・会話": {
-   "first": 4,
-   "taps": 4,
+   "first": 8,
+   "taps": 8,
    "small": 0,
    "lowC": 0,
    "chrome": 200
@@ -101,8 +101,8 @@
    "chrome": 151
   },
   "スマホ・会話": {
-   "first": 4,
-   "taps": 4,
+   "first": 8,
+   "taps": 8,
    "small": 0,
    "lowC": 0,
    "chrome": 206
@@ -129,8 +129,8 @@
    "chrome": 168
   },
   "PC・会話": {
-   "first": 4,
-   "taps": 4,
+   "first": 8,
+   "taps": 8,
    "small": 0,
    "lowC": 0,
    "chrome": 206
@@ -157,8 +157,8 @@
    "chrome": 151
   },
   "スマホ（暗い色）・会話": {
-   "first": 4,
-   "taps": 4,
+   "first": 8,
+   "taps": 8,
    "small": 0,
    "lowC": 0,
    "chrome": 206

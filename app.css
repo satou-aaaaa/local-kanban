@@ -206,3 +206,11 @@ header .hbtns #lookBtn,header .hbtns #theme{display:none}
 #lkPasteIn,#lkHandText{min-height:140px}
 #lkPasteList{margin:4px 0;padding-left:1.2em;font-size:.9rem}
 #lkPasteMsg.lk-err{color:var(--you-ink,var(--you))}
+
+/* ポチに答えるボタン（app.js の talkLine。ポチが聞いたときだけ） */
+#talkLog .picks{display:flex;gap:8px;flex-wrap:wrap;align-self:flex-start}
+#talkLog .picks button{min-height:44px;min-width:64px;padding:6px 14px;border-radius:22px;border:2px solid var(--agent,#3b82f6)}
+/* 隅のポチは止まった絵にする（息・まばたきの動きと影が、遅いスマホで描き直しと取り合う。済みの跳ねるだけ残す。2026-10-22 点検） */
+#lkPochi .body,#lkPochi .lid{animation:none}
+/* 隅のポチがボードの下のほうのカードに重ならないよう、ボードの下に余白（WCAG 2.4.11） */
+#board{padding-bottom:calc(76px + env(safe-area-inset-bottom,0px))}
