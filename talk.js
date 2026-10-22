@@ -74,6 +74,56 @@
     tired: ['おつかれ。ひと息ついてもいいよ。', '無理しないでね。今日はここまででも大丈夫だよ。', 'がんばってるね。休んでも大丈夫だよ。', 'おつかれ。ぼくもおやつ休憩したいな。ひと息つこ？'],
     bye: ['オッケー、またね！', 'おつかれさま！また呼んでね。', '今日もありがとう、またね！'],
   };
+  // ---------- 状態の表（減らして固める・2段目。2026-10-22 satouさん「それで進めて」） ----------
+  // ポチがいま何を待っているか（状態）× 短い答え → すること。押して答えるボタンも同じ表から出す（ボタンと言葉がずれない）。
+  // 表の言葉は全部 qa/run.mjs の「状態の表」で1つずつ試す。AI のあるなしにかかわらず、この表に当たる答えは同じに動く。
+  // 会話の設計は「状態ごとに受ける答えを決め、全部をサンプル会話で確かめる」（Google Conversation design「Write sample dialogs」・XState の状態機械）
+  //   btn: ボタンの字（無ければボタンに出さない）／words: 受ける言い方（norm した後で全体が一致）／does: すること／loose: 聞いていないときも受ける
+  const TABLE = {
+    // カードのことを聞いた直後（「〇〇。済み？あとで？」）
+    card: [
+      { btn: '済み', words: ['済み', 'すみ', '済んだ', '完了', '片づけた', '片付けた'], does: 'done', loose: true },
+      { words: ['終わった', 'できた', 'やった', 'はい', 'うん'], does: 'done' }, // 聞いた直後だけ（雑談の「うん」でカードを済みにしない。10/21）
+      { btn: 'あとで', words: ['あとで', '後で', 'いつか', '時間があるとき'], does: 'later', loose: true },
+      { btn: '保留', words: ['保留', 'ほりゅう'], does: 'hold', loose: true },
+      { words: ['今やる', 'いまやる', '今'], does: 'now', loose: true },
+      { btn: '次', words: ['次', 'つぎ', 'スキップ', 'パス', '飛ばす', 'とばす', 'そのまま'], does: 'skip', loose: true },
+    ],
+    // 前回あとに回したカードを聞いた直後（「昨日の〇〇、どうなった？ 済み？あとで？」）。断られたらしばらく聞かない
+    // 「もういい」は会話の終わり（END）なので、ここのボタンにしない（押すと会話が閉じてしまう）
+    follow: [
+      { btn: '済み', words: ['済み', 'すみ', '済んだ', '完了', '片づけた', '片付けた', '終わった', 'できた'], does: 'done' },
+      { btn: 'あとで', words: ['あとで', '後で', 'まだ', 'いつか'], does: 'later' },
+      { btn: '保留', words: ['保留', 'ほりゅう'], does: 'hold' },
+      { btn: 'その話はいい', words: ['いい', 'いいよ', 'いいって', '大丈夫', 'だいじょうぶ', 'ほっといて', 'その話はいい', 'その話はいいよ', '聞かないで', '知らない', '別に'], does: 'drop' },
+    ],
+    // 雑談が続いたあとの「カードも見る？」
+    offer: [
+      { btn: '見る', words: ['見る', 'みる', 'うん', 'はい', 'いいよ', 'そうしよ', 'そうする', 'オッケー', 'おっけー', 'ok'], does: 'cards' },
+      { btn: '今はいい', words: ['今はいい', 'いまはいい', 'いや', 'ううん', 'あとで', 'まだ', 'いい', 'やめ', 'やめとく'], does: 'notnow' } // 「やめる」は会話の終わり（END）,
+    ],
+    // 今日の調子（設定で入れたときだけ・1日1回）
+    mood: [
+      { btn: '元気', words: ['元気', 'げんき', '絶好調', 'いい感じ', 'ばっちり'], does: 'mood3' },
+      { btn: 'ふつう', words: ['ふつう', '普通', 'まあまあ', 'そこそこ'], does: 'mood2' },
+      { btn: 'しんどい', words: ['しんどい', '疲れ', 'つかれ', 'だるい', '眠い', 'ねむい', 'だめ', 'ダメ', 'いまいち'], does: 'mood1' },
+    ],
+    // 「全部忘れて」の確かめ
+    forgetAll: [
+      // ボタンは「はい・いいえ」でなく、することの名前（戻せない操作なので押し間違えにくく。v47 の点検）
+      { btn: '忘れる', words: ['忘れる', 'わすれる', 'はい', 'うん', 'いいよ', 'お願い', '消して'], does: 'forget' },
+      { btn: 'やめておく', words: ['やめておく', 'いいえ', 'いや', 'やめ', 'やめて', 'だめ'], does: 'keep' },
+    ],
+  };
+  // 言い方の当て方：whole＝全体が一致（標準）／prefix＝言い始めが一致（「うん、見る」「やめとく」）／contains＝どこかに入っている（「元気だよ」）
+  const MATCH = { offer: 'prefix', forgetAll: 'prefix', mood: 'contains' };
+  // 状態 st で、言われた t（norm 済み。終わりの「。」「！」は落とす）に当たる行。聞いていない（loose）ときは loose の行だけ
+  function rowOf(st, t, loose = false) {
+    const x = String(t || '').replace(/[。．！!、]+$/, '').toLowerCase();
+    const how = MATCH[st] || 'whole';
+    const hit = (w) => { w = w.toLowerCase(); return how === 'prefix' ? x.startsWith(w) : how === 'contains' ? x.includes(w) : x === w; };
+    return (TABLE[st] || []).find((r) => (!loose || r.loose) && r.words.some(hit)) || null;
+  }
   // ---------- AI なしの雑談（2026-10-21 satouさん「普通に人間と喋っているように」） ----------
   // 人どうしの会話は「相手の言葉に反応する → 気持ちを受けとめる → ときどき聞き返す」。毎回カードの話に戻さない。
   // 当てはまる話題を上から探し、無ければ相手の言葉をそのまま受けとめて（反射）、続きを聞く。
@@ -558,7 +608,7 @@
   function create(host) {
     let s = settingsOf(host.settings);
     let on = false, speaking = false, stopVad = () => {}, stream = null, session = null, mode = 'script', brain = '', idx = 0, cur = null, doneCount = 0, fails = 0;
-    let turns = 0, follow = '', extra = false, chatRun = 0, tired = false, askedFollow = false, awaitMood = false, goal = 0, goalSaid = false; // 前回の続き：この会話で話した回数・あとに回したカード・いま聞いているのが前回のカードか
+    let turns = 0, follow = '', extra = false, chatRun = 0, tired = false, goal = 0, goalSaid = false; // 前回の続き：この会話で話した回数・あとに回したカード・いま聞いているのが前回のカードか
     const cue = (kind) => (s.cue === false ? Promise.resolve() : playCue(kind));
     // 喜び方の大小（A7）：1枚ならにっこり、3枚目・10枚ごとは紙吹雪、ずっと残っていた・期限すぎのカードは「ついに！」で特別に。
     // 毎回同じ紙吹雪だと慣れて効かなくなる（Duolingo は区切りの演出を作り直して続ける人が増えた）
@@ -580,14 +630,20 @@
     const mood = (m) => host.onMood?.(m);
     const M = host.memory || null;
     const mem = () => { try { return M?.all() || []; } catch { return []; } };
-    let lastUnknown = '', lastLearned = '', askForgetAll = false, againSaid = false;
+    let lastUnknown = '', lastLearned = '', againSaid = false;
+    // いまポチが何を待っているか（状態の表 TABLE のどれか。'' は何も聞いていない）。prev はこの番の前の状態
+    let ask = '', prev = '';
+    // カードは id で持つ（題が直された・同じ題があっても取り違えない。CodeRabbit ops-backup #49）。id の無い写しは題で
+    const key = (c) => (c ? c.id || c.title || '' : '');
+    const fresh = (c) => { if (!c) return null; if (c.id && host.byId) return host.byId(c.id); return host.card?.(c.title) || null; };
     // 「それ」「これ」「さっきの」が指すカード（最後に話に出たカード）。2026-10-21「それは済みにして」が通じなかった
-    let lastRef = '';
+    let lastRef = null; // { id, title }
     const REF = /^(それ|これ|あれ|そっち|こっち|その(カード|やつ|件)|この(カード|やつ|件)|さっきの(カード|やつ|件)?)(?=は|を|も|が|、|,|\s|$)/;
     const refer = (text) => {
       const t = String(text || '').trim();
-      if (!lastRef || !REF.test(t) || !host.board().some((c) => c.title === lastRef)) return t;
-      const a = t.replace(REF, lastRef), b = a.replace(lastRef + 'は', lastRef + 'を');
+      const c = REF.test(t) ? fresh(lastRef) : null;
+      if (!c || c.lane === 'done') return t;
+      const a = t.replace(REF, c.title), b = a.replace(c.title + 'は', c.title + 'を');
       const ok = (x) => { const c = g.Voice.parse(x, host.laneWords); return c && c.type !== 'unknown' && !/[はを]$/.test(c.query || ''); };
       return ok(a) || !ok(b) ? a : b; // 「それは保留にして」→「〇〇を保留にして」（「〇〇は保留にして」は文型に無い）
     };
@@ -598,11 +654,11 @@
     const TODAY3 = /今日.*((何|なに)(する|しよう|やる|やろう|すれば|やれば|したら|やったら|を(する|やる))|やること|予定)/;
     // 問いだけ（「今日の予定にAを足して」のような命令は取らない）
     const isToday3 = (t) => TODAY3.test(t) && !/(何から|なにから|どれから)/.test(t) && !/(足し|入れ|追加|移し|消し|済みに|して$|して[。！!]?$)/.test(t);
-    let three = [], pinRef = '';
+    let three = [], pinRef = null;
     const ymdOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     function todayThree(today = new Date()) {
       const d0 = ymdOf(today), d1 = ymdOf(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1));
-      const all = host.board().filter((c) => !handled.has(c.title));
+      const all = host.board().filter((c) => !handled.has(key(c)));
       const cs = all.filter((c) => ['now', 'next', 'later'].includes(c.lane));
       // 予定待ちの列の、今日の予定（面接など）は先に一言（「今日の予定は？」で予定が出ないと「無い」と受け取ってしまう）
       // 予定の日時は端末の時刻で読む（+09:00 付きでも、ほかの時間帯の端末で日がずれない）。早い順に2つ、残りは数だけ
@@ -619,13 +675,13 @@
       }
       const tag = (c) => { const w = dueShort(c.due, today); return w === '期限すぎ' || w === '今日まで' || w === '明日まで' ? `（${w}）` : ''; };
       const nth = ['1つ目', '2つ目', '3つ目'];
-      cur = three[0]; pinRef = three[0].title; // 「それ」「済み」は1つ目のこと。「2つ目を済みに」も通じる
+      cur = three[0]; pinRef = three[0]; // 「それ」「済み」は1つ目のこと。「2つ目を済みに」も通じる
       if (three.length === 1) return evLine + `今日はこれ。「${three[0].title}」${tag(three[0])}。` + (cs.length > 1 ? ' ほかは明日でいいよ。' : '');
       return evLine + (cs.length > three.length ? `今日は${three.length}つにしぼろう。` : `今日は${three.length}つ。`) + three.map((c, i) => `${nth[i]}「${c.title}」${tag(c)}`).join('、') + '。 まずは1つ目からね。';
     }
     // 「2つ目を済みに」「3番目は保留」：直前に言った3つのうちのそのカード
     const NTH = /^(1|2|3|１|２|３|一|二|三|ひと|ふた|みっ)(つ目|番目|こ目|個目)/;
-    const nthRef = (t) => { const m = t.match(NTH); if (!m || !three.length) return t; const k = { 1: 0, '１': 0, 一: 0, ひと: 0, 2: 1, '２': 1, 二: 1, ふた: 1, 3: 2, '３': 2, 三: 2, みっ: 2 }[m[1]]; const c = three[k]; return c ? t.replace(NTH, c.title) : t; };
+    const nthRef = (t) => { const m = t.match(NTH); if (!m || !three.length) return t; const k = { 1: 0, '１': 0, 一: 0, ひと: 0, 2: 1, '２': 1, 二: 1, ふた: 1, 3: 2, '３': 2, 三: 2, みっ: 2 }[m[1]]; const c = three[k] && (fresh(three[k]) || three[k]); return c ? t.replace(NTH, c.title) : t; };
     const GREET = /^(おはよう|おはよ|こんにちは|こんにちわ|こんばんは|こんばんわ|やあ|やっほー|ただいま|もしもし|ポチ|ねえ)(ございます)?[!！。、\s]*$/;
     const nameOf = () => mem().find((m) => m.kind === 'name')?.text || '';
     function remember(item) { if (!M) return null; try { const r = M.put(item); lastLearned = r?.id || item.id || ''; return r; } catch { return null; } }
@@ -657,11 +713,6 @@
     function memoryTalk(text) {
       if (!M) return null;
       const t = g.Voice.norm(text);
-      if (askForgetAll) {
-        askForgetAll = false;
-        if (/^(はい|うん|いいよ|お願い|消して)/.test(t)) { M.forgetAll(); return 'わかった、全部忘れたよ。また一から覚えるね。'; }
-        if (/^(いいえ|いや|やめ|だめ)/.test(t)) return 'よかった、そのまま覚えとくね。';
-      }
       let m = t.match(/^(.{1,20}?)(って|と)呼んで(ね|ほしい)?$/);
       if (m) { remember({ id: 'name', kind: 'name', text: m[1] }); return `オッケー、これから「${m[1]}」って呼ぶね。`; }
       m = t.match(/^(?:覚えて(?:おいて|ね)?[、。:：\s]*)(.{2,80})$/) || t.match(/^(.{2,80}?)(って|と|を|のこと)?覚えて(おいて|ね|て)?$/);
@@ -673,7 +724,7 @@
       m = t.match(/^(.{0,40}?)を?忘れて(ね|ほしい|いいよ)?$/);
       if (m) {
         const q = m[1];
-        if (/^(全部|ぜんぶ|すべて)$/.test(q)) { askForgetAll = true; return 'ほんとに全部忘れていい？ 「はい」か「いいえ」で。'; }
+        if (/^(全部|ぜんぶ|すべて)$/.test(q)) { ask = 'forgetAll'; return `ほんとに全部忘れていい？ 覚えたこと${mem().length}つが消えて、戻せないよ。「忘れる」か「やめておく」で。`; } // 戻せないことを先に言う（v47 の点検）
         const all = mem();
         const hit = /^(それ|今の|いまの|さっきの)?$/.test(q) ? all.find((x) => x.id === lastLearned) || all[all.length - 1] : all.find((x) => (x.text || '').includes(q) || (x.word || '') === q);
         if (!hit) return `「${q}」は覚えてないみたい。`;
@@ -728,14 +779,13 @@
 
     // この会話で片づけた・動かしたカードは、保存が画面に返る前でももう聞かない（同じカードを2回聞いていた。10/21）
     const handled = new Set();
-    let asked = false; // 直前の返事でカードのことを聞いたか（「うん」「はい」を「済み」と取るのはこのときだけ）
     function nextCard() {
-      const q = host.queue().filter((c) => !handled.has(c.title));
+      const q = host.queue().filter((c) => !handled.has(key(c)));
       cur = q[idx] || null;
       return cur;
     }
     function askCard() {
-      asked = true;
+      ask = 'card';
       const c = nextCard();
       if (!c) return pick('empty', PHRASES.empty);
       return (c.due ? dueWords(c.due) + ' ' : '') + pick('ask', PHRASES.ask, { t: c.title }); // 期限は問いの前に（問いで話を終える。10/21）
@@ -769,7 +819,7 @@
         const got = list && list.length > 1 ? list.map((c) => host.act(c)) : [cmds.length > 1 ? host.act(cmd) : host.run(text)];
         for (const r of got) {
           rs.push(r);
-          if (['done', 'move', 'delete', 'agent'].includes(cmd.type) && !trouble(r)) { const c = cardIn(r); if (c) handled.add(c.title); }
+          if (['done', 'move', 'delete', 'agent'].includes(cmd.type) && !trouble(r)) { const c = cardIn(r); if (c) handled.add(key(c)); }
           if (cmd.type === 'done' && !trouble(r) && !host.pending()) { doneCount++; learnHabit(); const j = joy(cardIn(r)); if (j) rs[rs.length - 1] = j + r; if (goalLine(true)) rs.push(goalLine()); }
           if (cmd.type === 'move' && ['later', 'hold', 'wait'].includes(cmd.lane) && !trouble(r) && !host.pending()) follow = (r.match(/「([^」]+)」/) || [])[1] || follow;
         }
@@ -779,48 +829,73 @@
       return pick('ack', PHRASES.ack) + r + (mode !== 'ai' && cur ? ' ' + askCard() : '');
     }
 
+    // いま聞いているカード（cur）への短い答え（状態の表の done・later・hold・now・skip）
+    function cardAnswer(k) {
+      chatRun = 0;
+      // 聞いているあいだにボードで直された・消された・済みにされたかもしれないので、id で引き直す
+      if (host.byId && cur.id) {
+        const c = host.byId(cur.id);
+        if (!c || c.lane === 'done') { handled.add(key(cur)); extra = false; return `「${shortT(cur.title)}」は${c ? 'もう済みになってるよ' : 'もうボードに無いみたい'}。 ` + askCard(); }
+        cur = c;
+      }
+      let r = '';
+      if (k !== 'done') follow = cur.title;
+      else if (follow === cur.title) follow = '';
+      if (k === 'skip') { if (!extra) idx++; r = pick('skip', PHRASES.skip); }
+      else {
+        const got = host.act(k === 'done' ? { type: 'done', card: cur } : { type: 'move', card: cur, lane: k });
+        if (trouble(got)) return got;
+        handled.add(key(cur));
+        if (k === 'done') { doneCount++; learnHabit(); const j = joy(cur); r = j + pick('done', PHRASES.done) + ` 「${shortT(cur.title)}」を済みにしたよ。` + (doneCount >= 3 ? ` これで${doneCount}枚目！` : '') + goalLine(); }
+        else r = pick(k, PHRASES[k]);
+        // 片づけたカードは handled で並びから外れるので、番号はそのまま（次のカードが繰り上がる）
+      }
+      extra = false;
+      return mode === 'ai' ? r : r + ' ' + askCard(); // AI と話しているときは次のカードは AI に任せる
+    }
+    // カード以外の問い（カードも見る？・今日の調子・前回の続き・全部忘れる？）への答え。状態の表に当たらなければ null（ふつうに続ける）
+    function answer(text) {
+      if (!prev || prev === 'card') return null;
+      const row = rowOf(prev, g.Voice.norm(text));
+      if (!row) return null;
+      const d = row.does;
+      if (d === 'forget') { try { M?.forgetAll(); } catch { /* なくてよい */ } return 'わかった、全部忘れたよ。また一から覚えるね。'; }
+      if (d === 'keep') return 'よかった、そのまま覚えとくね。';
+      if (d === 'cards') return pick('okc', ['よし！', 'オッケー！', 'いこっか！']) + ' ' + askCard();
+      if (d === 'notnow') { chatRun = -4; return pick('nok', ['オッケー、またあとでね。', 'うん、ゆっくり話そ。']); }
+      if (d.startsWith('mood')) {
+        const m = +d.slice(4);
+        goal = m; lsSet('lk.moodDay', `${ymd()}:${m}`);
+        if (m === 1) tired = true;
+        const say = m === 3 ? 'いいね！ じゃあ今日は3枚いってみよっか。' : m === 2 ? 'オッケー、今日は2枚くらいでいこう。' : 'そっか、無理しないでね。今日は1枚だけにしよ。';
+        return say + (mode !== 'ai' ? ' ' + askCard() : '');
+      }
+      if (d === 'drop') { // 前回の続きを断られたら、しばらく聞かない（断られた提案は覚えておく）
+        lsSet('lk.noFollowUntil', String(Date.now() + 3 * 864e5));
+        const last = mem().find((m) => m.id === 'last');
+        if (last?.follow && M) { try { M.put({ ...last, follow: '' }); } catch { /* なくてよい */ } }
+        follow = ''; if (extra) { cur = null; extra = false; }
+        return 'わかった、その話はしばらく聞かないね。' + (mode !== 'ai' ? ' ' + askCard() : '');
+      }
+      return cur ? cardAnswer(d) : null; // 前回の続きへの「済み」「あとで」「保留」（cur は前回のカード）
+    }
+
     // AI なし：1枚ずつ聞いて、短い答えで動かす。返事は言い回しを変えながら返す
     function scripted(text) {
       const t = g.Voice.norm(text);
-      const wasAsked = asked; asked = false;
+      const wasAsked = prev === 'card'; prev = ''; // カードのことを聞いた直後か（「うん」「はい」を「済み」と取るのはこのときだけ）
       const wasAgain = againSaid; againSaid = false;
       if (!wasAgain) lastUnknown = ''; // 覚えるのは「もう一回言って」と聞き返した直後の答えだけ（雑談の言葉を済みと覚えない。10/21）
-      if (offer) { offer = false; if (/^(うん|はい|いいよ|見る|みる|そうしよ|そうする|オッケー|おっけー|ok)/i.test(t)) return pick('okc', ['よし！', 'オッケー！', 'いこっか！']) + ' ' + askCard(); if (/^(いや|ううん|あとで|まだ|いい|やめ|今はいい|いまはいい)/.test(t)) { chatRun = -4; return pick('nok', ['オッケー、またあとでね。', 'うん、ゆっくり話そ。']); } }
       if (host.pending()) return host.run(text);
       if (/^(ありがとう|ありがと|サンキュー|助かる|助かった)/.test(t)) return pick('thanks', PHRASES.thanks); // お礼のあとにすぐ次のカードを聞かない（人どうしの会話の間。10/21）
       if (GREET.test(t)) return (/^おはよ/.test(t) ? 'おはよう！' : /^こんにち/.test(t) ? 'こんにちは！' : /^こんばん/.test(t) ? 'こんばんは！' : /^ただいま/.test(t) ? 'おかえり！' : withName(pick('greet', PHRASES.greet[partOfDay()]), '')) + ' ' + pick('howru', ['調子どう？', '今日はどんな日？', '元気してた？']);
-      if (WHAT_NOW.test(t)) { const c = nextCard(); if (c) { asked = true; return `${c.due ? dueWords(c.due) + ' ' : ''}まずは「${c.title}」かな。もう済んでる？`; } const r = host.run('今やるを読んで'); return r; }
+      if (WHAT_NOW.test(t)) { const c = nextCard(); if (c) { ask = 'card'; return `${c.due ? dueWords(c.due) + ' ' : ''}まずは「${c.title}」かな。もう済んでる？`; } const r = host.run('今やるを読んで'); return r; }
       if (/(疲れ|つかれ|しんどい|眠い|ねむい|だるい)/.test(t)) { tired = true; mood('sad'); return pick('tired', PHRASES.tired); }
       if (cur) {
         const learned = aliasOf(t);
         if (learned) return scripted(learned === 'skip' ? '次' : SHORT_LABEL[learned]);
-        const short = [
-          [/^(済み|すみ|済んだ|完了|片づけた|片付けた)$/, 'done'],
-          ...(wasAsked ? [[/^(終わった|できた|やった|はい|うん)$/, 'done']] : []), // 雑談の「うん」でカードを済みにしない（10/21）
-          [/^(あとで|後で|いつか|時間があるとき)$/, 'later'],
-          [/^(保留|ほりゅう)$/, 'hold'],
-          [/^(今やる|いまやる|今)$/, 'now'],
-          [/^(次|つぎ|スキップ|パス|飛ばす|とばす|そのまま)$/, 'skip'],
-        ].find(([re]) => re.test(t));
-        if (short) {
-          const k = short[1];
-          chatRun = 0;
-          if (lastUnknown) { learnWord(lastUnknown, k); lastUnknown = ''; }
-          let r = '';
-          if (k !== 'done') follow = cur.title;
-          else if (follow === cur.title) follow = '';
-          if (k === 'skip') { if (!extra) idx++; r = pick('skip', PHRASES.skip); }
-          else {
-            const got = host.act(k === 'done' ? { type: 'done', card: cur } : { type: 'move', card: cur, lane: k });
-            if (trouble(got)) return got;
-            handled.add(cur.title);
-            if (k === 'done') { doneCount++; learnHabit(); const j = joy(cur); r = j + pick('done', PHRASES.done) + ` 「${shortT(cur.title)}」を済みにしたよ。` + (doneCount >= 3 ? ` これで${doneCount}枚目！` : '') + goalLine(); }
-            else r = pick(k, PHRASES[k]);
-            // 片づけたカードは handled で並びから外れるので、番号はそのまま（次のカードが繰り上がる）
-          }
-          extra = false;
-          return r + ' ' + askCard();
-        }
+        const row = rowOf('card', t, !wasAsked); // 状態の表：聞いた直後は全部の行、聞いていないときは「済み」など言い切りの行だけ
+        if (row) { if (lastUnknown) { learnWord(lastUnknown, row.does); lastUnknown = ''; } return cardAnswer(row.does); }
       }
       // カードのことを聞いていないときの「うん」「はい」は相づちとして受ける（聞き返しの「はい」と取らない。10/21）
       if (!wasAsked && /^(うん|はい|そう|そうそう|ええ|うんうん|そうなんだ|なるほど)$/.test(t)) { chatRun++; return pick('aizuchi', ['うんうん。', 'そっか。', 'うん！']); }
@@ -837,7 +912,7 @@
       if (!wasAsked && t.length <= 12) { chatRun++; lastUnknown = ''; return pick('short', [`「${t}」かあ。それで？`, `へえ、「${t}」。もうちょっと聞かせて。`]); }
       mood('surprise');
       if (lastUnknown) againSaid = true;
-      asked = true; // 聞き返しのあとはまだカードの問いが続いている
+      ask = 'card'; // 聞き返しのあとはまだカードの問いが続いている
       return pick('again', PHRASES.again);
     }
     function smalltalk(text) {
@@ -852,11 +927,11 @@
       }
       return '';
     }
-    let lastFace = null, offer = false;
+    let lastFace = null;
     function backToCards() {
       if (lastFace === 'sad') { lastFace = null; return ''; } // 気持ちを話した直後にはカードへ戻さない
       if (tired || chatRun < 4 || !cur) return '';
-      chatRun = 0; offer = true;
+      chatRun = 0; ask = 'offer';
       return ' ' + pick('offer', ['ところで、カードも少し見る？', 'そろそろカードも見てみる？', 'あとでカードも一緒に見よっか？']); // 雑談の返事とカードの問いを一度に言わない。「見る？」と聞いて、うんなら次の番でカードへ（10/21）
     }
 
@@ -989,7 +1064,7 @@
     async function start(via = 'talk') {
       if (on) return;
       on = true; idx = 0; cur = null; doneCount = 0; fails = 0; cut = false; lastOpen = ''; turns = 0; follow = ''; extra = false; letGo = false;
-      chatRun = 0; tired = false; askedFollow = false; awaitMood = false; goalSaid = false; three = []; pinRef = ''; // 前の会話の「今日の3つ」を持ち越さない（CodeRabbit ops-backup #49）
+      chatRun = 0; tired = false; goalSaid = false; three = []; pinRef = null; lastRef = null; ask = ''; prev = ''; handled.clear(); // 前の会話の「今日の3つ」を持ち越さない（CodeRabbit ops-backup #49）
       goal = (lsGet('lk.moodDay').startsWith(ymd() + ':') && +lsGet('lk.moodDay').split(':')[1]) || 0;
       const quiet = quietToday();
       state('starting');
@@ -1018,21 +1093,23 @@
       if (news) mood('happy');
       const nowN = host.board().filter((c) => c.lane === 'now').length;
       const back = followUp();
-      if (back) askedFollow = true;
       const ss = seasonOf();
       const seasonLine = ss.say && lsGet('lk.seasonDay') !== ymd() ? (lsSet('lk.seasonDay', ymd()), ss.say) : '';
       const week = seasonLine || weekly() || streakLine();
       const qMood = !back && !tidied?.changed ? moodQuestion() : '';
       const body = tidied?.changed ? tidied.text : back || qMood || (mode === 'ai'
         ? `今やるは${nowN}枚${q[0] ? `、まずは「${q[0].title}」から？` : '。'}`
-        : (() => { const c = nextCard(); if (!c) return askCard(); asked = true; return `今やるは${nowN}枚。まずは「${c.title}」。もう済んでる？`; })());
+        : (() => { const c = nextCard(); if (!c) return askCard(); ask = 'card'; return `今やるは${nowN}枚。まずは「${c.title}」。もう済んでる？`; })());
+      if (back && body === back) ask = 'follow'; // 前回の続きを聞いた（済み・あとで・保留・もういい で答えられる）
       // 問いは1回に1つ（あいさつの「今日どれからやる？」と本文の問いを重ねない。10/21）
       const hi1 = /[？?]\s*$/.test(body || '') ? (hi.replace(/\s*[^。！!？?]*[？?]\s*$/, '').trim() || hi) : hi;
       const extraT = tidied?.text && !tidied.changed ? (/[？?]\s*$/.test(body || '') ? tidied.text.replace(/[^。！!]*[？?]/g, '').trim() : tidied.text) : '';
       // 問いはいつも最後に（答えのボタンがどのカードの話か迷わないよう、ほかのカードの一言は問いの前へ。10/22 点検）
-      const first = (/[？?]\s*$/.test(body || '') ? [hi1, week, extraT, body] : [hi1, week, body, extraT]).filter(Boolean).join(' ');
-      await say(first, s.reply !== 'text');
-      note('', first);
+      // 問いは別の吹き出しにする（ほかのカードの一言と同じ吹き出しだと、ボタンがどのカードの答えか迷う。v47 の点検・重さ3）
+      const isQ = /[？?]\s*$/.test(body || '');
+      const first = (isQ ? [hi1, week, extraT] : [hi1, week, body, extraT]).filter(Boolean).join(' ');
+      if (first) { await say(first, s.reply !== 'text'); note('', first); }
+      if (isQ) { await say(body, s.reply !== 'text'); note('', body); }
       await speech;
       loop();
     }
@@ -1146,10 +1223,12 @@
       const speak = s.reply === 'voice' ? true : s.reply === 'text' ? false : voice;
       log('you', text);
       turns++;
+      prev = ask; ask = ''; // 前の番で聞いたことへの答えはこの番だけ受ける（状態の表）
       text = refer(nthRef(String(text || '').trim()));
       if (END.test(g.Voice.norm(text))) { await say(wrapUp() + (/おやすみ/.test(text) ? 'おやすみ！ ゆっくり休んでね。' : pick('bye', PHRASES.bye)), speak); await speech; stop(); return; }
       state('thinking');
       let r = manners(text), viaAi = false;
+      if (r == null) r = answer(text);
       if (r == null) r = memoryTalk(text);
       if (r == null && host.pending()) r = host.run(text);
       if (r == null && isToday3(g.Voice.norm(text))) r = todayThree(); // AI のあるなしにかかわらず同じ3つ（AI に任せると毎回ちがう）
@@ -1162,7 +1241,7 @@
       }
       const thinkS = (performance.now() - turnAt) / 1000;
       await say(r, speak);
-      { const ref = pinRef ? { title: pinRef } : lastCardIn(r) || cur; if (ref?.title) lastRef = ref.title; pinRef = ''; }
+      { const ref = pinRef || lastCardIn(r) || cur; if (ref?.title) lastRef = { id: ref.id || '', title: ref.title }; pinRef = null; }
       if (!viaAi) note(text, r);
       const r1 = (x) => Math.round(x * 10) / 10;
       metrics.push({ at: new Date().toISOString().slice(0, 16), via: voice ? '声' : '打つ', brain: viaAi ? brain : mode === 'ai' ? 'すぐやった命令' : 'AI なし', listen_s: opts.listenS ? r1(opts.listenS) : null, think_s: r1(thinkS), speak_s: firstAt ? r1((firstAt - turnAt) / 1000) : null });
@@ -1187,8 +1266,6 @@
     // 決まりごと（A9・C4・前回の続きを断られたとき）。当てはまらなければ null
     function manners(text) {
       const t = g.Voice.norm(text);
-      const wasFollow = askedFollow, wasMood = awaitMood;
-      askedFollow = false; awaitMood = false;
       if (/^(今日は)?(静かにして|黙って|だまって|しゃべらないで|話しかけないで)/.test(t)) {
         lsSet('lk.quietDay', ymd());
         return 'わかった、今日は静かにしてるね。話しかけてくれたら答えるよ。';
@@ -1197,30 +1274,12 @@
         lsSet('lk.quietDay', null);
         return 'やった、またおしゃべりするね！';
       }
-      // 前回の続きを断られたら、しばらく聞かない（断られた提案は覚えておく）
-      if (wasFollow && /^(いい(よ|って)?|大丈夫|だいじょうぶ|ほっといて|その話はいい(よ)?|聞かないで|知らない|別に)[。！!]?$/.test(t)) {
-        lsSet('lk.noFollowUntil', String(Date.now() + 3 * 864e5));
-        const last = mem().find((m) => m.id === 'last');
-        if (last?.follow && M) { try { M.put({ ...last, follow: '' }); } catch { /* なくてよい */ } }
-        follow = ''; if (extra) { cur = null; extra = false; }
-        return 'わかった、その話はしばらく聞かないね。' + (mode !== 'ai' ? ' ' + askCard() : '');
-      }
-      // 今日の調子の答え（答えなくてもよい。当てはまらなければふつうに続ける）
-      if (wasMood) {
-        const m = /(元気|げんき|絶好調|いい感じ|ばっちり)/.test(t) ? 3 : /(ふつう|普通|まあまあ|そこそこ)/.test(t) ? 2 : /(しんどい|疲れ|つかれ|だるい|眠い|ねむい|だめ|ダメ|いまいち)/.test(t) ? 1 : 0;
-        if (m) {
-          goal = m; lsSet('lk.moodDay', `${ymd()}:${m}`);
-          if (m === 1) tired = true;
-          const say = m === 3 ? 'いいね！ じゃあ今日は3枚いってみよっか。' : m === 2 ? 'オッケー、今日は2枚くらいでいこう。' : 'そっか、無理しないでね。今日は1枚だけにしよ。';
-          return say + (mode !== 'ai' ? ' ' + askCard() : '');
-        }
-      }
-      return null;
+      return null; // 前回の続き・今日の調子への答えは状態の表（answer）で受ける
     }
     // 今日の調子を聞く（C4。設定で入れたときだけ・1日1回だけ）
     function moodQuestion() {
       if (!s.moodAsk || lsGet('lk.moodAskDay') === ymd()) return '';
-      lsSet('lk.moodAskDay', ymd()); awaitMood = true;
+      lsSet('lk.moodAskDay', ymd()); ask = 'mood';
       return '今日の調子はどう？ 元気・ふつう・しんどい、どれ？';
     }
     // 週のふりかえり（C7）：日曜の夕方から、その週に1回だけ
@@ -1283,13 +1342,11 @@
     // 押して答えるボタンの候補（決まった返事のときだけ。いまの問いに合う言い方を、そのまま hear に渡せる言葉で）
     // 2026-10-22 点検（重さ3）：ポチが聞くのに、毎回打つか話す必要があった
     function choices() {
-      if (!on || mode === 'ai') return [];
-      if (offer) return ['見る', '今はいい'];
-      if (cur && asked) return ['済み', 'あとで', '保留', '次']; // 問いの言い方（PHRASES.ask）に出てくる答えと同じ
-      return [];
+      if (!on || (ask === 'card' && (!cur || mode === 'ai'))) return [];
+      return (TABLE[ask] || []).filter((r) => r.btn).map((r) => r.btn); // ボタンの字は状態の表の btn（表に当たる言葉なので、押すと打ったのと同じに動く）
     }
-    return { start, stop, hear, listen, hold, release, get choices() { return choices(); }, get holding() { return holding; }, get on() { return on; }, get speaking() { return speaking; }, get listening() { return listening; }, set settings(v) { s = settingsOf(v); } };
+    return { start, stop, hear, listen, hold, release, get choices() { return choices(); }, get state() { return { ask, card: cur ? cur.title : '' }; }, get holding() { return holding; }, get on() { return on; }, get speaking() { return speaking; }, get listening() { return listening; }, set settings(v) { s = settingsOf(v); } };
   }
 
-  g.Talk = { withName, metrics, cueLog, recentStore, kindly, quietToday, weeklyText, streakText, fixTitles, seasonOf, vowels, PERSONA, GROWTH, growthOf, growthText, buddyDays, wearSvg, settingsOf, unfinished, joinHeard, create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, EXAMPLES_ALL, pickExamples, PHRASES, picker, partOfDay, dueWords, dueShort, BOARD_MAX, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
+  g.Talk = { TABLE, rowOf, withName, metrics, cueLog, recentStore, kindly, quietToday, weeklyText, streakText, fixTitles, seasonOf, vowels, PERSONA, GROWTH, growthOf, growthText, buddyDays, wearSvg, settingsOf, unfinished, joinHeard, create, avatarSvg, DEFAULTS, aiStatus, systemPrompt, initialPrompts, EXAMPLES, EXAMPLES_ALL, pickExamples, PHRASES, picker, partOfDay, dueWords, dueShort, BOARD_MAX, sentences, short, opening, casual, partialSay, memoryLines, habitText, WORD_MIN };
 })(typeof window !== 'undefined' ? window : globalThis);
