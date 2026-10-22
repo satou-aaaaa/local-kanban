@@ -2404,11 +2404,12 @@ try {
       // ボード版50：ひと押しの返事・寝かせる（snooze_until）・返事の印をまとめて消す（reply_ack_at）
       if (await pg.evaluate(() => typeof snoozed === 'function')) {
         await step('ひと押しの返事が保存に届く', async () => {
-          if (!(await openC('見本のカード（今やる）'))) return '詳細が開かない';
+          // ボード v60 から「進めて」は AI の担当で、答えていない確認が無いカードだけに出る（自分の番のカードには出ない）
+          if (!(await openC('見本のカード（エージェント）'))) return '詳細が開かない';
           const b = pg.locator('#detail .qreply button', { hasText: '進めて' });
           if (!(await b.count())) return 'ひと押しの返事のボタンが無い';
           await b.click();
-          return (await saved((cs) => cs.some((c) => c.doc_id === 's1' && (c.history || []).some((x) => /you|satou/.test(x.who) && x.text === 'それで進めて')))) ? '' : '履歴に書かれない';
+          return (await saved((cs) => cs.some((c) => c.doc_id === 's4' && (c.history || []).some((x) => /you|satou/.test(x.who) && x.text === 'それで進めて')))) ? '' : '履歴に書かれない';
         });
         await step('寝かせると列から消え、保存に届き、やめると戻る', async () => {
           const t = '見本のカード（エージェント）';
