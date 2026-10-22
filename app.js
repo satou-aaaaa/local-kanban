@@ -587,8 +587,9 @@
       settings: talkSettings(),
       lanes: LANE_LABEL, laneWords: WORDS,
       // AI に渡すのは題・列・期限だけ（補足・履歴・リンクは渡さない）
-      board: () => live().filter(c => c.lane !== 'done').sort((a, b) => order(a.lane) - order(b.lane) || byPrio(a, b)).map(c => ({ title: c.title, lane: c.lane, due: c.due || '', event_start: c.event_start || '' })),
+      board: () => live().filter(c => c.lane !== 'done').sort((a, b) => order(a.lane) - order(b.lane) || byPrio(a, b)).map(c => ({ id: c.id, title: c.title, lane: c.lane, due: c.due || '', event_start: c.event_start || '' })), // id は会話の中でカードを取り違えないためだけ（AI には渡さない）
       queue: () => ['now', 'next'].flatMap(laneCards),
+      byId: id => live().find(c => c.id === id) || null, // 会話が持っているカードを、直された題・列で引き直す
       card: (title, any) => live().find(c => c.title === title && (any || c.lane !== 'done')) || null, // 前回あとに回したカード・済みにしたカード（喜び方を決める）
       weekDone: () => live().filter(c => c.lane === 'done' && c.owner !== 'agent' && c.done_at && Date.parse(c.done_at) > Date.now() - 8 * 864e5).map(c => ({ title: c.title, created: c.created || '', done_at: c.done_at })), // 週のふりかえり（題と日付だけ）
       memory: L.memory,

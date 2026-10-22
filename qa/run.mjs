@@ -1133,8 +1133,8 @@ try {
         const cards = [{ title: '見本A', lane: 'now' }, { title: '見本C', lane: 'next' }], later = { title: '見本B', lane: 'later' };
         const t = Talk.create({ settings: { ai: 'off', bargeIn: false, reply: 'text', ...settings }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']], memory: mem,
           board: () => [...cards, later], queue: () => cards, card: (x) => (x === later.title ? later : null), run: () => '', act: (c) => { acts.push(c.type + ':' + c.card?.title); return 'ok'; }, pending: () => false, onLine: (w, x) => { if (w === 'ai') said.push(x); }, onState() {} });
-        await t.start(); if (answer) await t.hear(answer); t.stop();
-        return { first: said[0] || '', acts };
+        await t.start(); const n = said.length; if (answer) await t.hear(answer); t.stop();
+        return { first: said.slice(0, n).join(' '), acts }; // 始まりの吹き出し全部（問いは別の吹き出し。v47）
       };
       return { ask: await run({}, yest, '済み'), soon: await run({}, new Date().toISOString()), off: await run({ followUp: false }, yest) };
     });
@@ -1302,6 +1302,139 @@ try {
     check(f, 'キャラの設定：週の連続・今日の調子を設定で入れられる');
     await pg.close();
     check(outside.length === 0, '会話の改善：自分のサイトと GitHub 以外へ通信していない');
+  }
+
+  // 状態の表（減らして固める・2段目。2026-10-22 satouさん「それで進めて」）：表のどの状態のどの言葉も、表のとおりに動くかを1つずつ試す。
+  // 押して答えるボタンは表の btn と同じか。カードは id で持つ（題が直された・消された・済みにされたあとも取り違えない）
+  {
+    const { pg } = await talkPage({ heard: [] }, '状態の表');
+    const r = await pg.evaluate(async () => {
+      const T = Talk, out = { bad: [], btn: {}, rows: 0, words: 0 };
+      const store = [];
+      const mem = { all: () => store, put: (it) => { const k = store.findIndex((i) => i.id === it.id); const x = { ...it, at: it.at || new Date().toISOString() }; if (k >= 0) store[k] = x; else store.push(x); return x; }, forget() {}, forgetAll() { out.forgot = (out.forgot || 0) + 1; store.length = 0; } };
+      const keys = ['lk.quietDay', 'lk.moodAskDay', 'lk.moodDay', 'lk.noFollowUntil', 'lk.seasonDay', 'lk.weeklyDone', 'lk.streakDay'];
+      const clean = () => { for (const k of keys) localStorage.removeItem(k); };
+      // にせもののボード：カードは id を持つ。acts にポチがしたことを残す
+      function mk(settings = {}) {
+        const cards = [{ id: 'c1', title: '書類を出す', lane: 'now' }, { id: 'c2', title: '電話する', lane: 'now' }, { id: 'c3', title: '本を返す', lane: 'next' }];
+        const acts = [], said = [], runs = [];
+        const byId = (id) => cards.find((c) => c.id === id) || null;
+        const t = T.create({ settings: { ai: 'off', bargeIn: false, reply: 'text', tidy: false, ...settings }, lanes: { now: '今やる', next: '次にやる', later: 'あとで', hold: '保留' }, laneWords: [['now', '今やる']], memory: mem,
+          board: () => cards.filter((c) => c.lane !== 'done').map((c) => ({ ...c })), queue: () => cards.filter((c) => ['now', 'next'].includes(c.lane)), byId, card: (x) => cards.find((c) => c.title === x) || null, weekDone: () => [],
+          run: (x) => { runs.push(x); return 'ok'; }, act: (c) => { const k = byId(c.card?.id); acts.push({ type: c.type, lane: c.lane || '', id: c.card?.id || '', title: c.card?.title || '' }); if (k) k.lane = c.type === 'done' ? 'done' : c.lane; return 'ok'; }, pending: () => false,
+          onLine: (k, x) => { if (k === 'ai') said.push(x); }, onMood() {}, onState() {} });
+        return { t, cards, acts, said, runs };
+      }
+      const expect = (does) => ({ done: ['done', ''], later: ['move', 'later'], hold: ['move', 'hold'], now: ['move', 'now'] })[does];
+      const btns = (st) => T.TABLE[st].filter((x) => x.btn).map((x) => x.btn).join('|');
+      // カードのことを聞いた直後（会話の始まり）：表の全部の言葉
+      for (const row of T.TABLE.card) {
+        out.rows++;
+        for (const w of row.words) {
+          out.words++; clean(); store.length = 0;
+          const m = mk(); await m.t.start();
+          if (m.t.state.ask !== 'card') { out.bad.push(`card/始まりで聞いていない(${m.t.state.ask})`); m.t.stop(); continue; }
+          out.btn.card = m.t.choices.join('|');
+          await m.t.hear(w);
+          if (!m.t.on) out.bad.push(`${m.t.state.ask || '?'}/${w} で会話が閉じた`);
+          const a = m.acts[0], e = expect(row.does);
+          if (row.does === 'skip' ? m.acts.length || !/電話する/.test(m.said.at(-1)) : !a || a.type !== e[0] || a.lane !== e[1] || a.id !== 'c1') out.bad.push(`card/${w}→${row.does}（${JSON.stringify(a)}）`);
+          // 聞いていないとき（雑談のあと）は、言い切り（loose）の言葉だけ受ける。「うん」でカードを済みにしない
+          const m2 = mk(); await m2.t.start(); await m2.t.hear('今日はいい天気'); const n = m2.acts.length; await m2.t.hear(w);
+          if (row.does !== 'skip' && (m2.acts.length > n) !== !!row.loose) out.bad.push(`card/聞いていないとき ${w}（loose=${!!row.loose}）`);
+          m.t.stop(); m2.t.stop();
+        }
+      }
+      // 前回の続き（「昨日の〇〇、どうなった？」）
+      for (const row of T.TABLE.follow) {
+        out.rows++;
+        for (const w of row.words) {
+          out.words++; clean(); store.length = 0;
+          mem.put({ id: 'last', kind: 'last', text: '前', follow: '本を返す', at: new Date(Date.now() - 864e5).toISOString() });
+          const m = mk(); await m.t.start();
+          if (m.t.state.ask !== 'follow' || m.t.state.card !== '本を返す') { out.bad.push(`follow/始まり(${JSON.stringify(m.t.state)})`); m.t.stop(); continue; }
+          // 問いは別の吹き出しで、そのカードのことだけ（ほかのカードの一言と混ぜない。v47 の点検）
+          if (!/^[^「]*「本を返す」[^「]*[？?]\s*$/.test(m.said.at(-1) || '')) out.bad.push(`follow/問いの吹き出しにほかのカードが混ざる（${m.said.at(-1)}）`);
+          out.btn.follow = m.t.choices.join('|');
+          await m.t.hear(w);
+          if (!m.t.on) out.bad.push(`${m.t.state.ask || '?'}/${w} で会話が閉じた`);
+          const a = m.acts[0];
+          if (row.does === 'drop') { if (m.acts.length || !(+localStorage.getItem('lk.noFollowUntil') > Date.now())) out.bad.push(`follow/${w}→drop`); }
+          else { const e = expect(row.does); if (!a || a.type !== e[0] || a.lane !== e[1] || a.id !== 'c3') out.bad.push(`follow/${w}→${row.does}（${JSON.stringify(a)}）`); }
+          m.t.stop();
+        }
+      }
+      // 雑談が続いたあとの「カードも見る？」
+      const chats = ['いい天気だね', '暑いね', 'いい天気', '暑い', 'いい天気だね', '暑いね', 'いい天気', '暑い']; // 問いで終わらない雑談（問いのあとは「カードも見る？」を重ねない）
+      for (const row of T.TABLE.offer) {
+        out.rows++;
+        for (const w of row.words) {
+          out.words++; clean(); store.length = 0;
+          const m = mk(); await m.t.start();
+          for (const x of chats) { if (m.t.state.ask === 'offer') break; await m.t.hear(x); }
+          if (m.t.state.ask !== 'offer') { out.bad.push(`offer/聞かない(${m.t.state.ask})`); m.t.stop(); continue; }
+          out.btn.offer = m.t.choices.join('|');
+          await m.t.hear(w);
+          if (!m.t.on) out.bad.push(`${m.t.state.ask || '?'}/${w} で会話が閉じた`);
+          const back = m.t.state.ask === 'card';
+          if ((row.does === 'cards') !== back || m.acts.length) out.bad.push(`offer/${w}→${row.does}（${m.t.state.ask}）`);
+          m.t.stop();
+        }
+      }
+      // 今日の調子（設定で入れたとき）
+      for (const row of T.TABLE.mood) {
+        out.rows++;
+        for (const w of row.words) {
+          out.words++; clean(); store.length = 0;
+          const m = mk({ moodAsk: true }); await m.t.start();
+          if (m.t.state.ask !== 'mood') { out.bad.push(`mood/聞かない(${m.t.state.ask})`); m.t.stop(); continue; }
+          out.btn.mood = m.t.choices.join('|');
+          await m.t.hear(w);
+          if (!m.t.on) out.bad.push(`${m.t.state.ask || '?'}/${w} で会話が閉じた`);
+          if (localStorage.getItem('lk.moodDay') !== `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}:${row.does.slice(4)}` || m.t.state.ask !== 'card') out.bad.push(`mood/${w}→${row.does}（${localStorage.getItem('lk.moodDay')}）`);
+          m.t.stop();
+        }
+      }
+      // 「全部忘れて」の確かめ
+      for (const row of T.TABLE.forgetAll) {
+        out.rows++;
+        for (const w of row.words) {
+          out.words++; clean(); store.length = 0; out.forgot = 0;
+          const m = mk(); await m.t.start(); await m.t.hear('全部忘れて');
+          if (m.t.state.ask !== 'forgetAll') { out.bad.push(`forgetAll/聞かない(${m.t.state.ask})`); m.t.stop(); continue; }
+          out.btn.forgetAll = m.t.choices.join('|');
+          await m.t.hear(w);
+          if (!m.t.on) out.bad.push(`${m.t.state.ask || '?'}/${w} で会話が閉じた`);
+          if ((row.does === 'forget') !== (out.forgot === 1)) out.bad.push(`forgetAll/${w}→${row.does}`);
+          m.t.stop();
+        }
+      }
+      out.want = Object.fromEntries(Object.keys(T.TABLE).map((k) => [k, btns(k)]));
+      // ボタンの字はその状態の表で当たる（押すと打ったのと同じに動く）
+      out.btnHit = Object.keys(T.TABLE).every((k) => T.TABLE[k].filter((x) => x.btn).every((x) => T.rowOf(k, x.btn) === x));
+      // id で持つ：聞いているあいだにボードで題が直されても、そのカードを動かす。消された・済みにされたら、そう言って次へ
+      clean(); store.length = 0;
+      let m = mk(); await m.t.start(); m.cards[0].title = '書類を出す（直した）'; await m.t.hear('済み');
+      out.renamed = m.acts[0] && m.acts[0].id === 'c1' && m.acts[0].title === '書類を出す（直した）'; m.t.stop();
+      m = mk(); await m.t.start(); m.cards.splice(0, 1); await m.t.hear('済み');
+      out.gone = !m.acts.length && /もうボードに無い/.test(m.said.at(-1)) && /電話する/.test(m.said.at(-1)); m.t.stop();
+      m = mk(); await m.t.start(); m.cards[0].lane = 'done'; await m.t.hear('あとで');
+      out.doneElse = !m.acts.length && /もう済みになってる/.test(m.said.at(-1)); m.t.stop();
+      // 「それ」は id で引き直した今の題を指す
+      m = mk(); await m.t.start(); await m.t.hear('次'); m.cards[1].title = '電話する（直した）'; await m.t.hear('それを済みにして');
+      out.ref = m.runs.at(-1) || ''; m.t.stop();
+      // 会話を閉じて開き直すと、状態は空から（前の問い・今日の3つを持ち越さない）
+      m = mk(); await m.t.start(); await m.t.hear('今日なにする？'); m.t.stop(); await m.t.start();
+      out.reset = m.t.state.ask === 'card' && m.t.state.card === '書類を出す'; m.t.stop();
+      clean(); store.length = 0;
+      return out;
+    });
+    check(r.bad.length === 0 && r.words >= 60, `状態の表：${r.rows} 行・${r.words} の言い方を全部試して、表のとおりに動く${r.bad.length ? '（違う: ' + r.bad.slice(0, 8).join(' / ') + '）' : ''}`);
+    check(Object.keys(r.want).every((k) => r.btn[k] === r.want[k]) && r.btnHit, `状態の表：押して答えるボタンは表の字と同じで、押すと表のとおりに動く（${JSON.stringify(r.btn)}）`);
+    check(r.renamed && r.gone && r.doneElse, `カードは id で持つ：題が直されても同じカードを動かし、消された・済みにされたらそう言って次へ（${JSON.stringify({ renamed: r.renamed, gone: r.gone, doneElse: r.doneElse })}）`);
+    check(r.ref === '電話する（直した）を済みにして', `「それ」は id で引き直した今の題を指す（${r.ref}）`);
+    check(r.reset, '会話を開き直すと、前の問いを持ち越さずに今やるの1枚目から聞く');
+    await pg.close();
   }
 
   // 声と見た目の改善（2026-10-21 の案の残り）：しぐさ・季節・口の形・待ち時間・声に合わせた耳・題で聞き直し・割り込みの一時停止・うるさいときの一言
