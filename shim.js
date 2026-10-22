@@ -65,13 +65,16 @@
       return texts[p];
     }
     async function put(p, text, why) {
+      // 中身が同じなら書かない（GitHub は同じ中身でも空のコミットを作る。2026-10-22 保存済みの変更をかけ直して空のコミットが2つ入った）
+      if (shas[p] && texts[p] === text) return false;
       const body = { message: 'ローカル版ボード: ' + why, content: enc(text), branch: cfg.branch };
       if (shas[p]) body.sha = shas[p];
       const r = await fetch(api(p), { method: 'PUT', headers: { ...hdr(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (r.status === 409 || r.status === 422) { const e = new Error('conflict'); e.conflict = true; throw e; }
       if (r.status === 401 || r.status === 403) throw new Error('鍵に書く権限がありません（Contents を Read and write にする）');
       if (!r.ok) throw new Error('GitHub に書けません（' + r.status + '）');
-      shas[p] = (await r.json()).content.sha; delete tags[p];
+      shas[p] = (await r.json()).content.sha; delete tags[p]; texts[p] = text;
+      return true;
     }
     // Claude を起こす印（データ側の app-inbox ブランチの local-board/inbox.json）。中身は時刻と件数だけ。ブランチが無ければ何もしない
     async function ping(n) {
@@ -92,8 +95,8 @@
       kind: 'github', canSave: true, label: `GitHub ${cfg.owner}/${cfg.repo}`, dest: `${cfg.owner}/${cfg.repo}@${cfg.branch}`, ping,
       async read(p) { return get(p); },
       async write(p, text, why) {
-        try { await put(p, text, why); }
-        catch (e) { if (!e.conflict || p === LOCAL) throw e; await get(p); await put(p, text, why); } // BOARD.md・設定は上書きでよい
+        try { return await put(p, text, why); }
+        catch (e) { if (!e.conflict || p === LOCAL) throw e; await get(p); return put(p, text, why); } // BOARD.md・設定は上書きでよい
       },
       async loadCards() {
         let t = await get(LOCAL), from = LOCAL;
@@ -218,6 +221,15 @@
   const writable = () => !!store && (store.canSave || store.kind === 'file');
   // まだ保存していない変更は端末にも残す（オフラインで直してアプリを閉じても消えない。次に開いたとき、読んだ中身にかけ直して保存する）
   const where = () => store && (store.kind === 'github' ? 'github:' + (ls.get('gh') || {}).owner + '/' + (ls.get('gh') || {}).repo : store.kind);
+  // その変更がもう入っているか（届けた印 answer_status などと、アプリの目印 local_edit は比べない）
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  function landed(op) {
+    const c = byId(op.id); if (!c) return false;
+    const skip = k => DELIVERY.includes(k) || k === 'local_edit' || k === 'no' || k === 'doc_id';
+    const want = op.kind === 'set' ? op.body : op.patch;
+    if (!want) return false;
+    return Object.entries(want).every(([k, v]) => skip(k) || (v && typeof v === 'object' && v.__delete__ ? !(k in c) : same(c[k], v)));
+  }
   function keepOps() { if (store && store.canSave) ls.set('pending', ops.length ? { where: where(), ops } : null); }
 
   // 保存の題（コミットの文）：まとめて保存するときは「〜ほか N 件」、ポチが動かしたものは「ポチ：」を付ける
@@ -237,11 +249,11 @@
     saving = true; saveTimer = null;
     const why = lastWhy, sent = ops.length, sentWhys = whys.length;
     try {
-      await store.write(LOCAL, JSON.stringify(cards, null, 2) + '\n', why);
+      const wrote = await store.write(LOCAL, JSON.stringify(cards, null, 2) + '\n', why);
       ops = ops.slice(sent); dirty = ops.length > 0; keepOps(); whys = whys.slice(sentWhys); relabel();
       try { await store.write(MD, boardMd(cards), why); } catch {}
       status(`保存しました（${why}）${new Date().toLocaleTimeString('ja-JP')}`, 'ok');
-      if (!dirty) wakeClaude(); // 保存待ちの変更があるあいだは印を付けない（次の保存のあとで付ける）
+      if (!dirty && wrote !== false) wakeClaude(); // 保存待ちの変更があるあいだは印を付けない（次の保存のあとで付ける）。中身が変わらなかったときも付けない
     } catch (e) {
       if (e.conflict) {
         // ほかの端末か AI が先に書いていた：読み直して、まだ保存していない変更をその上にかけ直す
@@ -432,12 +444,15 @@
     await loadMemory();
     // 前に開いたとき保存できなかった変更をかけ直す
     const kept = store.canSave ? ls.get('pending') : null;
-    if (kept && kept.where === where() && Array.isArray(kept.ops) && kept.ops.length) {
-      kept.ops.forEach(applyOp); ops = kept.ops; dirty = true; lastWhy = '前に保存できなかった変更 ' + kept.ops.length + ' 件';
+    // ただし、もう読んだ中身に入っている変更はかけ直さない（保存は届いたのに、返事を受け取る前に画面が閉じられたとき。
+    // かけ直すと Claude に届けた印（relayed・sent）が local に戻り、同じ答えがもう一度届く。2026-10-22）
+    const left = kept && kept.where === where() && Array.isArray(kept.ops) ? kept.ops.filter(op => !landed(op)) : [];
+    if (left.length) {
+      left.forEach(applyOp); ops = left; dirty = true; lastWhy = '前に保存できなかった変更 ' + left.length + ' 件';
       saveTimer = setTimeout(flush, 500);
       from = '';
-      status(`前に開いたとき保存できなかった変更 ${kept.ops.length} 件をかけ直しました。保存します…`, 'warn');
-    }
+      status(`前に開いたとき保存できなかった変更 ${left.length} 件をかけ直しました。保存します…`, 'warn');
+    } else if (kept) ls.set('pending', null);
     // 端末の保存（ボードの写し・まだ送っていない変更）を、空き容量が減っても消さないでほしいと頼む
     try { navigator.storage?.persist?.().catch(() => {}); } catch {}
     ready = true; lastRead = Date.now();
