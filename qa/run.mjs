@@ -353,6 +353,23 @@ try {
       inboxBranch = false; const n1 = puts.length;
       const none = await page.evaluate(() => LK.store.ping(1));
       check(none === false && puts.length === n1, 'app-inbox ブランチが無ければ印を置かない');
+      // 置けなかったら、開いているあいだ一度だけ言う（黙ったままにしない）
+      await page.evaluate(() => LK.update('s3', { comment: '見本のコメント', comment_status: 'new' }, 'コメント'));
+      const t1 = Date.now(); let st = '';
+      while (Date.now() - t1 < 8000 && !/少し遅れて届きます/.test(st = await page.locator('#lkStatus').innerText().catch(() => ''))) await page.waitForTimeout(100);
+      check(/少し遅れて届きます.*1時間以内.*大丈夫/.test(st), `起こす印を置けなかったら、遅れて届くこと・何もしなくてよいことを言う（${st.slice(0, 60)}）`);
+      check(!(await page.locator('#lkStatus').getAttribute('class') || '').includes('warn'), '保存はできているので、困りごとの色（warn）にしない');
+      { // 点検の写真（PC とスマホ幅）。スマホ幅で状態の1行が横にはみ出さない
+        mkdirSync(OUT, { recursive: true }); await page.screenshot({ path: resolve(OUT, 'wake-warn.png') });
+        const vp = page.viewportSize(); await page.setViewportSize({ width: 390, height: 844 });
+        await page.screenshot({ path: resolve(OUT, 'wake-warn-phone.png') });
+        const over = await page.$eval('#lkStatus', (e) => e.getBoundingClientRect().right - document.documentElement.clientWidth);
+        check(over <= 0, `スマホ幅で「少し遅れて届きます」の1行がはみ出さない（${Math.round(over)}px）`);
+        await page.setViewportSize(vp);
+      }
+      await page.evaluate(() => LK.update('s3', { note: '見本の補足2' }, 'メモ'));
+      await page.waitForTimeout(2500);
+      check(!/少し遅れて届きます/.test(await page.locator('#lkStatus').innerText().catch(() => '')), '置けなかったことは一度だけ言う（保存のたびに言わない）');
       inboxBranch = true; files['local-board/inbox.json'] = keep;
       check(await page.evaluate(() => { const w = LK.ls.get('woke'); return !!w && typeof w === 'object' && /s2@/.test(w['example-owner/example-data@main'] || ''); }), '起こした印の記録は、つなぎ先（リポジトリ・ブランチ）ごと（ほかのつなぎ先の記録を消さない）');
       await page.evaluate(() => LK.update('s3', { note: '見本の補足（AI に渡さない）' }, 'メモ'));

@@ -268,8 +268,16 @@
     const dest = store.dest || store.kind, sig = w.map(c => c.doc_id + '@' + (c.updated || '')).sort().join(',');
     const seen = () => { const v = ls.get('woke'); return v && typeof v === 'object' ? v : {}; }; // v43 までは文字列だった
     if (seen()[dest] === sig) return;
-    try { if (await store.ping(w.length)) ls.set('woke', { ...seen(), [dest]: sig }); } catch {}
+    let ok = false;
+    try { ok = await store.ping(w.length); } catch {}
+    if (ok) { ls.set('woke', { ...seen(), [dest]: sig }); return; }
+    // 置けなかったら、開いているあいだ一度だけ言う（次の保存でまた置き直す。毎時の取り込みで届くので失われはしない。v44・v45 の点検）
+    if (warned.has(dest)) return;
+    warned.add(dest);
+    // 保存はできているので困りごとの色にしない（ふつうの色で、ほかの知らせと同じく少しして消える。v47 の点検）
+    status('保存しました。Claude には少し遅れて届きます（1時間以内。このままで大丈夫）');
   }
+  const warned = new Set();
   window.addEventListener('online', () => { if (dirty) flush(); });
   window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && dirty) flush(); });
