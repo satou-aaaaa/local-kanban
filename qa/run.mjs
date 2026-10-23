@@ -2348,6 +2348,11 @@ try {
     }
   }
   await phone.screenshot({ path: resolve(OUT, 'phone.png'), fullPage: true });
+  // ボード v64「まとめて選ぶ」のあいだ（body.selecting）は、下に固定の帯が出るので隅のポチを出さない（帯の下に隠れて重なる。v50）
+  {
+    const st = await phone.evaluate(() => { const p = document.getElementById('lkPochi'); if (!p) return 'なし'; document.body.classList.add('selecting'); const d = getComputedStyle(p).display; document.body.classList.remove('selecting'); return d; });
+    check(st === 'none' || st === 'なし', `選ぶあいだは隅のポチを出さない（${st}）`);
+  }
 
   // ---------- 基本の使い方（本物のボードの画面を、アプリの中で人が押す順に。ボード版45から） ----------
   // ボード側の board/check-basics.mjs と同じ流れを、アプリ（鍵・GitHub への保存・アプリの部品が乗った画面）で通す。
@@ -2387,6 +2392,31 @@ try {
         } catch (e) { why = e.message.split('\n')[0]; }
         await shut();
         check(!why, `基本 ${tag}：詳細を${how}で閉じると画面から消え、ほかのカードが開ける${why ? '（' + why + '）' : ''}`);
+      }
+      // ボード v64「☑ まとめて選ぶ」：下に出る帯（#bulkbar）が、アプリの部品（隅のポチ・状態の1行・未送信）と重ならない
+      if (await pg.locator('.selbtn').count()) {
+        let why = '';
+        try {
+          await pg.evaluate(() => { for (const d of document.querySelectorAll('details.vfold')) d.open = true; });
+          await pg.locator('.selbtn').first().click({ timeout: 2000 });
+          await pg.waitForTimeout(250);
+          const r = await pg.evaluate(() => {
+            const vis = (e) => { if (!e) return null; const s = getComputedStyle(e), b = e.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && b.width > 0 && b.height > 0 ? b : null; };
+            const bar = vis(document.getElementById('bulkbar'));
+            if (!bar) return { err: '帯が出ない' };
+            // アプリの部品（id が lk・talk で始まる）のうち、画面に固定のものを全部比べる（並べた名前だけだと、部品が増えたときに漏れる。v50 の点検）
+            const mine = [...document.querySelectorAll('[id^="lk"],[id^="talk"]')].filter((e) => getComputedStyle(e).position === 'fixed');
+            const hit = mine.filter((e) => { const b = vis(e); return b && b.left < bar.right && b.right > bar.left && b.top < bar.bottom && b.bottom > bar.top; }).map((e) => e.id);
+            const out = [...document.querySelectorAll('#bulkbar button')].filter((b) => { const x = b.getBoundingClientRect(); return x.left < 0 || x.right > innerWidth + 1 || x.bottom > innerHeight + 1; }).length;
+            return { hit, out };
+          });
+          if (r.err) why = r.err;
+          else if (r.hit.length) why = r.hit.map((id) => '#' + id).join('・') + ' と重なる';
+          else if (r.out) why = `帯のボタン ${r.out} 個が画面の外`;
+          await pg.screenshot({ path: resolve(OUT, `bulk-${tag}.png`) });
+          await pg.keyboard.press('Escape'); await pg.waitForTimeout(150);
+        } catch (e) { why = e.message.split('\n')[0]; }
+        check(!why, `基本 ${tag}：「まとめて選ぶ」の帯がアプリの部品と重ならず、画面に収まる${why ? '（' + why + '）' : ''}`);
       }
       if (w !== 1366) { await pg.close(); continue; }
       // ここからは書き込む。GitHub への保存（cards.json の PUT）まで届くことを見る
