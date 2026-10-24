@@ -7,6 +7,10 @@ on:
     # 毎週水曜 06:37 JST（= 火曜 21:37 UTC）
     - cron: "37 21 * * 2"
   workflow_dispatch:
+  # このファイルを変えた PR でも1回動かし、設定の誤り（調べるリンクが0件など）をマージ前に見つける
+  pull_request:
+    paths:
+      - .github/workflows/link-check.yml
 
 permissions:
   contents: read
@@ -15,4 +19,5 @@ jobs:
   check:
     uses: satou-aaaaa/shared-workflows/.github/workflows/link-check.yml@main
     with:
-      files: '*.html'
+      # 画面の HTML は JS で組み立てるのでリンクがほぼ無い。外へのリンクは README などの .md にある
+      files: '*.html notes/*.html *.md vendor/*.md'
