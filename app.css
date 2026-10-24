@@ -217,3 +217,7 @@ header .hbtns #lookBtn,header .hbtns #theme{display:none}
 #board{padding-bottom:calc(76px + env(safe-area-inset-bottom,0px))}
 /* スマホでは題と ⋯・🎤 を同じ行に、「最新（…に受信）」をその下の小さい行にする（ボタンだけの2段目でカードが下に押し出されていた。10/24 の定期点検：最初の画面にカードが1枚） */
 @media (max-width:520px){header h1{order:0}header .hbtns{order:1}header #status{order:2;flex-basis:100%;margin-top:-6px}}
+/* キーで送ったとき、フォーカスの来た部品が下の隅の ＋（ボード）・ポチ（アプリ）の下に隠れないよう、送る先の下に余白を見込む（WCAG 2.4.11・C43。10/24 の点検・features 33） */
+html:root{scroll-padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
+/* スマホでは列のタブの行（ボードの .navrow）が上に貼りつくので、逆向き（Shift+Tab）に戻るときもその下に隠れないよう上にも余白を見込む（v52 の点検・WCAG 2.4.11） */
+@media (max-width:520px){html:root{scroll-padding-top:calc(72px + env(safe-area-inset-top,0px))}} /* ボードの html{scroll-padding-top} より強く */

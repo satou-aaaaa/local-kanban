@@ -2432,6 +2432,38 @@ try {
         } catch (e) { why = e.message.split('\n')[0]; }
         check(!why, `基本 ${tag}：「まとめて選ぶ」の帯がアプリの部品と重ならず、画面に収まる${why ? '（' + why + '）' : ''}`);
       }
+      // キーで送ったとき、フォーカスの来た部品が下の隅の ＋（ボード）・ポチ（アプリ）の下に隠れない（WCAG 2.4.11。10/24 の点検・features 33）
+      {
+        const hid = await pg.evaluate(async () => {
+          const vis = (e) => { if (!e) return null; const s = getComputedStyle(e), b = e.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && b.width > 0 && b.height > 0 ? b : null; };
+          const over = [document.getElementById('compose-btn'), document.getElementById('lkPochi')].filter((e) => e && getComputedStyle(e).position === 'fixed');
+          const bad = [];
+          for (const d of document.querySelectorAll('#board details.menu[open]')) d.open = false; // 前の検査で開いたままのカードの ⋯ は閉じる（中は浮いた小窓で、ボードの部品）
+          scrollTo(0, 0);
+          for (const el of [...document.querySelectorAll('#board button, #board a[href], #board summary')].slice(0, 40)) {
+            if (!vis(el) || (el.checkVisibility && !el.checkVisibility())) continue; // 閉じた details の中（カードの ⋯ の小窓）は、大きさがあっても出ていない
+            el.focus(); await new Promise((r) => requestAnimationFrame(r));
+            const b = el.getBoundingClientRect();
+            for (const o of over) { const c = vis(o); if (c && c.left < b.right && c.right > b.left && c.top < b.bottom && c.bottom > b.top) bad.push(`${(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 8)}→#${o.id}`); }
+          }
+          // 逆向き（Shift+Tab）：下から順に戻るとき、上に貼りつく行（列のタブなど position sticky・fixed）の下に隠れない（v52 の点検・重さ3）
+          scrollTo(0, document.documentElement.scrollHeight);
+          const els = [...document.querySelectorAll('#board button, #board a[href], #board summary')].filter((e) => vis(e) && e.checkVisibility?.() !== false);
+          for (const el of els.slice(-40).reverse()) {
+            el.focus(); await new Promise((r) => requestAnimationFrame(r));
+            const b = el.getBoundingClientRect();
+            const tops = [...document.querySelectorAll('body *')].filter((e) => { const st = getComputedStyle(e).position; if (st !== 'sticky' && st !== 'fixed') return false; const c = vis(e); return c && c.top < 4 && c.height < innerHeight / 3 && !e.contains(el); });
+            for (const t of tops) { const c = t.getBoundingClientRect(); if (c.left < b.right && c.right > b.left && c.top < b.bottom - 1 && c.bottom > b.top + 1) { bad.push(`↑${(el.textContent || '').trim().slice(0, 8)}→${t.id ? '#' + t.id : '.' + String(t.className).split(' ')[0]}`); break; } }
+          }
+          // 写真用：今やるの列の最後の部品にフォーカスを置いておく
+          const lastNow = [...document.querySelectorAll('#board [id^="lane-now"] button, #board [id^="lane-now"] summary')].filter((e) => e.checkVisibility?.() !== false).pop();
+          lastNow?.focus();
+          return bad;
+        });
+        await pg.screenshot({ path: resolve(OUT, `focus-${tag}.png`) });
+        await pg.evaluate(() => { document.activeElement?.blur(); scrollTo(0, 0); });
+        check(!hid.length, `基本 ${tag}：キーで送ったとき、フォーカスの来た部品が隅の ＋・ポチ・上に貼りつくタブの行に隠れない${hid.length ? '（' + hid.slice(0, 4).join('、') + '）' : ''}`);
+      }
       if (w !== 1366) { await pg.close(); continue; }
       // ここからは書き込む。GitHub への保存（cards.json の PUT）まで届くことを見る
       const saved = async (pred) => { const t0 = Date.now(); while (!pred(lastCards()) && Date.now() - t0 < 10000) await pg.waitForTimeout(100); return pred(lastCards()); };
