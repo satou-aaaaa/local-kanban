@@ -855,6 +855,8 @@ try {
     await pg.close();
   }
   // ---------- 会話モード（talk.js）：耳・頭・口をにせものに差し替えて、流れと「外に出さない」を確かめる ----------
+  // ポチが「済み？」と聞く順（今やる → 次にやる。答えを待っている確認は聞かない。10/24）
+  const askTitles = async (pg) => (await pg.evaluate(() => ['now', 'next'].flatMap((l) => LK.queueTitles(l)))).filter((t) => { const c = SAMPLE.find((x) => x.title === t); return !(c?.decision && !c.answer); });
   const talkPage = async ({ heard = [], replies = null, sr = true }, label) => {
     const pg = await context.newPage();
     pg.on('pageerror', (e) => errors.push(`pageerror(${label}): ${e.message}`));
@@ -894,8 +896,8 @@ try {
       new MutationObserver(() => window.__moods.push(document.querySelector('#talkDlg').dataset.mood)).observe(document.querySelector('#talkDlg'), { attributes: true, attributeFilter: ['data-mood'] });
       new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => { if (n.classList?.contains('confetti')) window.__confetti++; }))).observe(document.querySelector('#talkAva'), { childList: true });
     });
-    // 読む順はボードの並び（本物のボード版48からは prioCmp。答えていない確認 s2 が s1 より先になる）
-    const [q1, q2] = (await pg.evaluate(() => LK.queueTitles('now'))).map((t) => SAMPLE.find((c) => c.title === t)?.doc_id);
+    // 読む順はボードの並び（本物のボード版48からは prioCmp）。答えていない確認 s2 は聞かない（10/24）
+    const [q1, q2] = (await askTitles(pg)).map((t) => SAMPLE.find((c) => c.title === t)?.doc_id);
     await pg.click('#talkBtn');
     await waitTalkEnd(pg);
     const spoken = await pg.evaluate(() => window.__spoken.join(''));
@@ -990,7 +992,7 @@ try {
   // A3. ポチが聞いたら、押して答えるボタン（済み・あとで・次）を出す。押すと打ったのと同じに動き、押した言葉が会話に残る（2026-10-22 点検・重さ3）
   {
     const { pg } = await talkPage({ heard: [], sr: false }, '会話 押して答える');
-    const q1 = (await pg.evaluate(() => LK.queueTitles('now')))[0];
+    const q1 = (await askTitles(pg))[0];
     await pg.click('#talkBtn');
     await pg.waitForSelector('#talkLog .picks button', { timeout: 8000 }).catch(() => {});
     const picks = await pg.evaluate(() => [...document.querySelectorAll('#talkLog .picks button')].map((b) => ({ t: b.textContent, h: b.getBoundingClientRect().height })));
@@ -1000,10 +1002,6 @@ try {
     await waitCards((cs) => cs.find((c) => c.title === q1)?.lane === 'done', `押して答える：「済み」を押すと1枚目（${q1}）を済みにする`);
     const after = await pg.evaluate(() => ({ you: [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent.replace(/^あなた：/, '')), n: document.querySelectorAll('#talkLog .picks').length }));
     check(after.you.includes('済み') && after.n === 1, `押した言葉が会話に残り、ボタンは最後の問いの下の1組だけ（${JSON.stringify(after)}）`);
-    // キーで押したら、フォーカスは打つ欄へ（消えたボタンから飛ばない。WCAG 2.4.3）
-    await pg.focus('#talkLog .picks button:nth-child(4)'); await pg.keyboard.press('Enter');
-    await pg.waitForTimeout(300);
-    check(await pg.evaluate(() => document.activeElement?.id === 'talkIn'), 'キーで答えのボタンを押したら、フォーカスは打つ欄へ移る');
     // 雑談が続いたあとの「カードも見る？」には「見る」「今はいい」。「今はいい」を押すとカードの話に戻らない
     let offer = [];
     for (let i = 0; i < 8 && !offer.includes('見る'); i++) {
@@ -1012,7 +1010,9 @@ try {
     }
     check(offer.join('|') === '見る|今はいい', `雑談のあとの「カードも見る？」に「見る」「今はいい」のボタン（${offer.join('|')}）`);
     if (offer.length) {
-      await pg.click('#talkLog .picks button:nth-child(2)'); await pg.waitForTimeout(300);
+      // キーで押したら、フォーカスは打つ欄へ（消えたボタンから飛ばない。WCAG 2.4.3）。カードを残すため「今はいい」で見る（10/24 から確認のカードは聞かないので、聞くカードは2枚）
+      await pg.focus('#talkLog .picks button:nth-child(2)'); await pg.keyboard.press('Enter'); await pg.waitForTimeout(300);
+      check(await pg.evaluate(() => document.activeElement?.id === 'talkIn'), 'キーで答えのボタンを押したら、フォーカスは打つ欄へ移る');
       const last = await pg.evaluate(() => [...document.querySelectorAll('#talkLog .ai')].pop()?.textContent || '');
       check(/またあとで|ゆっくり話そ/.test(last), `「今はいい」を押すと、カードの話にしない（${last.slice(0, 40)}）`);
     }
@@ -1190,6 +1190,20 @@ try {
     });
     check(/昨日の「見本B」、どうなった/.test(fu.ask.first) && fu.ask.acts[0] === 'done:見本B', `前回の続き：次の会話は「昨日の〇〇、どうなった？」から始め、「済み」でそのカードを済みにする（${fu.ask.first}・${fu.ask.acts.join(',')}）`);
     check(!/どうなった/.test(fu.soon.first) && !/どうなった/.test(fu.off.first), '前回の続き：30分以内に開き直したとき・設定で切ったときは聞かない');
+    // 会話の始まり：答えを待っている確認には「済み？」と聞かない（答えずに済みにできてしまう）。問いと別のカードの「止まってるね」を並べない（10/24 定期点検・重さ3）
+    const op = await pg.evaluate(async () => {
+      const said = [], acts = [];
+      const cards = [{ title: '見本の確認', lane: 'now', decision: { question: '?', options: [{ label: 'はい' }] } }, { title: '見本A', lane: 'now' }, { title: '見本Z', lane: 'next' }];
+      const mem = { all: () => [], put: (it) => it, forget() {}, forgetAll() {} };
+      const t = Talk.create({ settings: { ai: 'off', bargeIn: false, reply: 'text', followUp: false }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']], memory: mem,
+        board: () => cards, queue: () => cards, card: () => null, run: () => '', act: (c) => { acts.push(c.type + ':' + c.card?.title); return 'ok'; }, pending: () => false,
+        tidy: () => ({ text: '「見本Z」がしばらく止まってるね。どうする？', changed: false }), onLine: (w, x) => { if (w === 'ai') said.push(x); }, onState() {} });
+      await t.start(); const n = said.length; await t.hear('済み'); t.stop();
+      return { all: said.slice(0, n), acts };
+    });
+    const opQ = op.all.at(-1) || '';
+    check(/「見本A」/.test(opQ) && !/見本の確認/.test(opQ) && op.acts[0] === 'done:見本A' && /「見本の確認」は答えを待ってる/.test(op.all.join(' ')), `会話の始まり：答えを待つ確認には「済み？」と聞かず、枚数だけ言う（${op.all.join('｜')}・${op.acts.join(',')}）`);
+    check(!op.all.slice(1).some((x) => /見本Z/.test(x)), `会話の始まり：問いのカードと別のカードの「止まってるね」を同じ会話の始まりに並べない（${op.all.join('｜')}）`);
     // B6 Whisper の作り話：短い・小さい声のときの決まり文句だけ捨てる
     const ph = await pg.evaluate(async () => {
       if (!window.LocalAI) await new Promise((ok) => { const sc = document.createElement('script'); sc.src = './localai.js'; sc.onload = ok; sc.onerror = ok; document.head.append(sc); });
@@ -1613,7 +1627,7 @@ try {
     await pg.click('#talkBtn');
     await pg.waitForFunction(() => /打って/.test(document.querySelector('#talkState').textContent), null, { timeout: 10000 });
     check(true, '会話（耳なし）：打って話す案内が出た');
-    const firstT = await pg.evaluate(() => LK.queueTitles('now')[0]);
+    const firstT = (await askTitles(pg))[0];
     const t1 = SAMPLE.find((c) => c.title === firstT)?.doc_id;
     await pg.fill('#talkIn', '済み'); await pg.press('#talkIn', 'Enter');
     await waitCards((cs) => !!t1 && cs.find((c) => c.doc_id === t1)?.lane === 'done', `会話（耳なし）で打った「済み」（${t1}）`);

@@ -779,8 +779,11 @@
 
     // この会話で片づけた・動かしたカードは、保存が画面に返る前でももう聞かない（同じカードを2回聞いていた。10/21）
     const handled = new Set();
+    // 答えを待っている確認（decision があって answer が無い）は、ポチの「済み？」の並びに入れない（済みにすると答えずに片づいてしまう。10/24 定期点検・重さ3）。
+    // 確認はカードの選択肢で答える（会話の最初に枚数だけ言う）
+    const waitsAnswer = (c) => !!(c && c.decision && !c.answer);
     function nextCard() {
-      const q = host.queue().filter((c) => !handled.has(key(c)));
+      const q = host.queue().filter((c) => !handled.has(key(c)) && !waitsAnswer(c));
       cur = q[idx] || null;
       return cur;
     }
@@ -1107,7 +1110,12 @@
       // 問いはいつも最後に（答えのボタンがどのカードの話か迷わないよう、ほかのカードの一言は問いの前へ。10/22 点検）
       // 問いは別の吹き出しにする（ほかのカードの一言と同じ吹き出しだと、ボタンがどのカードの答えか迷う。v47 の点検・重さ3）
       const isQ = /[？?]\s*$/.test(body || '');
-      const first = (isQ ? [hi1, week, extraT] : [hi1, week, body, extraT]).filter(Boolean).join(' ');
+      // 問いのカードと別のカードの一言（「〇〇が止まってるね」）は出さない（2枚の話が並ぶと、ボタンがどちらの答えか迷う。10/24 定期点検・重さ3）
+      const extraT2 = isQ && ask === 'card' && cur && extraT && !extraT.includes(cur.title) ? '' : extraT;
+      // ボードの「❓ 答える」と同じ言葉で、1枚なら題も言う（v51 の点検・重さ2：どのカードか分からない）
+      const asksL = q.filter(waitsAnswer), asks = asksL.length;
+      const askLine = mode !== 'ai' && asks ? (asks === 1 ? `「${asksL[0].title}」は答えを待ってるよ（カードで選んでね）。` : `答えるカードが${asks}枚あるよ（カードで選んでね）。`) : '';
+      const first = (isQ ? [hi1, week, askLine, extraT2] : [hi1, week, body, askLine, extraT2]).filter(Boolean).join(' ');
       if (first) { await say(first, s.reply !== 'text'); note('', first); }
       if (isQ) { await say(body, s.reply !== 'text'); note('', body); }
       await speech;

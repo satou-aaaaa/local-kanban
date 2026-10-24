@@ -215,3 +215,5 @@ header .hbtns #lookBtn,header .hbtns #theme{display:none}
 #lkPochi .body,#lkPochi .lid{animation:none}
 /* 隅のポチがボードの下のほうのカードに重ならないよう、ボードの下に余白（WCAG 2.4.11） */
 #board{padding-bottom:calc(76px + env(safe-area-inset-bottom,0px))}
+/* スマホでは題と ⋯・🎤 を同じ行に、「最新（…に受信）」をその下の小さい行にする（ボタンだけの2段目でカードが下に押し出されていた。10/24 の定期点検：最初の画面にカードが1枚） */
+@media (max-width:520px){header h1{order:0}header .hbtns{order:1}header #status{order:2;flex-basis:100%;margin-top:-6px}}
