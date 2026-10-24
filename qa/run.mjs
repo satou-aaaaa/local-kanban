@@ -2480,6 +2480,14 @@ try {
         await card('基本の検査で足したカード').locator('.pop button', { hasText: '今やるへ' }).click();
         return (await saved((cs) => cs.some((c) => c.title === '基本の検査で足したカード' && c.lane === 'now'))) ? '' : '今やるにならない';
       });
+      // ボード v68 の「📌 上に留める」（pinned）：アプリの保存で項目が落ちず、データ側に届く（あるボードだけ）
+      if (await pg.evaluate(() => /上に留める/.test(document.documentElement.innerHTML))) {
+        await step('⋯ から「📌 上に留める」と pinned が保存に届く', async () => {
+          await card('基本の検査で足したカード').locator('details.menu summary').click();
+          await card('基本の検査で足したカード').locator('.pop button', { hasText: '上に留める' }).first().click();
+          return (await saved((cs) => cs.some((c) => c.title === '基本の検査で足したカード' && c.pinned === true))) ? '' : 'pinned が保存に届かない';
+        });
+      }
       await step('⋯ から済みにすると保存に届く', async () => {
         await card('基本の検査で足したカード').locator('details.menu summary').click();
         await card('基本の検査で足したカード').locator('.pop button', { hasText: '済みにする' }).first().click();
