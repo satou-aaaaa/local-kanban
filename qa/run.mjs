@@ -392,6 +392,11 @@ try {
     await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'hold', 'ぶつかった保存のかけ直し');
     await page.waitForFunction(() => /合わせて保存/.test(document.querySelector('#lkStatus').textContent), null, { timeout: 5000 }).catch(() => {});
     check(!conflictOnce && /合わせて保存/.test(await page.textContent('#lkStatus')), `保存がぶつかったら読み直してかけ直した（${await page.textContent('#lkStatus')}）`);
+    { // features 12（v54）：うまくいった知らせは ✓ の印だけ見せ、文は読み上げ用に残す
+      const st = await page.evaluate(() => { const s = document.querySelector('#lkStatus'), sr = s.querySelector('.lk-sr'), r = sr?.getBoundingClientRect();
+        return { mark: s.querySelector('[aria-hidden]')?.textContent || '', srOk: !!sr && r.width <= 1 && r.height <= 1, title: s.title, cls: s.className }; });
+      check(st.cls === 'ok' && st.mark === '✓' && st.srOk && /合わせて保存/.test(st.title), `うまくいった知らせは ✓ だけ見せ、文は読み上げと指を置いたときに出す（${JSON.stringify(st)}）`);
+    }
     await page.evaluate(() => move('s3', 'next'));
     await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'next', '元に戻す');
 
@@ -1102,6 +1107,12 @@ try {
     await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
     const listed = await pg.textContent('#memList');
     check(/ポテト/.test(listed) && /見本の豆知識/.test(listed), 'ポチが覚える：設定の画面に覚えたことの一覧を出す');
+    { // v54：設定の文が下の固定の帯で途中で切れて見えないよう、帯の上をぼかす（v53 の定期点検 重さ2）
+      const fade = await pg.evaluate(() => { const st = getComputedStyle(document.querySelector('#talkSetForm>.lk-actions:last-child'), '::before'); return { c: st.content, h: parseFloat(st.height) || 0, bg: st.backgroundImage }; });
+      check(fade.c !== 'none' && fade.h >= 24 && /gradient/.test(fade.bg), `設定の下の固定の帯の上をぼかして、文が下に続くと分かる（${JSON.stringify(fade)}）`);
+      const reset = await pg.textContent('#talkReset');
+      check(!/元に戻す/.test(reset) && /最初/.test(reset), `設定の「元に戻す」は「やめる」と区別できる言葉にする（${reset}。v54 の点検 重さ3）`);
+    }
     await pg.click('#memList button[aria-label*="見本の豆知識"]');
     await pg.waitForTimeout(1600);
     const after = files['local-board/pochi-memory.json'] || '';

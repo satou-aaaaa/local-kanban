@@ -137,7 +137,7 @@
       <div class="lk-actions"><button type="button" id="diagBtn">この端末の診断を送る</button></div>
       <p id="diagMsg" class="help" aria-live="polite"></p>
     </fieldset>
-    <div class="lk-actions"><button type="button" id="talkReset">元に戻す</button>
+    <div class="lk-actions"><button type="button" id="talkReset">最初の設定に戻す</button>
       <span><button value="cancel" formnovalidate>やめる</button> <button value="ok" class="primary">保存</button></span></div>
   </form>
 </dialog>
@@ -172,7 +172,8 @@
 
   // うまくいった知らせ（ok・ふつう）は少しだけ出して消す。困ったとき（warn・err）だけ残す（ボードの「最新（時刻に受信）」と同じことを言わない。v42 の点検）
   let statusT = 0;
-  function setStatus(msg, kind = '') { const s = $('#lkStatus'); s.textContent = msg; s.className = kind; clearTimeout(statusT); if (kind !== 'warn' && kind !== 'err') statusT = setTimeout(() => { if (s.textContent === msg) s.classList.add('gone'); }, 6000); }
+  // うまくいった知らせ（ok）は ✓ の印だけ見せる。文は読み上げ用に隠して残し、指を置くと出る（features 12。NN/g「状態を見せる」は困ったときに文で）
+  function setStatus(msg, kind = '') { const s = $('#lkStatus'); s.title = ''; if (kind === 'ok') { s.innerHTML = '<span aria-hidden="true">✓</span><span class="lk-sr"></span>'; s.lastChild.textContent = msg; s.title = msg; } else s.textContent = msg; s.className = kind; clearTimeout(statusT); if (kind !== 'warn' && kind !== 'err') statusT = setTimeout(() => { if (s.textContent === msg) s.classList.add('gone'); }, 6000); }
   L.onStatus(setStatus);
 
   // ---------- つないだあと ----------
