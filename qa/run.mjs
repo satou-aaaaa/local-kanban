@@ -396,6 +396,8 @@ try {
       const st = await page.evaluate(() => { const s = document.querySelector('#lkStatus'), sr = s.querySelector('.lk-sr'), r = sr?.getBoundingClientRect();
         return { mark: s.querySelector('[aria-hidden]')?.textContent || '', srOk: !!sr && r.width <= 1 && r.height <= 1, title: s.title, cls: s.className }; });
       check(st.cls === 'ok' && st.mark === '✓' && st.srOk && /合わせて保存/.test(st.title), `うまくいった知らせは ✓ だけ見せ、文は読み上げと指を置いたときに出す（${JSON.stringify(st)}）`);
+      await page.waitForFunction(() => document.querySelector('#lkStatus').classList.contains('gone'), null, { timeout: 8000 }).catch(() => {});
+      check(await page.$eval('#lkStatus', (e) => e.classList.contains('gone')), 'うまくいった知らせの ✓ は6秒で消える（✓ を足したあとも消える）');
     }
     await page.evaluate(() => move('s3', 'next'));
     await waitCards((cs) => cs.find((c) => c.doc_id === 's3')?.lane === 'next', '元に戻す');
