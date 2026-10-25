@@ -173,7 +173,7 @@
   // うまくいった知らせ（ok・ふつう）は少しだけ出して消す。困ったとき（warn・err）だけ残す（ボードの「最新（時刻に受信）」と同じことを言わない。v42 の点検）
   let statusT = 0;
   // うまくいった知らせ（ok）は ✓ の印だけ見せる。文は読み上げ用に隠して残し、指を置くと出る（features 12。NN/g「状態を見せる」は困ったときに文で）
-  function setStatus(msg, kind = '') { const s = $('#lkStatus'); s.title = ''; if (kind === 'ok') { s.innerHTML = '<span aria-hidden="true">✓</span><span class="lk-sr"></span>'; s.lastChild.textContent = msg; s.title = msg; } else s.textContent = msg; s.className = kind; clearTimeout(statusT); if (kind !== 'warn' && kind !== 'err') statusT = setTimeout(() => { if (s.textContent === msg) s.classList.add('gone'); }, 6000); }
+  function setStatus(msg, kind = '') { const s = $('#lkStatus'); s.title = ''; s.dataset.msg = msg; if (kind === 'ok') { s.innerHTML = '<span aria-hidden="true">✓</span><span class="lk-sr"></span>'; s.lastChild.textContent = msg; s.title = msg; } else s.textContent = msg; s.className = kind; clearTimeout(statusT); if (kind !== 'warn' && kind !== 'err') statusT = setTimeout(() => { if (s.dataset.msg === msg) s.classList.add('gone'); }, 6000); }
   L.onStatus(setStatus);
 
   // ---------- つないだあと ----------
