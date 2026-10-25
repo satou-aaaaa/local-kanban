@@ -221,3 +221,11 @@ header .hbtns #lookBtn,header .hbtns #theme{display:none}
 html:root{scroll-padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
 /* スマホでは列のタブの行（ボードの .navrow）が上に貼りつくので、逆向き（Shift+Tab）に戻るときもその下に隠れないよう上にも余白を見込む（v52 の点検・WCAG 2.4.11） */
 @media (max-width:520px){html:root{scroll-padding-top:calc(72px + env(safe-area-inset-top,0px))}} /* ボードの html{scroll-padding-top} より強く */
+/* features 12：うまくいった知らせは ✓ だけ。文は読み上げにだけ渡す */
+.lk-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+/* 設定の文が下の固定の帯で途中で切れて見えるので、帯の上をぼかして「下に続く」と分かるようにする（v53 の定期点検 重さ2） */
+#talkSetForm>.lk-actions:last-child::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:24px;background:linear-gradient(to bottom,transparent,var(--card));pointer-events:none}
+/* v54 の点検（2役とも重さ2）：✓ が細く薄くて緑に見えない → 太く大きく */
+#lkStatus.ok>[aria-hidden]{font-weight:700;font-size:1.05rem}
+/* ボードに --done-ink が無いとき、--done のままでは明るさの差が 4.43（WCAG 1.4.3 の 4.5 に足りない）。文字の色を少し混ぜて濃くする */
+#lkStatus.ok{color:var(--done-ink,color-mix(in srgb,var(--done) 70%,var(--fg)))}
