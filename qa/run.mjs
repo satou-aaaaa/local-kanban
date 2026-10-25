@@ -1204,6 +1204,18 @@ try {
     const opQ = op.all.at(-1) || '';
     check(/「見本A」/.test(opQ) && !/見本の確認/.test(opQ) && op.acts[0] === 'done:見本A' && /「見本の確認」は答えを待ってる/.test(op.all.join(' ')), `会話の始まり：答えを待つ確認には「済み？」と聞かず、枚数だけ言う（${op.all.join('｜')}・${op.acts.join(',')}）`);
     check(!op.all.slice(1).some((x) => /見本Z/.test(x)), `会話の始まり：問いのカードと別のカードの「止まってるね」を同じ会話の始まりに並べない（${op.all.join('｜')}）`);
+    // 問いのカードと同じカードが止まっているときは、2回言わず問いの1文にまとめる（10/25 の定期点検）
+    const op2 = await pg.evaluate(async () => {
+      const said = [];
+      const cards = [{ title: '見本A', lane: 'now' }];
+      const mem = { all: () => [], put: (it) => it, forget() {}, forgetAll() {} };
+      const t = Talk.create({ settings: { ai: 'off', bargeIn: false, reply: 'text', followUp: false }, lanes: { now: '今やる' }, laneWords: [['now', '今やる']], memory: mem,
+        board: () => cards, queue: () => cards, card: () => null, run: () => '', act: () => 'ok', pending: () => false,
+        tidy: () => ({ text: '「見本A」がしばらく止まってるね。どうする？', changed: false }), onLine: (w, x) => { if (w === 'ai') said.push(x); }, onState() {} });
+      await t.start(); t.stop();
+      return said;
+    });
+    check(op2.join('').split('見本A').length === 2 && /止まってるけど、もう済んでる？$/.test(op2.at(-1) || ''), `会話の始まり：問いと同じカードが止まっているときは、1文にまとめて1回だけ言う（${op2.join('｜')}）`);
     // B6 Whisper の作り話：短い・小さい声のときの決まり文句だけ捨てる
     const ph = await pg.evaluate(async () => {
       if (!window.LocalAI) await new Promise((ok) => { const sc = document.createElement('script'); sc.src = './localai.js'; sc.onload = ok; sc.onerror = ok; document.head.append(sc); });

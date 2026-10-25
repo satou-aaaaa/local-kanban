@@ -589,9 +589,10 @@
     if (!ev && (m === 12 || m <= 2)) wear.push('muffler');
     return { event: ev, wear, say: SEASON_SAY[ev] || '' };
   }
+  // 季節の一言は短く1文（会話の最初の吹き出しが長くなる。10/25 の定期点検）
   const SEASON_SAY = {
-    newyear: 'あけましておめでとう！ 今年もよろしくね。', setsubun: '今日は節分だね。鬼は外、カードも外！', hanami: '桜の季節だね。お花見の前にちょっと片づけよっか。',
-    natsu: '夏祭りの季節だね。かき氷食べたいなあ。', halloween: 'ハッピーハロウィン！ おかしくれないといたずらしちゃうぞ。', xmas: 'メリークリスマス！ ごほうびのケーキが待ってるよ。',
+    newyear: 'あけましておめでとう！', setsubun: '今日は節分。カードも外！', hanami: '桜の季節だね。',
+    natsu: '夏祭りの季節だね。', halloween: 'ハッピーハロウィン！', xmas: 'メリークリスマス！',
   };
 
   // 最近言った文（この端末の localStorage。最新 40 個・3日まで）。会話の中身ではなく、決まった言い回しだけ
@@ -1111,13 +1112,16 @@
       // 問いは別の吹き出しにする（ほかのカードの一言と同じ吹き出しだと、ボタンがどのカードの答えか迷う。v47 の点検・重さ3）
       const isQ = /[？?]\s*$/.test(body || '');
       // 問いのカードと別のカードの一言（「〇〇が止まってるね」）は出さない（2枚の話が並ぶと、ボタンがどちらの答えか迷う。10/24 定期点検・重さ3）
-      const extraT2 = isQ && ask === 'card' && cur && extraT && !extraT.includes(cur.title) ? '' : extraT;
+      let extraT2 = isQ && ask === 'card' && cur && extraT && !extraT.includes(cur.title) ? '' : extraT;
+      // 同じカードを「止まってるね」と「もう済んでる？」で2回言わず、問いの1文にまとめる（v51 の点検・10/25 の定期点検で会話の文字が基準を超えた）
+      let bodyQ = body;
+      if (isQ && ask === 'card' && cur && extraT2 && extraT2.includes(cur.title) && /止まって/.test(extraT2)) { bodyQ = `今やるは${nowN}枚。まずは「${cur.title}」。しばらく止まってるけど、もう済んでる？`; extraT2 = ''; }
       // ボードの「❓ 答える」と同じ言葉で、1枚なら題も言う（v51 の点検・重さ2：どのカードか分からない）
       const asksL = q.filter(waitsAnswer), asks = asksL.length;
       const askLine = mode !== 'ai' && asks ? (asks === 1 ? `「${asksL[0].title}」は答えを待ってるよ（カードで選んでね）。` : `答えるカードが${asks}枚あるよ（カードで選んでね）。`) : '';
       const first = (isQ ? [hi1, week, askLine, extraT2] : [hi1, week, body, askLine, extraT2]).filter(Boolean).join(' ');
       if (first) { await say(first, s.reply !== 'text'); note('', first); }
-      if (isQ) { await say(body, s.reply !== 'text'); note('', body); }
+      if (isQ) { await say(bodyQ, s.reply !== 'text'); note('', bodyQ); }
       await speech;
       loop();
     }
