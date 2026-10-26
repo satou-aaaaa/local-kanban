@@ -229,3 +229,5 @@ html:root{scroll-padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
 #lkStatus.ok>[aria-hidden]{font-weight:700;font-size:1.05rem}
 /* ボードに --done-ink が無いとき、--done のままでは明るさの差が 4.43（WCAG 1.4.3 の 4.5 に足りない）。文字の色を少し混ぜて濃くする */
 #lkStatus.ok{color:var(--done-ink,color-mix(in srgb,var(--done) 70%,var(--fg)))}
+/* v56（10/26 定期点検 重さ3）：カードを動かす設定「ポチがボードを自動で整理する」は、見出し1行＋小さい説明にして設定のいちばん上へ（下の固定の帯に隠れて、読めないまま保存しないように） */
+#talkSetForm .chk.tidy{font-weight:700;margin-bottom:0}#talkSetForm .tidyhelp{display:block;font-size:.82rem;color:var(--muted);margin:2px 0 10px 26px}

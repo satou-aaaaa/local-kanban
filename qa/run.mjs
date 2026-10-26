@@ -1112,6 +1112,13 @@ try {
     { // v54：設定の文が下の固定の帯で途中で切れて見えないよう、帯の上をぼかす（v53 の定期点検 重さ2）
       const fade = await pg.evaluate(() => { const st = getComputedStyle(document.querySelector('#talkSetForm>.lk-actions:last-child'), '::before'); return { c: st.content, h: parseFloat(st.height) || 0, bg: st.backgroundImage }; });
       check(fade.c !== 'none' && fade.h >= 24 && /gradient/.test(fade.bg), `設定の下の固定の帯の上をぼかして、文が下に続くと分かる（${JSON.stringify(fade)}）`);
+      // v56（10/26 定期点検 重さ3）：カードを動かす設定は、開いてすぐ下の固定の帯とぼかしに隠れず全部見える
+      const vs0 = pg.viewportSize(); await pg.setViewportSize({ width: 390, height: 844 }); await pg.evaluate(() => document.querySelector('#talkSetForm').scrollTop = 0); await pg.waitForTimeout(150);
+      const tv = await pg.evaluate(() => { let l = document.querySelector('#talkSetForm input[name=tidy]').closest('label').getBoundingClientRect(); const hl = document.getElementById('tidyHelp'); if (hl) { const r = hl.getBoundingClientRect(); l = { bottom: Math.max(l.bottom, r.bottom) }; } const bar = document.querySelector('#talkSetForm>.lk-actions:last-child').getBoundingClientRect(); return { bottom: Math.round(l.bottom), barTop: Math.round(bar.top) }; });
+      check(tv.bottom <= tv.barTop - 24 && tv.bottom <= 844 * 0.4, `設定の「ポチがボードを自動で整理する」はスマホで開いてすぐ上のほうに全部見える（下端 ${tv.bottom}px・帯 ${tv.barTop}px。下の帯とぼかしの近くに置くと読めないまま保存する）`);
+      const nm = await pg.evaluate(() => { const i = document.querySelector('#talkSetForm input[name=tidy]'); return { name: i.closest('label').textContent.trim(), desc: i.getAttribute('aria-describedby') }; });
+      check(nm.name.length <= 20 && nm.desc === 'tidyHelp', `整理の設定の読み上げの名前は見出しだけ・説明は aria-describedby（${nm.name}）`);
+      if (vs0) await pg.setViewportSize(vs0);
       const reset = await pg.textContent('#talkReset');
       check(!/元に戻す/.test(reset) && /最初/.test(reset), `設定の「元に戻す」は「やめる」と区別できる言葉にする（${reset}。v54 の点検 重さ3）`);
     }
