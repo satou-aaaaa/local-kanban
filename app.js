@@ -77,6 +77,7 @@
 <dialog id="talkSet" class="lk" aria-labelledby="talkSetTtl">
   <form method="dialog" id="talkSetForm">
     <h3 id="talkSetTtl">🎤と会話・AI の設定</h3>
+    <label class="chk tidy"><input type="checkbox" name="tidy" aria-describedby="tidyHelp"> ポチがボードを自動で整理する</label><small id="tidyHelp" class="tidyhelp">話し始めたときに、期限すぎを今やるへ・今やるが3枚を超えたら急ぎでないものを1日2枚まで次にやるへ・Claude ができそうなものは Claude へ。「戻す」で戻せる</small>
     <label>名前</label><input name="name" maxlength="20" required>
     <label>性格と話し方（AI への指示）</label><textarea name="persona" maxlength="600"></textarea>
     <label>アイコン</label>
@@ -85,7 +86,6 @@
     <label>声（この端末の中の声だけ。ネット経由の声は出しません）</label><select name="voice"></select>
     <div class="vtune"><label>話す速さ <input name="rate" type="range" min="0.7" max="1.5" step="0.05"></label><label>声の高さ <input name="pitch" type="range" min="0.7" max="1.5" step="0.05"></label><button type="button" id="voiceTry">試しに聞く</button></div>
     <label>返事のしかた</label><select name="reply"><option value="match">声で話したら声で、打ったら文字で（おすすめ）</option><option value="voice">打っても声で返す</option><option value="text">いつも文字だけ（声を出さない）</option></select>
-    <label class="chk"><input type="checkbox" name="tidy"> 話し始めたら、ポチがボードを自分で整理して報告する（期限すぎを今やるへ・今やるが3枚を超えたら急ぎでないものを1日2枚まで次にやるへ・Claude ができそうなものは Claude へ。「戻す」で戻せる）</label>
     <label class="chk"><input type="checkbox" name="bargeIn"> 話の途中で割り込める（話している間だけマイクの音の大きさを端末の中で見る）</label>
     <label>話し終わりの待ち時間（入れた AI の耳のとき）</label><select name="endWait"><option value="normal">ふつう（0.7秒）</option><option value="slow">ゆっくり（1.2秒。間をとって話す人向け）</option></select>
     <label class="chk"><input type="checkbox" name="cue"> 聞き始め「ポン」・聞き終わり「ポロン」の音と短い振動（音は端末の中で作ります）</label>
