@@ -245,3 +245,4 @@ html:root{scroll-padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
 @media (prefers-reduced-motion:reduce){#lkPochi{transition:none}}
 /* 設定の窓の中でキーで送ったときも、下の固定の帯（約60px）の下に隠れないよう余白を見込む（10/28 の定期点検・WCAG 2.4.11） */
 #talkSet{scroll-padding-bottom:84px}
+#lkStatus.morning{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px} /* 朝のまとめ（v58）：押すといちばん上のカードが開く */
