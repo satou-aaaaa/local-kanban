@@ -2408,16 +2408,17 @@ try {
     }
   }
   await phone.screenshot({ path: resolve(OUT, 'phone.png'), fullPage: true });
+  const phone0 = phone;
   // 10/28 の定期点検（重さ3）：スマホでは左下のポチがカードの題の1文字目と ⋯ を隠していた。画面の端からのぞかせ、見える所はカードの外の余白だけ
-  {
+  for (const [phone, tag] of [[phone0, 'スマホ'], [page, 'PC']]) {
     await phone.waitForSelector('#lkPochi svg', { timeout: 10000 }).catch(() => {});
     const pv = await phone.evaluate(() => { const p = document.getElementById('lkPochi'); if (!p || p.hidden) return null; const r = p.getBoundingClientRect(); const vl = Math.max(0, r.left), vr = Math.min(innerWidth, r.right); const cards = [...document.querySelectorAll('.card')].map((c) => c.getBoundingClientRect()).filter((c) => c.width); return { w: Math.round(vr - vl), right: Math.round(vr), cardL: Math.round(Math.min(...cards.map((c) => c.left))) }; });
     if (pv) {
-      check(pv.right <= pv.cardL, `スマホの隅のポチはカードに重ならない（見える右端 ${pv.right}px・カードの左端 ${pv.cardL}px）`);
-      check(pv.w >= 24, `スマホの隅のポチの見えて押せる幅が 24px 以上（${pv.w}px。WCAG 2.5.8）`);
+      check(pv.right <= pv.cardL, `${tag}の隅のポチはカードに重ならない（見える右端 ${pv.right}px・カードの左端 ${pv.cardL}px）`);
+      check(pv.w >= 24, `${tag}の隅のポチの見えて押せる幅が 24px 以上（${pv.w}px。WCAG 2.5.8）`);
       const full = await phone.evaluate(async () => { const p = document.getElementById('lkPochi'); p.classList.add('hop'); await new Promise((f) => setTimeout(f, 400)); const l = p.getBoundingClientRect().left; p.classList.remove('hop'); return Math.round(l); });
-      check(full >= 0, `跳ねるときはポチが画面の中に全部出る（左端 ${full}px）`);
-    } else check(false, 'スマホの隅のポチが出ていない');
+      check(full >= 0, `${tag}：跳ねるときはポチが画面の中に全部出る（左端 ${full}px）`);
+    } else check(false, `${tag}の隅のポチが出ていない`);
   }
   // ボード v64「まとめて選ぶ」のあいだ（body.selecting）は、下に固定の帯が出るので隅のポチを出さない（帯の下に隠れて重なる。v50）
   {
