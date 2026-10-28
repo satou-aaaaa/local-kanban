@@ -173,7 +173,7 @@
   // うまくいった知らせ（ok・ふつう）は少しだけ出して消す。困ったとき（warn・err）だけ残す（ボードの「最新（時刻に受信）」と同じことを言わない。v42 の点検）
   let statusT = 0;
   // うまくいった知らせ（ok）は ✓ の印だけ見せる。文は読み上げ用に隠して残し、指を置くと出る（features 12。NN/g「状態を見せる」は困ったときに文で）
-  function setStatus(msg, kind = '') { const s = $('#lkStatus'); s.title = ''; s.dataset.msg = msg; if (kind === 'ok') { s.innerHTML = '<span aria-hidden="true">✓</span><span class="lk-sr"></span>'; s.lastChild.textContent = msg; s.title = msg; } else s.textContent = msg; s.className = kind; clearTimeout(statusT); if (kind !== 'warn' && kind !== 'err') statusT = setTimeout(() => { if (s.dataset.msg === msg) s.classList.add('gone'); }, 6000); }
+  function setStatus(msg, kind = '') { const s = $('#lkStatus'); s.title = ''; s.dataset.msg = msg; if (kind === 'ok') { s.innerHTML = '<span aria-hidden="true">✓</span><span class="lk-sr"></span>'; s.lastChild.textContent = msg; s.title = msg; } else s.textContent = msg; s.className = kind; clearTimeout(statusT); if (kind !== 'warn' && kind !== 'err' && kind !== 'morning') statusT = setTimeout(() => { if (s.dataset.msg === msg) s.classList.add('gone'); }, 6000); }
   L.onStatus(setStatus);
 
   // ---------- つないだあと ----------
@@ -1023,11 +1023,62 @@
       (navigator.serviceWorker?.ready || Promise.reject()).then(r => r.showNotification(n.head, opt)).catch(() => { try { new Notification(n.head, opt); } catch {} });
     }
   }
+  // ---------- 朝のまとめ（2026-10-29：claude.ai の「朝の通知」の定期実行の代わり。AI を使わず、アプリが自分で数える） ----------
+  // 数え方は前の定期実行と同じ：消した・済み・保留・予定待ち以外で、答えていない確認がある／担当が自分で期限切れ／担当が自分で「今やる」。
+  // 昨日（日本の日付）済んだものも数える（担当が agent なら AI、ほかは自分）。日本時間の 7 時を過ぎて、その日初めて数えたときに1回だけ出す
+  // （開いていれば 7 時に、閉じていれば次に開いたときに）。知らせを入にしていれば端末の通知でも出す。どちらも 0 件なら何も出さない
+  function morningText(cs, nowMs = Date.now()) {
+    const jst = ms => new Date(ms + 9 * 3600e3).toISOString().slice(0, 10);
+    const day = jst(nowMs), yday = jst(nowMs - 864e5);
+    const live = (cs || []).filter(c => c && !c.deleted && !['done', 'hold', 'wait'].includes(c.lane));
+    const ask = c => !!c.decision && !c.answer;
+    const late = c => c.owner !== 'agent' && !!c.due && c.due < day;
+    const mine = live.filter(c => ask(c) || late(c) || (c.owner !== 'agent' && c.lane === 'now'));
+    const top = [...mine].sort((a, b) => (a.lane === 'now' ? 0 : 1) - (b.lane === 'now' ? 0 : 1) || (a.order || 0) - (b.order || 0))[0];
+    const done = (cs || []).filter(c => c && !c.deleted && c.lane === 'done' && c.done_at && jst(Date.parse(c.done_at)) === yday);
+    // 言葉はボードの「satouさんがやること」とそろえる（数え方も同じ）。画面の1行は短く、昨日の分は通知だけ（画面には「✓ 済み 昨日N」がある）
+    const lines = [], short = [];
+    if (mine.length) {
+      const t = String(top.title || ''), name = t.length > 24 ? t.slice(0, 24) + '…' : t;
+      lines.push(`おはようございます。satouさんがやることが ${mine.length} 件（答える ${mine.filter(ask).length}・期限切れ ${mine.filter(late).length}）。いちばん上は「${name}」です。`);
+      short.push(`おはようございます。やること ${mine.length} 件。いちばん上「${name}」（押すと開く）`);
+    }
+    if (done.length) {
+      const ai = done.filter(c => c.owner === 'agent').length;
+      lines.push(`昨日終わったこと：${done.length} 件（AI ${ai}・自分 ${done.length - ai}）。`);
+    }
+    return { day, lines, short: short[0] || '', top: top?.doc_id };
+  }
+  function morningTick(now = Date.now()) {
+    if (!L.ready || !Array.isArray(L.cards) || !L.cards.length) return;
+    const hour = new Date(now + 9 * 3600e3).getUTCHours();
+    const m = morningText(L.cards, now);
+    if (hour < 7 || ls.get('morning') === m.day) return;
+    ls.set('morning', m.day);
+    if (!m.lines.length) return;
+    // 画面の1行は押すまで残す（1日1回なので、6秒で消すと読み切れない。v58 の点検）。押すといちばん上のカードを開く
+    if (m.short) { setStatus(m.short, 'morning'); $('#lkStatus').dataset.card = m.top; }
+    if (notifyOn()) {
+      const opt = { body: m.lines.slice(1).join('\n') || ' ', tag: 'morning:' + m.day, icon: 'icon-192.png', badge: 'icon-192.png', data: { url: './', card: m.top } };
+      const head = m.lines[0] || m.lines[1];
+      (navigator.serviceWorker?.ready || Promise.reject()).then(r => r.showNotification(head, opt)).catch(() => { try { new Notification(head, opt); } catch {} });
+    }
+  }
+  $('#lkStatus').addEventListener('click', e => {
+    const s = e.currentTarget;
+    if (!s.classList.contains('morning')) return;
+    const id = s.dataset.card; delete s.dataset.card; s.className = 'gone';
+    if (id) openCard(id);
+  });
+  LK.morning = morningText; LK.morningTick = morningTick; // qa/run.mjs が数え方と出し方を確かめる
+  setInterval(() => { try { morningTick(); } catch {} }, 10 * 60e3);
+
   window.addEventListener('lk:connected', () => {
     drawNotify();
     window.claude.use('db').then(db => { let first = true; db.collection('cards').onSnapshot(() => {
       scanNotify(L.cards, first && !ls.get('notified')); first = false;
       try { pochiTick(); } catch {}
+      try { morningTick(); } catch {}
       // インストールしたアプリのアイコンに数を出す（Badging API。対応していない端末では何もしない）。
       // ボードに「返事が来た」の印（repliedToYou・ボード版44）があれば、「返事あり＋答える」の枚数（ボード版45）。無い古いボードでは「今やる」の枚数
       const ask = c => !c.deleted && c.decision && !c.answer && !['done', 'hold', 'wait'].includes(c.lane);

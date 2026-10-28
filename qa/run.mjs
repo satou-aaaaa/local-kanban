@@ -195,6 +195,7 @@ const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath
     const c = await open(o);
     await c.addInitScript(() => {
       try { if (!localStorage.getItem('lk.slim')) localStorage.setItem('lk.slim', '1'); } catch { /* なくてよい */ } // 「減らして固める」の1回だけの知らせは、それを見る検査だけで出す
+      try { if (!localStorage.getItem('lk.morning')) localStorage.setItem('lk.morning', JSON.stringify(new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10))); } catch { /* なくてよい */ } // 朝のまとめも、それを見る検査だけで出す（検査の時刻で状態の1行が変わらないように）
       for (const k of ['SpeechRecognition', 'webkitSpeechRecognition']) {
         const C = window[k];
         if (C) { C.available = async () => 'unavailable'; C.install = async () => false; }
@@ -525,6 +526,46 @@ try {
       check(await pg.waitForFunction(() => document.querySelector('dialog#detail')?.open, null, { timeout: 8000 }).then(() => true, () => false) && await pg.evaluate(() => !sessionStorage.getItem('lk.entry')), '開き直しても URL から来た操作をなくさない（開き直す前に取っておいた操作を、開いたあとに行う）');
       cardsText = null;
       await pg.evaluate(() => { localStorage.setItem('lk.notify', 'false'); localStorage.removeItem('lk.notified'); });
+      await pg.close();
+    }
+
+    // 朝のまとめ（2026-10-29：claude.ai の「朝の通知」の定期実行の代わり。AI を使わずアプリが数える）
+    {
+      const pg = await context.newPage();
+      pg.on('pageerror', (e) => errors.push(`pageerror(朝のまとめ): ${e.message}`));
+      await pg.goto(base); await ready(pg);
+      // 2026-10-29 8:00（日本時間）として数える
+      const now = Date.parse('2026-10-28T23:00:00Z');
+      const cs = [
+        { doc_id: 'm1', title: '答える確認', owner: 'you', lane: 'next', order: 2, decision: { question: 'q', options: [{ label: 'a' }, { label: 'b' }] } },
+        { doc_id: 'm2', title: '期限切れ', owner: 'you', lane: 'next', due: '2026-10-28' },
+        { doc_id: 'm3', title: 'いちばん上の今やる', owner: 'you', lane: 'now', order: 1 },
+        { doc_id: 'm4', title: 'AI の今やる（数えない）', owner: 'agent', lane: 'now' },
+        { doc_id: 'm5', title: '予定待ち（数えない）', owner: 'you', lane: 'wait', due: '2026-10-01' },
+        { doc_id: 'm6', title: '消した（数えない）', owner: 'you', lane: 'now', deleted: true },
+        { doc_id: 'm7', title: '昨日 AI', owner: 'agent', lane: 'done', done_at: '2026-10-28T03:00:00Z' },
+        { doc_id: 'm8', title: '昨日 自分', owner: 'you', lane: 'done', done_at: '2026-10-28T14:59:00Z' },
+        { doc_id: 'm9', title: '今日済み（数えない）', owner: 'you', lane: 'done', done_at: '2026-10-28T15:01:00Z' },
+      ];
+      const m = await pg.evaluate(([cs, now]) => LK.morning(cs, now), [cs, now]);
+      check(m.day === '2026-10-29' && m.lines.length === 2 && /satouさんがやることが 3 件（答える 1・期限切れ 1）/.test(m.lines[0]) && /やること 3 件。いちばん上「いちばん上の今やる」/.test(m.short) && /「いちばん上の今やる」/.test(m.lines[0]) && m.top === 'm3', `朝のまとめで satouさんの番を数える（${JSON.stringify(m)}）`);
+      check(/昨日終わったこと：2 件（AI 1・自分 1）/.test(m.lines[1]) && !/昨日/.test(m.short), `昨日（日本の日付）済んだものを AI と自分に分けて数える（${m.lines[1]}）`);
+      const none = await pg.evaluate(([now]) => LK.morning([{ doc_id: 'x', title: 'x', owner: 'agent', lane: 'agent' }], now), [now]);
+      check(none.lines.length === 0, 'どちらも 0 件なら何も出さない');
+      // 1日1回だけ出す（日付を覚える）。日本時間の 7 時より前は出さない
+      const tick = (ms) => pg.evaluate((ms) => { localStorage.removeItem('lk.morning'); LK.morningTick(ms); return [localStorage.getItem('lk.morning'), document.querySelector('#lkStatus').textContent]; }, ms);
+      const [early] = await tick(Date.parse('2026-10-28T21:30:00Z')); // 6:30
+      check(early === null, `日本時間の7時より前は朝のまとめを出さない（${early}）`);
+      const [day, text] = await tick(now);
+      check(day === '"2026-10-29"' && /おはようございます。やること \d+ 件/.test(text), `7時を過ぎたら朝のまとめを状態の1行に出し、日付を覚える（${day}｜${text}）`);
+      await pg.waitForTimeout(6500);
+      check(await pg.$eval('#lkStatus', (e) => e.classList.contains('morning') && !e.classList.contains('gone')), '朝のまとめは6秒で消さない（押すまで残す）');
+      await pg.click('#lkStatus');
+      check(await pg.waitForFunction(() => document.querySelector('dialog#detail')?.open, null, { timeout: 5000 }).then(() => true, () => false) && await pg.$eval('#lkStatus', (e) => e.classList.contains('gone')), '朝のまとめを押すと、いちばん上のカードが開いて1行は消える');
+      await pg.keyboard.press('Escape');
+      await pg.evaluate(() => { document.querySelector('#lkStatus').textContent = ''; });
+      await pg.evaluate((ms) => LK.morningTick(ms), now);
+      check(await pg.textContent('#lkStatus') === '', '同じ日に二度は出さない');
       await pg.close();
     }
 
@@ -2455,6 +2496,13 @@ try {
         let why = '';
         try {
           // ボード v59 から、答え待ちでないカードの下は「閉じる」の代わりに「✓ 済み」。下の「閉じる」は確認のカードで見る
+          // ボード v74 から、スマホの詳細は ✕ だけで閉じる（下の「閉じる」を外した）。ボードに下の「閉じる」が無いスマホ幅では見ない
+          if (how === '下の「閉じる」' && w <= 520) {
+            const opened = await openC('見本の確認');
+            const has = opened && await pg.locator('#detail button:visible', { hasText: /^閉じる$/ }).count();
+            await shut(); await pg.waitForTimeout(150);
+            if (opened && !has) continue;
+          }
           if (!(await openC(how === '下の「閉じる」' ? '見本の確認' : '見本のカード（今やる）'))) why = '詳細が開かない';
           else {
             await act(); await pg.waitForTimeout(250);
