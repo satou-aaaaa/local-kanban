@@ -2,42 +2,35 @@
 
 データを外に置かないカンバンの PWA（GitHub Pages で公開）。使い方・鍵の作り方・安全のための決まりは README.md。
 
-- **画面は claude.ai のボードそのもの**：ボードの HTML（データ側の `board-src/kanban.html`＝マージ済みの元。無い・部品が足りないときは `board/index.html`＝毎朝の写し）をつないだあとに読み、`boot.js` が画面にする。ボードの HTML はこのリポジトリに入れない（公開リポジトリ）。データの読み書きは `shim.js`（ボードの `window.claude.use("db")` の代わり）、アプリだけの機能は `app.js`・`app.css`。ボードの機能・見た目はここで作り直さない（ボードを直せばアプリにも入る）。声と命令欄の文の読み取りは `voice.js`（ほかのアプリからも使う。文型を変えたら qa/run.mjs の「声の文型」も直す）。会話モードは `talk.js`（💬・🎤・Ctrl+K の入口は一つ＝会話の欄。命令もそこで打つ・話す。命令だけの欄を別に作らない。ポチは聞き返さずにやって一言で知らせ、「戻す」で戻せる形にする：確認を足さない。ポチが動かしたものは `LK.as('ポチ', …)` で包んで履歴に残す）。気持ちで話し分ける声は `koe.js`（モデルはボタンを押したときだけ取る。クレジットを消さない）。スマホ向けの端末の中の AI は `localai.js`（耳＝Whisper・Silero の計算は `ear-worker.js`（画面とは別の Worker）でする。画面と同じところで動かすと遅いスマホで画面が固まる。QA が画面の止まった時間を見る。同梱の部品は `vendor/`、版を上げる手順は `vendor/README.md`）。声・会話・AI は端末の中だけで動かし、外へ通信する部品を足さない（`index.html` の CSP の connect-src は、自分・GitHub の API・モデルの置き場だけ。広げない。worker-src は自分と blob:（wllama が中で作る worker）だけ。QA が見る）。モデルはボタンを押したときだけ取る。QR 表示だけ qrcode.js＝qrcode-generator 1.4.4、MIT を同梱。`sw.js`・`manifest.webmanifest`・アイコンは手書き（`sw.js` はカンバンの画面に COOP・COEP credentialless を付けて crossOriginIsolated にする。worker として読む vendor/ の部品と自分の .js にも COEP を付ける（付けないと ONNX Runtime のスレッドが止められ、耳の準備が戻らない。QA が本物の wasm で見る）。`VENDOR_NOW` は vendor/ のフォルダと同じにする。QA が見る）。「この端末の診断」はデータ側の `local-board/diagnostics/` にだけ書き、会話の中身・カードを入れない。
-- **データ・鍵（トークン）・データのリポジトリの名前を、このリポジトリに入れない**（公開リポジトリ）。検査の見本データ（`qa/cards.sample.json`）も作り話だけにする。
-- `index.html`・`boot.js`・`shim.js`・`app.js`・`app.css`・`bg/`・`voice.js`・`koe.js`・`talk.js`・`localai.js`・`ear-worker.js`・`vendor/` を直したら、データ側のリポジトリの `local-board/` の同じ名前のファイル（`index.html` は `kanban.html`）も同じ中身にする。
-- カードの形を変えるときは、データ側の `local-board/cards.schema.json` と `tools/local_board.py` も合わせる。ポチが覚えたこと（`pochi-memory.json`）の形も同じく `local-board/pochi-memory.schema.json` と合わせる。
-- `notes/` はメモ（Notion の代わり）の PWA。カンバンと同じ鍵（localStorage の `lk.gh`）とフォルダ（IndexedDB `local-board` の `root`）を使う。データはデータ側のリポジトリの `notes/`（形は向こうの `notes/README.md`）。公開の印を付けたページだけを公開用リポジトリ satou-aaaaa/articles に書き出す。
-- `notes/index.html` の `==md-begin==`〜`==md-end==`（Markdown 表示）を直したら、articles の `tools/md.js` にも写す。
+**作業を始める前に `docs/agents-detail.md`（決まりの全文）を必ず読む。** ここには毎回の会話で読まれる要点だけを置く（2026-10-28、トークン節約のため全文を移した）。
+
+## 要点
+
+- 画面は claude.ai のボードそのもの（`boot.js` がボードの HTML を画面にする）。ボードの機能・見た目はここで作り直さない。ボードの HTML はこのリポジトリに入れない。
+- 公開リポジトリ：データ・鍵（トークン）・データのリポジトリの名前を入れない。見本データも作り話だけ。
+- 声・会話・AI は端末の中だけで動かし、外へ通信する部品を足さない（CSP の connect-src・worker-src を広げない。QA が見る）。モデルはボタンを押したときだけ取る。
+- 画面に出るファイルを直したら、データ側の `local-board/` の同じ名前のファイルも同じ中身にする。カードやポチの記憶の形を変えたらデータ側の schema と `tools/local_board.py` も合わせる。
+- `notes/` の Markdown 表示（`==md-begin==`〜`==md-end==`）を直したら articles の `tools/md.js` にも写す。
+- 機能を足す・直すたびに `qa/run.mjs` に検査も足す。ボードやアプリの部品の名前を変えたら `qa/` とにせもののボードも直す（一覧は詳しい決まり）。
 
 ## push する前の確認
 
 ```bash
-bash scripts/setup.sh   # 最初に一度（Node と qa/ の部品・ブラウザ。クラウドのセッションでは自動で動く）
-node qa/run.mjs        # にせもののボード（qa/board.fixture.html）と見本データで：壁紙・設定の同期・保存・ぶつかったとき・知らせ・鍵の送り先・オフライン・スマホ幅（390px）
-LK_BOARD=<board-src/kanban.html> node qa/run.mjs   # 本物のボードで（写しはこのリポジトリに入れない）
-node qa/check-uiux.mjs   # 使いやすさの数字（名前・押す所・はみ出し・字・明るさの差・文字の量）。本物のボードでも LK_BOARD=… で。良くなったら --update-baseline
-node qa/check-review.mjs origin/main   # 画面を変えたら：版（sw.js の CACHE）を上げ、reviews/v<版>.md に2役の点検を書いたか
+bash scripts/setup.sh   # 最初に一度（クラウドのセッションでは自動で動く）
+node qa/run.mjs        # にせもののボードと見本データで全体を検査
+LK_BOARD=<board-src/kanban.html> node qa/run.mjs   # 本物のボードで
+node qa/check-uiux.mjs   # 使いやすさの数字
+node qa/check-review.mjs origin/main   # 画面を変えたら：版を上げ、reviews/v<版>.md に2役の点検を書いたか
 ```
 
-- 画面に出るファイルを変えたら、`reviews/README.md` の手順で点検する（2026-10-21 satouさん「LAST TELL と同じようなチェック機構を」「定期的なチェックも」）。2つの役（使う人の目線＝satouさん役・UI/UX 専門家）を別々の Agent が画面写真で見て、重さ 3・4 は公開前に直す。記録が無いと CI の QA が赤になる。毎日の定期の点検も同じ手順（`reviews/daily-<日付>.md`）。
-
-- CI は Playwright の headless shell で回る（本物の Chrome より部品が少なく、本物の音声認識を呼ぶとタブごと落ちる）。CI だけ「Target crashed」で落ちたら、`PW_CHROMIUM` に headless shell（`chromium_headless_shell-*/…/headless_shell`）を指して再現する。端末の機能はにせものに替えて調べる（`qa/run.mjs` の先頭で全コンテキストに入れている）。
-- app.js が当てにするボードの部品（`move`・`remove`・`say`・`render`・`openDetail`・`cards`・`WPS`・`#micBtn`・`#voice`・`#vstatus`・`.hbtns`・`#board` の `lane-<列>`・`#jump`・`#compose-btn`・`#toast-msg`・`#toast-undo`・`#wall`・`dialog#detail`。あれば使う：`repliedToYou`＝返事が来た印・`needsYou`＝satouさんの番（v53 から担当の答え待ちも入る）。アプリのアイコンの数と知らせにする）は `qa/board.fixture.html` に同じ名前で置く。増やしたらにせものにも、データ側の `tools/local_board.py` の相性の検査にも足す。
-- アプリの部品（`#voiceTry`・`#lkMenu`・`#lkIntro`・`#lkStatus`・`#talkWhy`・`#talkBtn`・`#talkDlg`・`#talkIn`・`#talkMic`・`#talkSetForm`・`#aiGet`・`#aiBrain`・`#talkAiGet`・`#lkPick`・`#lkUnsent`・`#memList`・`#memAll`・`#voiceTry`・`#koeGet`・`#koeBox`・`#earGet`・`#earBox`・`#lkPochi`・`#lkHand`・`#lkPaste`・`#lkPasteIn`・`#lkPasteGo`）を変えたら `qa/run.mjs` も合わせて直す。
-- 「🤖 AI に渡す」（app.js。ボードの詳細の「くわしく」details.dmore の中に置く。毎日は使わないので押す所を増やさない）：渡すのは人が押したときだけ（共有かコピー。通信を足さない）。渡す文に鍵・データのリポジトリ名・ポチの会話・リンクを入れず、メモと記録の電話・メール・住所らしきものは伏せ字にする。返事は ```json の `kanban_reply` だけを読み、変わる所を見せてから `LK.as('AI', …)` で取り込む（「戻す」で戻る）。形を変えたら qa/run.mjs の「AI に渡す」も直す。
-- ボードに壁紙が足されたら写真を `bg/`・`bg/t/` に置く（本物のボードで回す QA が、ボードの `WPS` の写真がすべてあるかを見る）。
-- 機能を足す・直すたびに `qa/run.mjs` に検査も足す（2026-10-20 satouさん「テストは可能な限り追加」「基本的なユースケースはテストコードでカバー」）。基本の使い方（開く・4通りで閉じる・足す・移す・済み・コメント・答える・絞る・探す・見かた）は、本物のボードの写しで回すときに「基本」の項目がアプリの画面で3つの幅（1366・1280・390）で通す。ボード側の同じ検査は データ側の `board-src/qa/check-basics.mjs`。
-- 速さ：直したら `LK_BOARD=<ボード> node qa/speed.mjs` で、アプリの中のボードを 150 枚・スマホ相当（CPU 4倍遅く）で測る（詳細を開く 200ms・描き直し 100ms 以下）。
-- 切り替えボタン（選んだものに色が付くボタン）は、見た目のクラス `.on` と `aria-pressed` を必ず一緒に変える。QA が見えている `aria-pressed` の付いたボタンを全部押して確かめる（2026-10-19 claude.ai のボードで印が変わらない不具合があった）。閉じた画面の中のもの（会話の欄の `#talkMic`）は、会話の検査で印を見る。
+画面に出るファイルを変えたら `reviews/README.md` の手順で点検する。速さは `qa/speed.mjs`。CI だけ落ちるときの調べ方は詳しい決まり。
 
 ## 公開
 
-- GitHub Pages は `main` のルート（`/`）を公開する。マージすれば反映される。
-- PR の QA が ✅ になると `automerge.yml` が自動でマージする。止めたいときは下書きにするか、ラベル「自動マージしない」を付ける。
+- GitHub Pages は `main` のルート（`/`）を公開する。PR の QA が ✅ になると `automerge.yml` が自動でマージする。止めたいときは下書きにするか、ラベル「自動マージしない」を付ける。
 
 ## 共通のきまり
 
 - PR の作り方・マージの仕方は satou-aaaaa/shared-workflows の `routines/pr.md`、全体のきまりは `routines/common.md` に従う。
-- CI の部品（CI失敗Issue・死活監視・Lighthouse・ブランチ片付け・自動マージ）は shared-workflows の共通部品を呼ぶ。
-  リポジトリ側の .github/workflows には呼び出しと設定値だけを書く。
-- Claude 以外の AI・人が作業するときは、shared-workflows の `routines/tool-map.md`（道具の置き換え）と `routines/without-claude.md` を読む。
+- CI の部品は shared-workflows の共通部品を呼ぶ。リポジトリ側の .github/workflows には呼び出しと設定値だけを書く。
+- Claude 以外の AI・人が作業するときは、shared-workflows の `routines/tool-map.md` と `routines/without-claude.md` を読む。
