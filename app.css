@@ -75,6 +75,10 @@ dialog.lk .help{font-size:.8rem;color:var(--muted)}
 #talkAiProg:not([hidden]){display:block;width:100%;margin-top:6px}
 #talkLog{max-height:40vh;overflow:auto;margin:12px 0;display:flex;flex-direction:column;gap:6px}
 #talkLog .l{padding:6px 10px;border-radius:10px;max-width:90%;white-space:pre-wrap;word-break:break-word}
+/* ポチの返事の中のカードの題：押すと詳細を開く（文の中のリンクと同じ見た目。新機能16） */
+#talkLog .l .nw{white-space:nowrap}
+#talkLog .l .ref{all:unset;cursor:pointer;padding:4px 0;white-space:normal;color:inherit;text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px}
+#talkLog .l .ref:focus-visible{outline:2px solid var(--agent,#3b82f6);outline-offset:2px;border-radius:3px}
 #talkLog .ai{background:var(--lane);align-self:flex-start}
 #talkLog .you{background:var(--agent);color:var(--bg);align-self:flex-end}
 #talkLog .sys{color:var(--muted);font-size:.8rem;align-self:center}

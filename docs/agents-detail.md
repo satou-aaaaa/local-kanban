@@ -18,7 +18,7 @@ bash scripts/setup.sh   # 最初に一度（Node と qa/ の部品・ブラウ�
 node qa/run.mjs        # にせもののボード（qa/board.fixture.html）と見本データで：壁紙・設定の同期・保存・ぶつかったとき・知らせ・鍵の送り先・オフライン・スマホ幅（390px）
 LK_BOARD=<board-src/kanban.html> node qa/run.mjs   # 本物のボードで（写しはこのリポジトリに入れない）
 node qa/check-uiux.mjs   # 使いやすさの数字（名前・押す所・はみ出し・字・明るさの差・文字の量）。本物のボードでも LK_BOARD=… で。良くなったら --update-baseline
-node qa/check-review.mjs origin/main   # 画面を変えたら：版（sw.js の CACHE）を上げ、reviews/v<版>.md に2役の点検を書いたか
+node qa/check-review.mjs origin/main   # 画面を変えたら：版（sw.js の CACHE）を上げ、reviews/v<版>.md に2役の点検を書いたか。版は今の main より大きいこと（並行した PR と同じ版を取ると、先にマージされた側とぶつかって止まる。落ちたら main を取り込み次の空き版へ付け直す）
 ```
 
 - 画面に出るファイルを変えたら、`reviews/README.md` の手順で点検する（2026-10-21 satouさん「LAST TELL と同じようなチェック機構を」「定期的なチェックも」）。2つの役（使う人の目線＝satouさん役・UI/UX 専門家）を別々の Agent が画面写真で見て、重さ 3・4 は公開前に直す。記録が無いと CI の QA が赤になる。毎日の定期の点検も同じ手順（`reviews/daily-<日付>.md`）。

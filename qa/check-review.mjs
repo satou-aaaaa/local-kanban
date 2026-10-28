@@ -3,6 +3,8 @@
 // 使い方: node qa/check-review.mjs <比べる元のコミット（PR の base）>
 // 見ること（画面のファイルが変わったときだけ）:
 //   - sw.js の CACHE の版（kanban-v<番号>）が元より大きい
+//   - その版が今の main（origin/main。先に git fetch する）の版よりも大きい（2026-10-29 Issue #87：並行した PR #81・#82 が同じ v57 を取り、
+//     元とだけ比べていたので両方通り、#82 が main とぶつかって1日半止まった。比べる main は LK_MAIN_REF で替えられる）
 //   - reviews/v<番号>.md がある
 //   - その中に「## 使う人の目線」「## UI/UX 専門家」「## 交代の視点」と、自動の検査の結果の行（「自動：」）・見せた写真の行（「写真：」）がある
 //   - 押せる部品の数の基準を上げたら「## 増やした押す所」がある（画面のファイルが変わっていなくても）
@@ -13,7 +15,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const root = process.env.LK_ROOT ? resolve(process.env.LK_ROOT) : resolve(dirname(fileURLToPath(import.meta.url)), '..'); // LK_ROOT は qa/check-review.test.mjs が仮のリポジトリで試すとき
 const baseRef = process.argv[2];
 if (!baseRef) { console.error('比べる元のコミットを渡してください（例: origin/main）'); process.exit(2); }
 const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
@@ -40,6 +42,14 @@ let before = ''; try { before = git('show', `${baseRef}:sw.js`); } catch { /* �
 const v0 = ver(before), v = ver(readFileSync(resolve(root, 'sw.js'), 'utf8'));
 ok(v > 0, 'sw.js に CACHE = \'kanban-v番号\' がある');
 ok(v > v0, `版の番号が上がっている（元 v${v0} → 今 v${v}。画面が変わったら sw.js の CACHE を上げる＝端末にも届く）`);
+// 今の main とも比べる（元より上でも、ほかの PR が先に同じ版でマージしていればぶつかる）。取れないとき（オフラインなど）は手元の origin/main で比べる
+const mainRef = process.env.LK_MAIN_REF || 'origin/main';
+if (!process.env.LK_MAIN_REF) { try { execFileSync('git', ['fetch', '-q', 'origin', '+refs/heads/main:refs/remotes/origin/main'], { cwd: root, stdio: 'ignore', timeout: 30000 }); } catch { /* 取れなくても手元のもので見る */ } }
+let onMain = null; try { onMain = git('show', `${mainRef}:sw.js`); } catch { /* main が無い（仮のリポジトリなど）ときは見ない */ }
+if (onMain != null) {
+  const vm = ver(onMain);
+  ok(v > vm, `版の番号が今の main（${mainRef} は v${vm}）より大きい（今 v${v}。同じなら、ほかの PR が先にその版でマージした：main を取り込み、v${vm + 1} に上げて reviews/v${vm + 1}.md に付け直す）`);
+}
 const rp = resolve(root, 'reviews', `v${v}.md`);
 const r = existsSync(rp) ? readFileSync(rp, 'utf8') : '';
 ok(!!r, `点検の記録 reviews/v${v}.md がある`);

@@ -42,6 +42,8 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: node qa/check-review.mjs "$BASE"
+      - name: 点検の記録の検査そのものを試す（同じ版を2つの PR が取ったら落ちるか。Issue #87）
+        run: node --test qa/check-review.test.mjs
       - name: 検査
         run: node qa/run.mjs --out qa-report
       - name: 使いやすさの数字（名前・押す所・はみ出し・字の大きさ・明るさの差・文字の量。基準は qa/uiux-baseline.json）
