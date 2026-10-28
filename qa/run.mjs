@@ -1027,6 +1027,42 @@ try {
     await pg.close();
   }
 
+  // A4. 会話の返事の中のカードの題を押すと、そのカードを開く（新機能16）。🎤・会話で足すときの日付は、ボードの足す欄と同じ決まりで読む（新機能15。ボードの parseWhen）
+  {
+    const { pg } = await talkPage({ heard: [], sr: false }, '会話 題を押す・日付で足す');
+    const q1 = (await askTitles(pg))[0];
+    await pg.click('#talkBtn');
+    await pg.waitForSelector(`#talkLog .l.ai .ref[aria-label="「${q1}」を開く"]`, { timeout: 8000 }).catch(() => {}); // 問いは2つ目の吹き出しに出る
+    const refs = await pg.evaluate(() => [...document.querySelectorAll('#talkLog .l.ai .ref')].map((b) => ({ t: b.textContent, n: b.getAttribute('aria-label'), tag: b.tagName })));
+    check(refs.some((r) => r.t === `「${q1}」` && r.n === `「${q1}」を開く` && r.tag === 'BUTTON'), `ポチの返事の中のカードの題は押せる（${JSON.stringify(refs.slice(0, 3))}）`);
+    const ref = await pg.$(`#talkLog .l.ai .ref[aria-label="「${q1}」を開く"]`);
+    if (ref) {
+      await ref.click();
+      await pg.waitForFunction(() => document.querySelector('dialog#detail')?.open, null, { timeout: 5000 }).catch(() => {});
+      const st = await pg.evaluate(() => ({ detail: !!document.querySelector('dialog#detail')?.open, text: document.querySelector('dialog#detail')?.textContent || '', talk: !!document.getElementById('talkDlg')?.open }));
+      check(st.detail && st.text.includes(q1.slice(0, 10)) && st.talk, `題を押すと、そのカードの詳細が会話の上に開く（会話は開いたまま：${JSON.stringify({ detail: st.detail, talk: st.talk })}）`);
+      await pg.keyboard.press('Escape'); await pg.waitForTimeout(300);
+      const back = await pg.evaluate(() => ({ detail: !!document.querySelector('dialog#detail')?.open, talk: !!document.getElementById('talkDlg')?.open }));
+      check(!back.detail && back.talk, `詳細を閉じると会話に戻る（${JSON.stringify(back)}）`);
+    }
+    // 日付つきで足す：「明日 15時 面接を足して」→ 題は「面接」、予定は明日 15:00。「金曜までに 書類を出すを足して」→ 期限は金曜、題は「書類を出す」
+    const d1 = new Date(); d1.setDate(d1.getDate() + 1);
+    const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const fri = new Date(); fri.setDate(fri.getDate() + ((5 - fri.getDay() + 7) % 7));
+    await pg.fill('#talkIn', '明日 15時 面接を足して'); await pg.press('#talkIn', 'Enter');
+    await waitCards((cs) => cs.some((c) => c.title === '面接' && String(c.event_start || '').startsWith(ymd(d1) + 'T15:00') && !c.due), '会話で「明日 15時 面接を足して」：題は「面接」、予定は明日 15:00');
+    const said = await pg.evaluate(() => [...document.querySelectorAll('#talkLog .l.ai')].pop()?.textContent || '');
+    check(/「面接」/.test(said) && /予定 \d+\/\d+（.）\s?15:00/.test(said), `足したときの返事で、読んだ日時を言う（${said.slice(0, 60)}）`);
+    await pg.waitForSelector('#talkLog .l.ai .ref[aria-label="「面接」を開く"]', { timeout: 4000 }).catch(() => {});
+    check(await pg.$('#talkLog .l.ai .ref[aria-label="「面接」を開く"]') != null, '足したばかりのカードの題も、返事の中で押せる（保存が返ってから付ける）');
+    await pg.fill('#talkIn', '金曜までに 書類を出すを足して'); await pg.press('#talkIn', 'Enter');
+    await waitCards((cs) => cs.some((c) => c.title === '書類を出す' && c.due === ymd(fri) && !c.event_start), `会話で「金曜までに 書類を出すを足して」：題は「書類を出す」、期限は金曜（${ymd(fri)}）`);
+    await pg.fill('#talkIn', '牛乳を買うを足して'); await pg.press('#talkIn', 'Enter');
+    await waitCards((cs) => cs.some((c) => c.title === '牛乳を買う' && !c.due && !c.event_start), '日付の無い文はそのまま足す（期限も予定も入れない）');
+    for (let i = 0; i < 3; i++) await pg.evaluate(() => LK.undo());
+    await pg.close();
+  }
+
   // B. 端末の中の AI（Prompt API）：JSON の命令でカードを動かす。消すのは本人が「消して」と言ったときだけ（聞き返さない）。AI に補足を渡さない
   {
     const { pg, outside } = await talkPage({
