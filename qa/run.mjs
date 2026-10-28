@@ -1109,9 +1109,23 @@ try {
     await pg.click('#lkMenu summary'); await pg.click('#lkMenu [data-m=aiset]');
     const listed = await pg.textContent('#memList');
     check(/ポテト/.test(listed) && /見本の豆知識/.test(listed), 'ポチが覚える：設定の画面に覚えたことの一覧を出す');
-    { // v54：設定の文が下の固定の帯で途中で切れて見えないよう、帯の上をぼかす（v53 の定期点検 重さ2）
-      const fade = await pg.evaluate(() => { const st = getComputedStyle(document.querySelector('#talkSetForm>.lk-actions:last-child'), '::before'); return { c: st.content, h: parseFloat(st.height) || 0, bg: st.backgroundImage }; });
-      check(fade.c !== 'none' && fade.h >= 24 && /gradient/.test(fade.bg), `設定の下の固定の帯の上をぼかして、文が下に続くと分かる（${JSON.stringify(fade)}）`);
+    { // 10/28 の定期点検（重さ3）：ぼかしだけでは「下に続く」と分からず、「返事のしかた」が帯の下に隠れていた。続きがあるあいだは帯に影と「▼ 下に続きます」を出し、いちばん下では消す
+      const vs1 = pg.viewportSize(); await pg.setViewportSize({ width: 390, height: 844 });
+      const cue = async () => pg.evaluate(() => { const d = document.getElementById('talkSet'), f = document.getElementById('talkSetForm'), bar = f.querySelector(':scope>.lk-actions:last-child'); const st = getComputedStyle(bar, '::before'); return { more: f.classList.contains('more'), c: st.content, sh: getComputedStyle(bar).boxShadow, top: d.scrollTop }; });
+      await pg.evaluate(() => { const d = document.getElementById('talkSet'); d.scrollTop = 0; d.dispatchEvent(new Event('scroll')); }); await pg.waitForTimeout(100);
+      const c0 = await cue();
+      check(c0.more && /下に続きます/.test(c0.c) && /rgba\(0, 0, 0, 0\.35\)/.test(c0.sh), `設定の窓：下に続きがあるあいだは、固定の帯に影と「▼ 下に続きます」を出す（${JSON.stringify(c0)}）`);
+      await pg.evaluate(() => { const d = document.getElementById('talkSet'); d.scrollTop = d.scrollHeight; d.dispatchEvent(new Event('scroll')); }); await pg.waitForTimeout(100);
+      const c1 = await cue();
+      check(!c1.more && c1.c === 'none', `設定の窓：いちばん下までスクロールしたら「▼ 下に続きます」を消す（${JSON.stringify(c1)}）`);
+      const rv = await pg.evaluate(() => { const s = document.querySelector('#talkSetForm [name=reply]'); s.focus(); const r = s.getBoundingClientRect(), bar = document.querySelector('#talkSetForm>.lk-actions:last-child').getBoundingClientRect(); return { b: Math.round(r.bottom), bar: Math.round(bar.top) }; });
+      check(rv.b <= rv.bar, `設定の窓：「返事のしかた」にフォーカスが来ると、下の固定の帯に隠れず見える（下端 ${rv.b}px・帯 ${rv.bar}px）`);
+      // 10/28 の定期点検（重さ3・WCAG 2.5.8）：アイコンは丸い点（約13px）でなく絵ごと押せる（44px 以上）・選んだ絵に印が見える
+      const ic = await pg.evaluate(() => [...document.querySelectorAll('#talkIcons label')].map((l) => { const r = l.getBoundingClientRect(), i = l.querySelector('input').getBoundingClientRect(); return { w: Math.round(Math.min(r.width, i.width)), h: Math.round(Math.min(r.height, i.height)), on: l.querySelector('input').checked, bd: getComputedStyle(l).borderTopColor }; }));
+      check(ic.length === 3 && ic.every((x) => x.w >= 44 && x.h >= 44), `設定のアイコンは絵ごと押せて、押す所が 44px 以上（${ic.map((x) => `${x.w}x${x.h}`).join('・')}）`);
+      const onB = ic.find((x) => x.on)?.bd, offB = ic.find((x) => !x.on)?.bd;
+      check(!!onB && onB !== offB && !/rgba\(0, 0, 0, 0\)/.test(onB), `設定のアイコン：選んだ絵に枠の印が付く（${onB} / ${offB}）`);
+      if (vs1) await pg.setViewportSize(vs1);
       // v56（10/26 定期点検 重さ3）：カードを動かす設定は、開いてすぐ下の固定の帯とぼかしに隠れず全部見える
       const vs0 = pg.viewportSize(); await pg.setViewportSize({ width: 390, height: 844 }); await pg.evaluate(() => document.querySelector('#talkSetForm').scrollTop = 0); await pg.waitForTimeout(150);
       const tv = await pg.evaluate(() => { let l = document.querySelector('#talkSetForm input[name=tidy]').closest('label').getBoundingClientRect(); const hl = document.getElementById('tidyHelp'); if (hl) { const r = hl.getBoundingClientRect(); l = { bottom: Math.max(l.bottom, r.bottom) }; } const bar = document.querySelector('#talkSetForm>.lk-actions:last-child').getBoundingClientRect(); return { bottom: Math.round(l.bottom), barTop: Math.round(bar.top) }; });
@@ -1666,7 +1680,7 @@ try {
     await pg.click('#talkSetBtn');
     check(await pg.evaluate(() => document.activeElement?.id === 'talkSetTtl'), '設定を開くと見出しにいる（名前の欄でキーボードが勝手に出ない。v42 の点検）');
     await pg.fill('#talkSetForm [name=name]', 'テスト名');
-    await pg.click('#talkSetForm [name=icon][value=kaku]');
+    await pg.click('#talkIcons label:nth-child(2) svg', { force: true }); // 絵を押して選ぶ（10/28 の点検）
     await pg.click('#talkSetForm button[value=ok]');
     check((await pg.textContent('#talkName')) === 'テスト名', 'キャラの設定：名前を変えると会話の画面に出る');
     check(await pg.evaluate(() => JSON.parse(localStorage.getItem('lk.talk')).icon === 'kaku'), 'キャラの設定：アイコンの選択を端末に保存した');
@@ -2394,6 +2408,18 @@ try {
     }
   }
   await phone.screenshot({ path: resolve(OUT, 'phone.png'), fullPage: true });
+  const phone0 = phone;
+  // 10/28 の定期点検（重さ3）：スマホでは左下のポチがカードの題の1文字目と ⋯ を隠していた。画面の端からのぞかせ、見える所はカードの外の余白だけ
+  for (const [phone, tag] of [[phone0, 'スマホ'], [page, 'PC']]) {
+    await phone.waitForSelector('#lkPochi svg', { timeout: 10000 }).catch(() => {});
+    const pv = await phone.evaluate(() => { const p = document.getElementById('lkPochi'); if (!p || p.hidden) return null; const r = p.getBoundingClientRect(); const vl = Math.max(0, r.left), vr = Math.min(innerWidth, r.right); const cards = [...document.querySelectorAll('.card')].map((c) => c.getBoundingClientRect()).filter((c) => c.width); return { w: Math.round(vr - vl), right: Math.round(vr), cardL: Math.round(Math.min(...cards.map((c) => c.left))) }; });
+    if (pv) {
+      check(pv.right <= pv.cardL, `${tag}の隅のポチはカードに重ならない（見える右端 ${pv.right}px・カードの左端 ${pv.cardL}px）`);
+      check(pv.w >= 24, `${tag}の隅のポチの見えて押せる幅が 24px 以上（${pv.w}px。WCAG 2.5.8）`);
+      const full = await phone.evaluate(async () => { const p = document.getElementById('lkPochi'); p.classList.add('hop'); await new Promise((f) => setTimeout(f, 400)); const l = p.getBoundingClientRect().left; p.classList.remove('hop'); return Math.round(l); });
+      check(full >= 0, `${tag}：跳ねるときはポチが画面の中に全部出る（左端 ${full}px）`);
+    } else check(false, `${tag}の隅のポチが出ていない`);
+  }
   // ボード v64「まとめて選ぶ」のあいだ（body.selecting）は、下に固定の帯が出るので隅のポチを出さない（帯の下に隠れて重なる。v50）
   {
     const st = await phone.evaluate(() => { const p = document.getElementById('lkPochi'); if (!p) return 'なし'; document.body.classList.add('selecting'); const d = getComputedStyle(p).display; document.body.classList.remove('selecting'); return d; });

@@ -649,6 +649,9 @@
   $('#talkEnd').onclick = () => { talk?.stop(); if ($('#talkDlg').open) $('#talkDlg').close(); };
   $('#talkDlg').addEventListener('cancel', () => talk?.stop());
   $('#talkForm').onsubmit = e => { e.preventDefault(); const t = $('#talkIn').value; $('#talkIn').value = ''; talk?.hear(t, { voice: false }); };
+  // 設定の窓に下の続きがあるあいだ、固定の帯の上に「▼ 下に続きます」と影を出す（10/28 の定期点検 重さ3。ぼかしだけでは続きが分からなかった）
+  function setMore() { const d = $('#talkSet'); $('#talkSetForm').classList.toggle('more', d.scrollTop + d.clientHeight < d.scrollHeight - 8); }
+  $('#talkSet').addEventListener('scroll', setMore, { passive: true }); addEventListener('resize', () => { if ($('#talkSet').open) setMore(); });
   function openTalkSet() {
     if (!window.Talk) { setStatus('会話の部品（talk.js）を読めませんでした。開き直してみてください。', 'err'); return; }
     const f = $('#talkSetForm'), t = talkSettings();
@@ -657,7 +660,7 @@
     const vs = (window.speechSynthesis?.getVoices() || []).filter(v => v.localService && /^ja/.test(v.lang));
     f.voice.innerHTML = '<option value="">おまかせ</option>' + vs.map(v => `<option ${v.name === t.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('') + (vs.length ? '' : '<option disabled>（この端末に日本語の声がありません）</option>');
     drawEar(); drawAi(); drawMem(); drawKoe();
-    $('#talkSet').showModal();
+    $('#talkSet').showModal(); setMore();
     // 開いたら名前の欄でなく見出しに（スマホでいきなりキーボードが出ないように。v42 の点検）
     const h = $('#talkSetTtl'); h.tabIndex = -1; h.focus();
   }
