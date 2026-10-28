@@ -7,6 +7,12 @@ on:
   workflow_run:
     workflows: ["QA", "Site watch", "Lighthouse", "Link check", "Secret scan", "Post-deploy check"]
     types: [completed]
+  # 見回り: GITHUB_TOKEN で起こした実行（自動マージが起こす Pages・main の QA など）は workflow_run を起こさないので、
+  # 6時間ごとに見張る名前の main の最新の実行を見て、Issue を立てる・閉じる（上の workflows: は1行で書く。
+  # carcassonne-research #83、shared-workflows #83）
+  schedule:
+    - cron: "29 */6 * * *"
+  workflow_dispatch:
 
 permissions:
   issues: write
