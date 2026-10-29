@@ -344,7 +344,8 @@
         // 「明日 15時 面接を足して」→ 題「面接」・予定 明日 15:00。「金曜までに書類」→ 期限。古いボードで parseWhen が無ければ題のまま
         let title = cmd.title, when = null;
         try { when = typeof window.parseWhen === 'function' ? window.parseWhen(title, new Date()) : null; } catch { when = null; }
-        if (when) title = when.title || title;
+        // 「明日15時までに」のような時刻つきの期限は、期限に日付しか入らない（ボードの parseWhen と同じ）。時刻を失わないよう題は元のまま残す
+        if (when && !(when.deadline && when.hasTime)) title = when.title || title;
         const body = newBody({ title, lane, due: when?.due || '' }, '声・命令で足した');
         if (when?.event_start) body.event_start = when.event_start;
         addedWait.set(title, live().filter(c => c.title === title).length); // 返事を出す時点ではまだ画面に無い。同じ題の古いカードへリンクしないよう、届くまで待つ
@@ -456,7 +457,7 @@
   function refCard(t) {
     const hit = live().filter(c => c.title === t);
     if (addedWait.has(t)) { if (hit.length <= addedWait.get(t)) return null; addedWait.delete(t); } // 足したばかりのカードが画面に届くまではリンクにしない（あとで付け直す）
-    if (hit.length) { const open = hit.filter(c => c.lane !== 'done'); const xs = open.length ? open : hit; return xs.length === 1 ? xs[0] : null; } // 同じ題が2枚以上あれば、違うカードを開かないようリンクにしない
+    if (hit.length) return hit.length === 1 ? hit[0] : null; // 同じ題が2枚以上（済みも含む）あれば、違うカードを開かないようリンクにしない
     if (!t.endsWith('…')) return null;
     const head = t.slice(0, -1), xs = live().filter(c => String(c.title || '').startsWith(head));
     return xs.length === 1 ? xs[0] : null;
