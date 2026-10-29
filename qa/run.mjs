@@ -1100,7 +1100,15 @@ try {
     await waitCards((cs) => cs.some((c) => c.title === '書類を出す' && c.due === ymd(fri) && !c.event_start), `会話で「金曜までに 書類を出すを足して」：題は「書類を出す」、期限は金曜（${ymd(fri)}）`);
     await pg.fill('#talkIn', '牛乳を買うを足して'); await pg.press('#talkIn', 'Enter');
     await waitCards((cs) => cs.some((c) => c.title === '牛乳を買う' && !c.due && !c.event_start), '日付の無い文はそのまま足す（期限も予定も入れない）');
-    for (let i = 0; i < 3; i++) await pg.evaluate(() => LK.undo());
+    // 同じ題のカードが2枚あるときは、違うカードを開かないよう、返事の題をリンクにしない（CodeRabbit の指摘）
+    await pg.fill('#talkIn', '同じ題の見本を足して'); await pg.press('#talkIn', 'Enter');
+    await waitCards((cs) => cs.filter((c) => c.title === '同じ題の見本').length === 1, '同じ題の1枚目を足した');
+    await pg.fill('#talkIn', '同じ題の見本を足して'); await pg.press('#talkIn', 'Enter');
+    await waitCards((cs) => cs.filter((c) => c.title === '同じ題の見本').length === 2, '同じ題の2枚目を足した');
+    await pg.waitForTimeout(1200); // 保存が返ってからの付け直しを待つ
+    const dup = await pg.$$eval('#talkLog .l.ai', (ls) => { const l = ls.pop(); return { ref: !!l?.querySelector('.ref[aria-label="「同じ題の見本」を開く"]'), t: l?.textContent || '' }; });
+    check(!dup.ref && dup.t.includes('同じ題の見本'), `同じ題が2枚あるときは、返事の題をリンクにしない（${JSON.stringify(dup).slice(0, 80)}）`);
+    for (let i = 0; i < 5; i++) await pg.evaluate(() => LK.undo());
     await pg.close();
   }
 

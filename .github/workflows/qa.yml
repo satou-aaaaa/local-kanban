@@ -41,6 +41,7 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
+          LK_REQUIRE_MAIN: '1'
         run: node qa/check-review.mjs "$BASE"
       - name: 点検の記録の検査そのものを試す（同じ版を2つの PR が取ったら落ちるか。Issue #87）
         run: node --test qa/check-review.test.mjs

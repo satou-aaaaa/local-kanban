@@ -46,6 +46,8 @@ ok(v > v0, `版の番号が上がっている（元 v${v0} → 今 v${v}。画�
 const mainRef = process.env.LK_MAIN_REF || 'origin/main';
 if (!process.env.LK_MAIN_REF) { try { execFileSync('git', ['fetch', '-q', 'origin', '+refs/heads/main:refs/remotes/origin/main'], { cwd: root, stdio: 'ignore', timeout: 30000 }); } catch { /* 取れなくても手元のもので見る */ } }
 let onMain = null; try { onMain = git('show', `${mainRef}:sw.js`); } catch { /* main が無い（仮のリポジトリなど）ときは見ない */ }
+// CI（LK_REQUIRE_MAIN=1）では、main と比べられなければ落とす（比べずに通すと、同じ版の重なりを見逃す）
+if (onMain == null && process.env.LK_REQUIRE_MAIN === '1') ok(false, `今の main（${mainRef}）の sw.js を読めない（git fetch origin main ができるか確かめる）`);
 if (onMain != null) {
   const vm = ver(onMain);
   ok(v > vm, `版の番号が今の main（${mainRef} は v${vm}）より大きい（今 v${v}。同じなら、ほかの PR が先にその版でマージした：main を取り込み、v${vm + 1} に上げて reviews/v${vm + 1}.md に付け直す）`);

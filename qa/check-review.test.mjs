@@ -44,5 +44,8 @@ test('ほかの PR が同じ版で先にマージしたら落ち、次の空き�
     put(59, ' pr82');
     const ok = run(d, base, 'main');
     assert.equal(ok.status, 0, 'v59 なら通る\n' + ok.stdout);
+    // CI（LK_REQUIRE_MAIN=1）では、main を読めなければ通さない
+    const strict = spawnSync('node', [script, base], { env: { ...process.env, LK_ROOT: d, LK_MAIN_REF: 'no-such-ref', LK_REQUIRE_MAIN: '1' }, encoding: 'utf8' });
+    assert.equal(strict.status, 1, 'main を読めないときは落ちる\n' + strict.stdout);
   } finally { rmSync(d, { recursive: true, force: true }); }
 });

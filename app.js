@@ -347,6 +347,7 @@
         if (when) title = when.title || title;
         const body = newBody({ title, lane, due: when?.due || '' }, '声・命令で足した');
         if (when?.event_start) body.event_start = when.event_start;
+        addedWait.set(title, live().filter(c => c.title === title).length); // 返事を出す時点ではまだ画面に無い。同じ題の古いカードへリンクしないよう、届くまで待つ
         L.add(body).catch(() => {});
         const w = when ? `（${when.event_start ? '予定' : '期限'} ${when.label}）` : '';
         return reply(`「${title}」を${LANE_LABEL[lane]}に足しました${w}。`, voice, () => L.undo());
@@ -449,11 +450,13 @@
   } catch { /* 覚えられなくても動く */ }
   const talkSettings = () => ({ ...(window.Talk?.DEFAULTS || {}), ...(ls.get('talk') || {}) });
   let talk = null;
+  const addedWait = new Map(); // 題 → 足す前に同じ題が何枚あったか
   // ポチの返事の中の「カードの題」を押すと、そのカードの詳細を開く（v39 の点検の次の候補・新機能16）。
   // 会話の欄は開いたまま、詳細はその上に出る（閉じると会話に戻る）。短くした題（「〇〇…」）は、頭が同じカードが1枚だけなら開く
   function refCard(t) {
     const hit = live().filter(c => c.title === t);
-    if (hit.length) return hit.find(c => c.lane !== 'done') || hit[0];
+    if (addedWait.has(t)) { if (hit.length <= addedWait.get(t)) return null; addedWait.delete(t); } // 足したばかりのカードが画面に届くまではリンクにしない（あとで付け直す）
+    if (hit.length) { const open = hit.filter(c => c.lane !== 'done'); const xs = open.length ? open : hit; return xs.length === 1 ? xs[0] : null; } // 同じ題が2枚以上あれば、違うカードを開かないようリンクにしない
     if (!t.endsWith('…')) return null;
     const head = t.slice(0, -1), xs = live().filter(c => String(c.title || '').startsWith(head));
     return xs.length === 1 ? xs[0] : null;
