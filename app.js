@@ -352,9 +352,13 @@
         }
         const body = newBody({ title, lane, due: when?.due || '' }, '声・命令で足した');
         if (when?.event_start) body.event_start = when.event_start;
-        const before = live().filter(c => c.title === title).length;
-        addedWait.set(title, before); // 返事を出す時点ではまだ画面に無い。同じ題の古いカードへリンクしないよう、届くまで待つ
-        L.add(body).catch(() => { if (addedWait.get(title) === before) addedWait.delete(title); }); // 保存に失敗したら待つのをやめる（ずっとリンクにならないのを防ぐ）
+        // 返事を出す時点ではまだ画面に無い。同じ題の古いカードへリンクしないよう、届くまで待つ。
+        // 同じ題を続けて足しても上書きしないよう、待っている枚数を数える（全部届くまで待つ）
+        const wt = addedWait.get(title) || { base: live().filter(c => c.title === title).length, pending: 0 };
+        wt.pending++; addedWait.set(title, wt);
+        L.add(body).catch(() => { // 保存に失敗したら、その1枚ぶんだけ待つのをやめる（ずっとリンクにならないのを防ぐ）
+          const cur = addedWait.get(title); if (cur && --cur.pending <= 0) addedWait.delete(title);
+        });
         const w = when ? `（${when.event_start ? '予定' : '期限'} ${when.label}）` : '';
         return reply(`「${title}」を${LANE_LABEL[lane]}に足しました${w}。`, voice, () => L.undo());
       }
@@ -456,12 +460,12 @@
   } catch { /* 覚えられなくても動く */ }
   const talkSettings = () => ({ ...(window.Talk?.DEFAULTS || {}), ...(ls.get('talk') || {}) });
   let talk = null;
-  const addedWait = new Map(); // 題 → 足す前に同じ題が何枚あったか
+  const addedWait = new Map(); // 題 → { base: 足す前に同じ題が何枚あったか, pending: 届くのを待っている枚数 }
   // ポチの返事の中の「カードの題」を押すと、そのカードの詳細を開く（v39 の点検の次の候補・新機能16）。
   // 会話の欄は開いたまま、詳細はその上に出る（閉じると会話に戻る）。短くした題（「〇〇…」）は、頭が同じカードが1枚だけなら開く
   function refCard(t) {
     const hit = live().filter(c => c.title === t);
-    if (addedWait.has(t)) { if (hit.length <= addedWait.get(t)) return null; addedWait.delete(t); } // 足したばかりのカードが画面に届くまではリンクにしない（あとで付け直す）
+    if (addedWait.has(t)) { const w = addedWait.get(t); if (hit.length < w.base + w.pending) return null; addedWait.delete(t); } // 足したばかりのカードが画面に届くまではリンクにしない（あとで付け直す）
     if (hit.length) return hit.length === 1 ? hit[0] : null; // 同じ題が2枚以上（済みも含む）あれば、違うカードを開かないようリンクにしない
     if (!t.endsWith('…')) return null;
     const head = t.slice(0, -1), xs = live().filter(c => String(c.title || '').startsWith(head));

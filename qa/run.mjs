@@ -1110,7 +1110,14 @@ try {
     await pg.waitForTimeout(1200); // 保存が返ってからの付け直しを待つ
     const dup = await pg.$$eval('#talkLog .l.ai', (ls) => { const l = ls.pop(); return { ref: !!l?.querySelector('.ref[aria-label="「同じ題の見本」を開く"]'), t: l?.textContent || '' }; });
     check(!dup.ref && dup.t.includes('同じ題の見本'), `同じ題が2枚あるときは、返事の題をリンクにしない（${JSON.stringify(dup).slice(0, 80)}）`);
-    for (let i = 0; i < 6; i++) await pg.evaluate(() => LK.undo());
+    // 同じ題を続けて2回足しても（保存を待たずに）、先に届いた1枚へどちらの返事もリンクしない（CodeRabbit の指摘：待ちの上書き）
+    await pg.fill('#talkIn', '続けて足す見本を足して'); await pg.press('#talkIn', 'Enter');
+    await pg.fill('#talkIn', '続けて足す見本を足して'); await pg.press('#talkIn', 'Enter');
+    await waitCards((cs) => cs.filter((c) => c.title === '続けて足す見本').length === 2, '同じ題を続けて2枚足した');
+    await pg.waitForTimeout(1200);
+    const burst = await pg.$$eval('#talkLog .l.ai .ref[aria-label="「続けて足す見本」を開く"]', (rs) => rs.length);
+    check(burst === 0, `同じ題を続けて足したとき、どちらの返事も1枚目へリンクしない（リンク ${burst} 個）`);
+    for (let i = 0; i < 8; i++) await pg.evaluate(() => LK.undo());
     await pg.close();
   }
 
