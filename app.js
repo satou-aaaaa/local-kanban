@@ -348,12 +348,14 @@
         // 日付（「明日」など）は題から抜き、時刻だけを「（15時まで）」として題に残す（翌日に「明日」が残って期限と食い違わないように）
         if (when) {
           const tm = when.deadline && when.hasTime ? (title.match(/(午前|午後)?\s*(2[0-3]|1\d|0?\d)\s*(時(?!間)\s*(([0-5]?\d)\s*分|半)?|:[0-5]\d)/) || [])[0] : '';
-          title = (when.title || title) + (tm ? `（${tm.replace(/\s+/g, '')}まで）` : '');
+          const suffix = tm ? `（${tm.replace(/\s+/g, '')}まで）` : '';
+          title = (when.title || title).slice(0, Math.max(0, 200 - suffix.length)) + suffix; // 題は200字で切られるので、時刻の分を先に空けておく
         }
         const body = newBody({ title, lane, due: when?.due || '' }, '声・命令で足した');
         if (when?.event_start) body.event_start = when.event_start;
         // 返事を出す時点ではまだ画面に無い。同じ題の古いカードへリンクしないよう、届くまで待つ。
         // 同じ題を続けて足しても上書きしないよう、待っている枚数を数える（全部届くまで待つ）
+        title = body.title; // 保存される題（200字で切ったあと）にそろえる
         const wt = addedWait.get(title) || { base: live().filter(c => c.title === title).length, pending: 0 };
         wt.pending++; addedWait.set(title, wt);
         L.add(body).catch(() => { // 保存に失敗したら、その1枚ぶんだけ待つのをやめる（ずっとリンクにならないのを防ぐ）
