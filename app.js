@@ -344,8 +344,12 @@
         // 「明日 15時 面接を足して」→ 題「面接」・予定 明日 15:00。「金曜までに書類」→ 期限。古いボードで parseWhen が無ければ題のまま
         let title = cmd.title, when = null;
         try { when = typeof window.parseWhen === 'function' ? window.parseWhen(title, new Date()) : null; } catch { when = null; }
-        // 「明日15時までに」のような時刻つきの期限は、期限に日付しか入らない（ボードの parseWhen と同じ）。時刻を失わないよう題は元のまま残す
-        if (when && !(when.deadline && when.hasTime)) title = when.title || title;
+        // 「明日15時までに」のような時刻つきの期限は、期限に日付しか入らない（ボードの parseWhen と同じ）。
+        // 日付（「明日」など）は題から抜き、時刻だけを「（15時まで）」として題に残す（翌日に「明日」が残って期限と食い違わないように）
+        if (when) {
+          const tm = when.deadline && when.hasTime ? (title.match(/(午前|午後)?\s*(2[0-3]|1\d|0?\d)\s*(時(?!間)\s*(([0-5]?\d)\s*分|半)?|:[0-5]\d)/) || [])[0] : '';
+          title = (when.title || title) + (tm ? `（${tm.replace(/\s+/g, '')}まで）` : '');
+        }
         const body = newBody({ title, lane, due: when?.due || '' }, '声・命令で足した');
         if (when?.event_start) body.event_start = when.event_start;
         const before = live().filter(c => c.title === title).length;

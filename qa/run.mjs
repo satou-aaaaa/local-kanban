@@ -1099,7 +1099,7 @@ try {
     await pg.fill('#talkIn', '金曜までに 書類を出すを足して'); await pg.press('#talkIn', 'Enter');
     await waitCards((cs) => cs.some((c) => c.title === '書類を出す' && c.due === ymd(fri) && !c.event_start), `会話で「金曜までに 書類を出すを足して」：題は「書類を出す」、期限は金曜（${ymd(fri)}）`);
     await pg.fill('#talkIn', '明日15時までに 見積を出すを足して'); await pg.press('#talkIn', 'Enter');
-    await waitCards((cs) => cs.some((c) => /15時/.test(c.title || '') && /見積を出す/.test(c.title || '') && c.due === ymd(d1)), '時刻つきの期限は、期限は明日・題に時刻を残す（時刻を捨てない）');
+    await waitCards((cs) => cs.some((c) => /15時まで/.test(c.title || '') && /見積を出す/.test(c.title || '') && !/明日/.test(c.title || '') && c.due === ymd(d1)), '時刻つきの期限は、期限は明日・題に時刻だけ残す（「明日」は残さない）');
     await pg.fill('#talkIn', '牛乳を買うを足して'); await pg.press('#talkIn', 'Enter');
     await waitCards((cs) => cs.some((c) => c.title === '牛乳を買う' && !c.due && !c.event_start), '日付の無い文はそのまま足す（期限も予定も入れない）');
     // 同じ題のカードが2枚あるときは、違うカードを開かないよう、返事の題をリンクにしない（CodeRabbit の指摘）
