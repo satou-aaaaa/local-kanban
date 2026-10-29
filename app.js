@@ -340,8 +340,29 @@
       case 'add': {
         if (!L.writable()) return reply('いまは保存できないので足せません。', voice);
         const lane = cmd.lane || 'next';
-        L.add(newBody({ title: cmd.title, lane }, '声・命令で足した')).catch(() => {});
-        return reply(`「${cmd.title}」を${LANE_LABEL[lane]}に足しました。`, voice, () => L.undo());
+        // 日付と時刻はボードの足す欄と同じ決まり（ボードの parseWhen。v55）で読み、読んだ語は題から抜く（新機能15）。
+        // 「明日 15時 面接を足して」→ 題「面接」・予定 明日 15:00。「金曜までに書類」→ 期限。古いボードで parseWhen が無ければ題のまま
+        let title = cmd.title, when = null;
+        try { when = typeof window.parseWhen === 'function' ? window.parseWhen(title, new Date()) : null; } catch { when = null; }
+        // 「明日15時までに」のような時刻つきの期限は、期限に日付しか入らない（ボードの parseWhen と同じ）。
+        // 日付（「明日」など）は題から抜き、時刻だけを「（15時まで）」として題に残す（翌日に「明日」が残って期限と食い違わないように）
+        if (when) {
+          const tm = when.deadline && when.hasTime ? (title.match(/(午前|午後)?\s*(2[0-3]|1\d|0?\d)\s*(時(?!間)\s*(([0-5]?\d)\s*分|半)?|:[0-5]\d)/) || [])[0] : '';
+          const suffix = tm ? `（${tm.replace(/\s+/g, '')}まで）` : '';
+          title = (when.title || title).slice(0, Math.max(0, 200 - suffix.length)) + suffix; // 題は200字で切られるので、時刻の分を先に空けておく
+        }
+        const body = newBody({ title, lane, due: when?.due || '' }, '声・命令で足した');
+        if (when?.event_start) body.event_start = when.event_start;
+        // 返事を出す時点ではまだ画面に無い。同じ題の古いカードへリンクしないよう、届くまで待つ。
+        // 同じ題を続けて足しても上書きしないよう、待っている枚数を数える（全部届くまで待つ）
+        title = body.title; // 保存される題（200字で切ったあと）にそろえる
+        const wt = addedWait.get(title) || { base: live().filter(c => c.title === title).length, pending: 0 };
+        wt.pending++; addedWait.set(title, wt);
+        L.add(body).catch(() => { // 保存に失敗したら、その1枚ぶんだけ待つのをやめる（ずっとリンクにならないのを防ぐ）
+          const cur = addedWait.get(title); if (cur && --cur.pending <= 0) addedWait.delete(title);
+        });
+        const w = when ? `（${when.event_start ? '予定' : '期限'} ${when.label}）` : '';
+        return reply(`「${title}」を${LANE_LABEL[lane]}に足しました${w}。`, voice, () => L.undo());
       }
       case 'read': {
         const l = laneCards(cmd.lane);
@@ -441,8 +462,38 @@
   } catch { /* 覚えられなくても動く */ }
   const talkSettings = () => ({ ...(window.Talk?.DEFAULTS || {}), ...(ls.get('talk') || {}) });
   let talk = null;
+  const addedWait = new Map(); // 題 → { base: 足す前に同じ題が何枚あったか, pending: 届くのを待っている枚数 }
+  // ポチの返事の中の「カードの題」を押すと、そのカードの詳細を開く（v39 の点検の次の候補・新機能16）。
+  // 会話の欄は開いたまま、詳細はその上に出る（閉じると会話に戻る）。短くした題（「〇〇…」）は、頭が同じカードが1枚だけなら開く
+  function refCard(t) {
+    const hit = live().filter(c => c.title === t);
+    if (addedWait.has(t)) { const w = addedWait.get(t); if (hit.length < w.base + w.pending) return null; addedWait.delete(t); } // 足したばかりのカードが画面に届くまではリンクにしない（あとで付け直す）
+    if (hit.length) return hit.length === 1 ? hit[0] : null; // 同じ題が2枚以上（済みも含む）あれば、違うカードを開かないようリンクにしない
+    if (!t.endsWith('…')) return null;
+    const head = t.slice(0, -1), xs = live().filter(c => String(c.title || '').startsWith(head));
+    return xs.length === 1 ? xs[0] : null;
+  }
+  function refLinks(d, text, again = true) {
+    const re = /「([^」]{1,200})」/g; let at = 0, m, miss = 0;
+    while ((m = re.exec(text))) {
+      const c = typeof window.openDetail === 'function' ? refCard(m[1]) : null;
+      if (!c) { miss++; continue; }
+      d.append(text.slice(at, m.index));
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'ref'; b.textContent = m[0];
+      b.setAttribute('aria-label', `「${c.title}」を開く`);
+      b.onclick = () => { try { window.openDetail(c.id); } catch {} };
+      at = m.index + m[0].length;
+      // すぐ後ろの「。」「、」は題と一緒に折り返す（行の頭に句読点が来ないように。v57 の点検）
+      const p = /^[。、！？!?）)]+/.exec(text.slice(at))?.[0] || '';
+      if (p) { const w = document.createElement('span'); w.className = 'nw'; w.append(b, p); d.append(w); at += p.length; } else d.append(b);
+    }
+    d.append(text.slice(at));
+    // 足したばかりのカードは、保存が画面に返ってから押せるようにする（返事のほうが先に出る。v57 の点検）
+    if (miss && again) setTimeout(() => { if (!d.isConnected) return; d.textContent = ''; refLinks(d, text, false); }, 900);
+  }
   function talkLine(who, text) {
-    const d = document.createElement('div'); d.className = 'l ' + who; d.textContent = text;
+    const d = document.createElement('div'); d.className = 'l ' + who;
+    if (who === 'ai') { const t = document.createElement('span'); refLinks(t, text); d.append(t); } else d.textContent = text; // 題のリンクは中の span に（あとで付け直しても、読み上げの名前と「戻す」は消さない）
     if (who === 'you' || who === 'ai') { const w = document.createElement('span'); w.className = 'sr'; w.textContent = who === 'you' ? 'あなた：' : 'ポチ：'; d.prepend(w); } // 読み上げで誰の発言か分かるように（v36 点検）
     if (who === 'you') talkUndo = null;
     if (who === 'ai' && talkUndo) { const u = talkUndo; talkUndo = null; const b = document.createElement('button'); b.type = 'button'; b.className = 'undo'; b.textContent = '戻す'; b.setAttribute('aria-label', '今のを戻す'); b.onclick = () => { b.remove(); u(); }; d.append(' ', b); }
