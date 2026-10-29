@@ -47,5 +47,10 @@ test('ほかの PR が同じ版で先にマージしたら落ち、次の空き�
     // CI（LK_REQUIRE_MAIN=1）では、main を読めなければ通さない
     const strict = spawnSync('node', [script, base], { env: { ...process.env, LK_ROOT: d, LK_MAIN_REF: 'no-such-ref', LK_REQUIRE_MAIN: '1' }, encoding: 'utf8' });
     assert.equal(strict.status, 1, 'main を読めないときは落ちる\n' + strict.stdout);
+    // fetch に失敗し、古い origin/main だけが残っているとき（LK_MAIN_REF 無し・origin が無い）も、CI では落とす
+    g('update-ref', 'refs/remotes/origin/main', base);
+    const stale = spawnSync('node', [script, base], { env: { ...process.env, LK_ROOT: d, LK_REQUIRE_MAIN: '1', LK_MAIN_REF: '' }, encoding: 'utf8' });
+    assert.equal(stale.status, 1, '最新の main を取れないときは、古い origin/main で通さない\n' + stale.stdout);
+    assert.match(stale.stdout, /最新の main を取れなかった/);
   } finally { rmSync(d, { recursive: true, force: true }); }
 });

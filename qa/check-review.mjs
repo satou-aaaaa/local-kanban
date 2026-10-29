@@ -44,7 +44,10 @@ ok(v > 0, 'sw.js に CACHE = \'kanban-v番号\' がある');
 ok(v > v0, `版の番号が上がっている（元 v${v0} → 今 v${v}。画面が変わったら sw.js の CACHE を上げる＝端末にも届く）`);
 // 今の main とも比べる（元より上でも、ほかの PR が先に同じ版でマージしていればぶつかる）。取れないとき（オフラインなど）は手元の origin/main で比べる
 const mainRef = process.env.LK_MAIN_REF || 'origin/main';
-if (!process.env.LK_MAIN_REF) { try { execFileSync('git', ['fetch', '-q', 'origin', '+refs/heads/main:refs/remotes/origin/main'], { cwd: root, stdio: 'ignore', timeout: 30000 }); } catch { /* 取れなくても手元のもので見る */ } }
+let fetchFailed = false;
+if (!process.env.LK_MAIN_REF) { try { execFileSync('git', ['fetch', '-q', 'origin', '+refs/heads/main:refs/remotes/origin/main'], { cwd: root, stdio: 'ignore', timeout: 30000 }); } catch { fetchFailed = true; /* 手元では取れなくても手元のもので見る */ } }
+// CI（LK_REQUIRE_MAIN=1）では、最新の main を取れなかったら落とす（古い origin/main と比べて通すと、同じ版の重なりを見逃す）
+if (fetchFailed && process.env.LK_REQUIRE_MAIN === '1') ok(false, `最新の main を取れなかった（git fetch origin main が失敗。古い ${mainRef} とは比べない）`);
 let onMain = null; try { onMain = git('show', `${mainRef}:sw.js`); } catch { /* main が無い（仮のリポジトリなど）ときは見ない */ }
 // CI（LK_REQUIRE_MAIN=1）では、main と比べられなければ落とす（比べずに通すと、同じ版の重なりを見逃す）
 if (onMain == null && process.env.LK_REQUIRE_MAIN === '1') ok(false, `今の main（${mainRef}）の sw.js を読めない（git fetch origin main ができるか確かめる）`);

@@ -348,8 +348,9 @@
         if (when && !(when.deadline && when.hasTime)) title = when.title || title;
         const body = newBody({ title, lane, due: when?.due || '' }, '声・命令で足した');
         if (when?.event_start) body.event_start = when.event_start;
-        addedWait.set(title, live().filter(c => c.title === title).length); // 返事を出す時点ではまだ画面に無い。同じ題の古いカードへリンクしないよう、届くまで待つ
-        L.add(body).catch(() => {});
+        const before = live().filter(c => c.title === title).length;
+        addedWait.set(title, before); // 返事を出す時点ではまだ画面に無い。同じ題の古いカードへリンクしないよう、届くまで待つ
+        L.add(body).catch(() => { if (addedWait.get(title) === before) addedWait.delete(title); }); // 保存に失敗したら待つのをやめる（ずっとリンクにならないのを防ぐ）
         const w = when ? `（${when.event_start ? '予定' : '期限'} ${when.label}）` : '';
         return reply(`「${title}」を${LANE_LABEL[lane]}に足しました${w}。`, voice, () => L.undo());
       }
