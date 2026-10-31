@@ -2,9 +2,11 @@ name: Auto merge
 
 # 検査（QA）がプルリクエストで ✅ になったら自動で squash マージする。中身と条件は共通部品 satou-aaaaa/shared-workflows。
 # Secret scan（scan / scan）が同じコミットで ✅ でないとマージしない（2026-10-22 の incident）。
+# QA と Secret scan のどちらが後に終わっても再評価する（QA が先だと止まったままになるため。CodeRabbit の指摘、2026-10-31）。
+# どちらから起きても QA（PWA の検査）と scan / scan の両方が要る。
 on:
   workflow_run:
-    workflows: [QA]
+    workflows: [QA, Secret scan]
     types: [completed]
 
 permissions:
@@ -12,7 +14,7 @@ permissions:
   pull-requests: write
   pages: write
   checks: read   # require_checks で同じコミットの check run を読むのに要る
-  actions: write   # マージ後に main で QA を回し直す（recheck_main）のに要る。無いと 403 で黙って止まる（2026-10-21）
+  actions: write   # マージ後に main で QA を回し直す（dispatch）のに要る。無いと 403 で黙って止まる（2026-10-21）
 
 jobs:
   merge:
@@ -22,4 +24,8 @@ jobs:
       pages_build: true
       delete_branch: true
       require_checks: |
+        PWA の検査
         scan / scan
+      # きっかけが Secret scan のとき recheck_main は secret-scan.yml を起こそうとして QA が回らないので、QA を明示して起こす
+      dispatch: qa.yml
+      recheck_main: false
