@@ -2658,7 +2658,7 @@ try {
       await step('詳細からコメントを書くと保存に届く', async () => {
         if (!(await openC('見本のカード（今やる）'))) return '詳細が開かない';
         await pg.locator('#detail textarea').last().fill('基本の検査のコメント');
-        await pg.locator('#detail button', { hasText: 'コメントして' }).click();
+        await pg.locator('#detail button', { hasText: /コメントして|Claude に送る/ }).click();
         return (await saved((cs) => cs.some((c) => c.doc_id === 's1' && (c.history || []).some((x) => x.who === 'you' && x.text === '基本の検査のコメント')))) ? '' : '履歴に書かれない';
       });
       await step('確認に答えると保存に届く', async () => {
