@@ -4,8 +4,9 @@
 # Claude Code のクラウドセッションでは .claude/settings.json の SessionStart フックが自動で呼ぶ。
 # CI の Setup check（共通部品）が、まっさらな環境でこれが通るかを確かめる。
 # ひな形: satou-aaaaa/shared-workflows の template/scripts/setup.sh。アプリ本体はビルド不要なので、要るのは検査（qa/）の部品だけ。
-# ひな形の版: 2（ブラウザの探し方と名前 PW_CHROMIUM だけこのリポジトリ用）
+# ひな形の版: 3（ブラウザの探し方と名前 PW_CHROMIUM だけこのリポジトリ用）
 #   2: 依存は毎回 npm ci・ブラウザが無ければ止める・このシェルで要る操作（nvm use・export）を最後に出す（shared-workflows incidents/2026-11-03-setup-false-ready.md）
+#   3: nvm.sh を --no-use で読む（.nvmrc の版が入っていないと、読んだだけで何も言わずに止まっていた。shared-workflows incidents/2026-11-04-setup-nvm-silent-stop.md）
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -25,7 +26,8 @@ if ! node_ok; then
   # 版が足りず nvm があれば、.nvmrc の版を入れる（Claude Code のクラウドは /opt/nvm にある）
   NVM_DIR=${NVM_DIR:-$HOME/.nvm}; [ -s "$NVM_DIR/nvm.sh" ] || NVM_DIR=/opt/nvm
   if [ -s "$NVM_DIR/nvm.sh" ]; then
-    set +u; export NVM_DIR; . "$NVM_DIR/nvm.sh"; nvm install "$want" >/dev/null; set -u
+    # --no-use: 読んだ時点で .nvmrc の版に切り替えようとさせない（入っていないと 3 を返し、set -e で黙って止まる）
+    set +u; export NVM_DIR; . "$NVM_DIR/nvm.sh" --no-use; nvm install "$want" >/dev/null; set -u
     if node_ok; then
       # nvm の切り替えはこのスクリプトの中だけに効く（親のシェルは古い Node のまま）
       if [ -n "${CLAUDE_ENV_FILE:-}" ]; then session_env "PATH=\"$(dirname "$(command -v node)"):\$PATH\""; else todo+=("nvm use $want"); fi
