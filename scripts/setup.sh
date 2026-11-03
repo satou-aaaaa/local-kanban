@@ -4,12 +4,19 @@
 # Claude Code のクラウドセッションでは .claude/settings.json の SessionStart フックが自動で呼ぶ。
 # CI の Setup check（共通部品）が、まっさらな環境でこれが通るかを確かめる。
 # ひな形: satou-aaaaa/shared-workflows の template/scripts/setup.sh。アプリ本体はビルド不要なので、要るのは検査（qa/）の部品だけ。
+# ひな形の版: 2（ブラウザの探し方と名前 PW_CHROMIUM だけこのリポジトリ用）
+#   2: 依存は毎回 npm ci・ブラウザが無ければ止める・このシェルで要る操作（nvm use・export）を最後に出す（shared-workflows incidents/2026-11-03-setup-false-ready.md）
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 fail() { echo "✗ $*" >&2; exit 1; }
-# 環境変数をクラウドセッションの以後のコマンドに渡す（ほかの環境では何もしない）
-session_env() { if [ -n "${CLAUDE_ENV_FILE:-}" ]; then echo "export $1" >> "$CLAUDE_ENV_FILE"; fi; }
+# 準備のあと、このシェルで打つ必要がある操作。1つでもあれば最後に「✓」を出さない
+todo=()
+# 環境変数を以後のコマンドに渡す。クラウドセッションは CLAUDE_ENV_FILE に書く。
+# それ以外は子のプロセスから親のシェルを変えられないので、打つ操作として最後に出す
+session_env() {
+  if [ -n "${CLAUDE_ENV_FILE:-}" ]; then echo "export $1" >> "$CLAUDE_ENV_FILE"; else todo+=("export $1"); fi
+}
 
 # --- Node.js（版は .nvmrc。nvm・fnm・mise・Volta などはこのファイルを読む）---
 want=$(tr -dc '0-9' < .nvmrc)
@@ -19,15 +26,16 @@ if ! node_ok; then
   NVM_DIR=${NVM_DIR:-$HOME/.nvm}; [ -s "$NVM_DIR/nvm.sh" ] || NVM_DIR=/opt/nvm
   if [ -s "$NVM_DIR/nvm.sh" ]; then
     set +u; export NVM_DIR; . "$NVM_DIR/nvm.sh"; nvm install "$want" >/dev/null; set -u
-    session_env "PATH=\"$(dirname "$(command -v node)"):\$PATH\""
+    if node_ok; then
+      # nvm の切り替えはこのスクリプトの中だけに効く（親のシェルは古い Node のまま）
+      if [ -n "${CLAUDE_ENV_FILE:-}" ]; then session_env "PATH=\"$(dirname "$(command -v node)"):\$PATH\""; else todo+=("nvm use $want"); fi
+    fi
   fi
 fi
 node_ok || fail "Node.js $want 以上が要る（今は $(node -v 2>/dev/null || echo なし)。https://nodejs.org/ か、nvm・fnm で .nvmrc の版を入れる）"
 
-# 検査（qa/）の npm の依存を入れる。node_modules が lock より新しければ飛ばす（何度実行しても速い）
-if [ ! -f qa/node_modules/.package-lock.json ] || [ qa/package-lock.json -nt qa/node_modules/.package-lock.json ]; then
-  (cd qa && npm ci --no-audit --no-fund)
-fi
+# 検査（qa/）の npm の依存。毎回 lock から入れ直す（日付だけで飛ばすと、消えた・別の版に替わった node_modules を見逃す）
+(cd qa && npm ci --no-audit --no-fund)
 
 # Playwright のブラウザ。PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 の環境（Claude Code のクラウドなど）は入っているものを使う（qa/ は PW_CHROMIUM を読む）
 if [ "${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-}" = 1 ]; then
@@ -36,14 +44,23 @@ if [ "${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-}" = 1 ]; then
   for f in /opt/pw-browsers/chromium_headless_shell-*/*/headless_shell /opt/pw-browsers/chromium_headless_shell-*/*/chrome-headless-shell /opt/pw-browsers/chromium; do
     if [ -x "$f" ]; then hs=$f; break; fi
   done
-  if [ -n "$hs" ]; then
+  if [ -n "${PW_CHROMIUM:-}" ]; then
+    [ -x "$PW_CHROMIUM" ] || fail "PW_CHROMIUM=$PW_CHROMIUM が動かせない（ブラウザの場所を直すか、unset PW_CHROMIUM）"
+  elif [ -n "$hs" ]; then
     session_env "PW_CHROMIUM=$hs"
-    [ -n "${CLAUDE_ENV_FILE:-}" ] || echo "・ 検査のブラウザ: export PW_CHROMIUM=$hs を打ってから node qa/run.mjs"
   else
-    echo "・ 入っているブラウザが見つからない。検査の前に (cd qa && npx playwright install chromium)" >&2
+    def=$(cd qa && node -e 'try{process.stdout.write(require("playwright").chromium.executablePath())}catch{}' 2>/dev/null || true)
+    [ -n "$def" ] && [ -x "$def" ] || fail "使えるブラウザが無い（PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 で取ってこない設定）。PW_CHROMIUM にブラウザの場所を入れるか、(cd qa && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD= npx playwright install chromium)"
   fi
 else
   (cd qa && npx playwright install chromium)
 fi
 
-echo "✓ 準備できた。次は: node qa/run.mjs（AGENTS.md の「push する前の確認」）"
+next="node qa/run.mjs（AGENTS.md の「push する前の確認」）"
+if [ ${#todo[@]} -gt 0 ]; then
+  echo "△ 準備はできた。ただし、このシェルで先に次を打つ（打たないと古い Node や別のブラウザで動く）:"
+  printf '    %s\n' "${todo[@]}"
+  echo "  そのあと: $next"
+else
+  echo "✓ 準備できた。次は: $next"
+fi
