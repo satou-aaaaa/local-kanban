@@ -2553,7 +2553,8 @@ try {
         try {
           // ボード v59 から、答え待ちでないカードの下は「閉じる」の代わりに「✓ 済み」。下の「閉じる」は確認のカードで見る
           // ボード v74 から、スマホの詳細は ✕ だけで閉じる（下の「閉じる」を外した）。ボードに下の「閉じる」が無いスマホ幅では見ない
-          if (how === '下の「閉じる」' && w <= 520) {
+          // ボード v81（features 36）から PC でも下の「閉じる」は無い。どの幅でも、ボードに無ければ見ない
+          if (how === '下の「閉じる」') {
             const opened = await openC('見本の確認');
             const has = opened && await pg.locator('#detail button:visible', { hasText: /^閉じる$/ }).count();
             await shut(); await pg.waitForTimeout(150);
