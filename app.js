@@ -1095,8 +1095,8 @@
     const rank = c => pos.has(c.doc_id) ? pos.get(c.doc_id) : 1e6;
     const top = [...mine].sort((a, b) => (a.lane === 'now' ? 0 : 1) - (b.lane === 'now' ? 0 : 1) || rank(a) - rank(b) || (a.order || 0) - (b.order || 0))[0];
     // あいさつは時刻に合わせる（夜に初めて開くと「おはようございます」とポチの「こんばんは」が並んでいた。ポチと同じ区切り＝talk.js の partOfDay）
-    const h = new Date(nowMs + 9 * 3600e3).getUTCHours();
-    const hi = h >= 5 && h < 11 ? 'おはようございます' : h >= 11 && h < 17 ? 'こんにちは' : 'こんばんは';
+    const pod = window.Talk?.partOfDay ? Talk.partOfDay(new Date(nowMs).getHours()) : 'morning';
+    const hi = pod === 'morning' ? 'おはようございます' : pod === 'day' ? 'こんにちは' : 'こんばんは';
     const done = (cs || []).filter(c => c && !c.deleted && c.lane === 'done' && c.done_at && jst(Date.parse(c.done_at)) === yday);
     // 言葉はボードの「satouさんがやること」とそろえる（数え方も同じ）。画面の1行は短く、昨日の分は通知だけ（画面には「✓ 済み 昨日N」がある）
     const lines = [], short = [];

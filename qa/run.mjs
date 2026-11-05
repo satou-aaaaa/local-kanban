@@ -553,7 +553,9 @@ try {
       // 11/5 の定期点検（重さ3）：あいさつは時刻に合わせ（ポチと同じ区切り）、「いちばん上」は画面の今やるの列で見えている順
       const eve = await pg.evaluate(([cs]) => LK.morning(cs, Date.parse('2026-10-29T11:00:00Z')), [cs]); // 20:00
       const noon = await pg.evaluate(([cs]) => LK.morning(cs, Date.parse('2026-10-29T04:00:00Z')), [cs]); // 13:00
-      check(/^こんばんは。/.test(eve.short) && /^こんにちは。/.test(noon.short) && /^おはようございます。/.test(m.short), `朝のまとめのあいさつは時刻に合わせる（夜に「おはようございます」と言わない。${eve.short}｜${noon.short}）`);
+      const hiOf = (ms) => pg.evaluate((ms) => ({ morning: 'おはようございます', day: 'こんにちは', evening: 'こんばんは', night: 'こんばんは' })[Talk.partOfDay(new Date(ms).getHours())], ms);
+      const [hE, hN, hM] = [await hiOf(Date.parse('2026-10-29T11:00:00Z')), await hiOf(Date.parse('2026-10-29T04:00:00Z')), await hiOf(now)];
+      check(eve.short.startsWith(hE + '。') && noon.short.startsWith(hN + '。') && m.short.startsWith(hM + '。') && new Set([hE, hN, hM]).size >= 2, `朝のまとめのあいさつは、ポチと同じ時刻の区切りで変える（夜に「おはようございます」と言わない。${eve.short}｜${noon.short}｜${m.short}）`);
       const cs2 = [...cs, { doc_id: 'm10', title: '画面で一番上', owner: 'you', lane: 'now', order: 9 }];
       const byScreen = await pg.evaluate(([cs, now]) => LK.morning(cs, now, ['m10', 'm3']), [cs2, now]);
       check(byScreen.top === 'm10' && /いちばん上「画面で一番上」/.test(byScreen.short), `朝のまとめの「いちばん上」は、画面の今やるの列で見えている順（order と違っても。${byScreen.short}）`);
@@ -568,7 +570,7 @@ try {
         const want = await pg.evaluate(() => { const mine = new Set(LK.cards.filter((c) => c && !c.deleted && c.owner !== 'agent').map((c) => c.doc_id)); const el = [...document.querySelectorAll('#lane-now .card[data-id]')].find((e) => mine.has(e.dataset.id)); return el ? LK.cards.find((c) => c.doc_id === el.dataset.id).title : ''; });
         check(!want || text.includes(`「${want.length > 24 ? want.slice(0, 24) + '…' : want}」`), `朝のまとめの「いちばん上」が、画面の今やるの列の一番上と同じ（${want}｜${text}）`);
       }
-      check(day === '"2026-10-29"' && /おはようございます。やること \d+ 件/.test(text), `7時を過ぎたら朝のまとめを状態の1行に出し、日付を覚える（${day}｜${text}）`);
+      check(day === '"2026-10-29"' && /(おはようございます|こんにちは|こんばんは)。やること \d+ 件/.test(text), `7時を過ぎたら朝のまとめを状態の1行に出し、日付を覚える（${day}｜${text}）`);
       await pg.waitForTimeout(6500);
       check(await pg.$eval('#lkStatus', (e) => e.classList.contains('morning') && !e.classList.contains('gone')), '朝のまとめは6秒で消さない（押すまで残す）');
       await pg.click('#lkStatus');
