@@ -22,7 +22,7 @@ jobs:
   qa:
     name: PWA の検査
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20  # Playwright を入れる段階だけで9分かかる日がある（shared-workflows incidents/2026-11-05-qa-timeout-slow-install.md）
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
