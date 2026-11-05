@@ -2534,6 +2534,11 @@ try {
       check(full >= 0, `${tag}：跳ねるときはポチが画面の中に全部出る（左端 ${full}px）`);
     } else check(false, `${tag}の隅のポチが出ていない`);
   }
+  // 11/5 の定期点検（重さ3）：本物のボードでも、朝のまとめの「いちばん上」は今やるの列で見えている一番上（自分の番のもの）と同じ
+  {
+    const r = await page.evaluate(() => { const shown = [...document.querySelectorAll('#lane-now .card[data-id]')].map((e) => e.dataset.id); const m = LK.morning(LK.cards, Date.now(), shown); const mine = new Set(LK.morning.length ? LK.cards.filter((c) => c && !c.deleted && ((c.decision && !c.answer) || (c.owner !== 'agent' && c.lane === 'now'))).map((c) => c.doc_id) : []); return { top: m.top, first: shown.find((id) => mine.has(id)) || null }; });
+    check(!r.first || r.top === r.first, `朝のまとめの「いちばん上」は、画面の今やるの列の一番上と同じカード（${JSON.stringify(r)}）`);
+  }
   // ボード v64「まとめて選ぶ」のあいだ（body.selecting）は、下に固定の帯が出るので隅のポチを出さない（帯の下に隠れて重なる。v50）
   {
     const st = await phone.evaluate(() => { const p = document.getElementById('lkPochi'); if (!p) return 'なし'; document.body.classList.add('selecting'); const d = getComputedStyle(p).display; document.body.classList.remove('selecting'); return d; });
