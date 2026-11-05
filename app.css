@@ -250,3 +250,8 @@ html:root{scroll-padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
 /* 設定の窓の中でキーで送ったときも、下の固定の帯（約60px）の下に隠れないよう余白を見込む（10/28 の定期点検・WCAG 2.4.11） */
 #talkSet{scroll-padding-bottom:84px}
 #lkStatus.morning{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px} /* 朝のまとめ（v58）：押すといちばん上のカードが開く */
+/* 押して答えるボタンの上に、どのカードに効くかを1行（11/5 の定期点検 重さ3） */
+#talkLog .picks .for{flex-basis:100%;margin:0 0 -2px;font-size:.85rem;font-weight:600;color:var(--fg)}
+/* 朝のまとめの1行の中のボタン（キーでも押せるように。見た目は今までの点線の文字のまま。v60 の点検） */
+#lkStatus .lk-morning{all:unset;display:inline-block;min-height:24px;line-height:24px;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+#lkStatus .lk-morning:focus-visible{outline:3px solid var(--agent,#3b82f6);outline-offset:2px;border-radius:4px}
