@@ -550,6 +550,13 @@ try {
       const m = await pg.evaluate(([cs, now]) => LK.morning(cs, now), [cs, now]);
       check(m.day === '2026-10-29' && m.lines.length === 2 && /satouさんがやることが 3 件（答える 1・期限切れ 1）/.test(m.lines[0]) && /やること 3 件。いちばん上「いちばん上の今やる」/.test(m.short) && /「いちばん上の今やる」/.test(m.lines[0]) && m.top === 'm3', `朝のまとめで satouさんの番を数える（${JSON.stringify(m)}）`);
       check(/昨日終わったこと：2 件（AI 1・自分 1）/.test(m.lines[1]) && !/昨日/.test(m.short), `昨日（日本の日付）済んだものを AI と自分に分けて数える（${m.lines[1]}）`);
+      // 11/5 の定期点検（重さ3）：あいさつは時刻に合わせ（ポチと同じ区切り）、「いちばん上」は画面の今やるの列で見えている順
+      const eve = await pg.evaluate(([cs]) => LK.morning(cs, Date.parse('2026-10-29T11:00:00Z')), [cs]); // 20:00
+      const noon = await pg.evaluate(([cs]) => LK.morning(cs, Date.parse('2026-10-29T04:00:00Z')), [cs]); // 13:00
+      check(/^こんばんは。/.test(eve.short) && /^こんにちは。/.test(noon.short) && /^おはようございます。/.test(m.short), `朝のまとめのあいさつは時刻に合わせる（夜に「おはようございます」と言わない。${eve.short}｜${noon.short}）`);
+      const cs2 = [...cs, { doc_id: 'm10', title: '画面で一番上', owner: 'you', lane: 'now', order: 9 }];
+      const byScreen = await pg.evaluate(([cs, now]) => LK.morning(cs, now, ['m10', 'm3']), [cs2, now]);
+      check(byScreen.top === 'm10' && /いちばん上「画面で一番上」/.test(byScreen.short), `朝のまとめの「いちばん上」は、画面の今やるの列で見えている順（order と違っても。${byScreen.short}）`);
       const none = await pg.evaluate(([now]) => LK.morning([{ doc_id: 'x', title: 'x', owner: 'agent', lane: 'agent' }], now), [now]);
       check(none.lines.length === 0, 'どちらも 0 件なら何も出さない');
       // 1日1回だけ出す（日付を覚える）。日本時間の 7 時より前は出さない
@@ -557,6 +564,10 @@ try {
       const [early] = await tick(Date.parse('2026-10-28T21:30:00Z')); // 6:30
       check(early === null, `日本時間の7時より前は朝のまとめを出さない（${early}）`);
       const [day, text] = await tick(now);
+      { // 本物の画面でも：状態の1行の「いちばん上」は、今やるの列の一番上（自分の番のもの）と同じカード
+        const want = await pg.evaluate(() => { const mine = new Set(LK.cards.filter((c) => c && !c.deleted && c.owner !== 'agent').map((c) => c.doc_id)); const el = [...document.querySelectorAll('#lane-now .card[data-id]')].find((e) => mine.has(e.dataset.id)); return el ? LK.cards.find((c) => c.doc_id === el.dataset.id).title : ''; });
+        check(!want || text.includes(`「${want.length > 24 ? want.slice(0, 24) + '…' : want}」`), `朝のまとめの「いちばん上」が、画面の今やるの列の一番上と同じ（${want}｜${text}）`);
+      }
       check(day === '"2026-10-29"' && /おはようございます。やること \d+ 件/.test(text), `7時を過ぎたら朝のまとめを状態の1行に出し、日付を覚える（${day}｜${text}）`);
       await pg.waitForTimeout(6500);
       check(await pg.$eval('#lkStatus', (e) => e.classList.contains('morning') && !e.classList.contains('gone')), '朝のまとめは6秒で消さない（押すまで残す）');
@@ -1045,10 +1056,14 @@ try {
     await pg.waitForSelector('#talkLog .picks button', { timeout: 8000 }).catch(() => {});
     const picks = await pg.evaluate(() => [...document.querySelectorAll('#talkLog .picks button')].map((b) => ({ t: b.textContent, h: b.getBoundingClientRect().height })));
     check(picks.map((p) => p.t).join('|') === '済み|あとで|保留|次' && picks.every((p) => p.h >= 44), `ポチが聞いたら、押して答えるボタンを出す（44px 以上：${JSON.stringify(picks)}）`);
-    check(await pg.evaluate(() => document.querySelector('#talkLog .picks').getAttribute('aria-label') === 'ポチに答える'), '押して答えるボタンの組に名前がある（読み上げ）');
-    await pg.click('#talkLog .picks button:first-child');
+    // 11/5 の定期点検（重さ3）：直前に2枚の名前が出ることがあり、ボタンがどのカードに効くか分からなかった。ボタンの上に対象のカードを1行、組の名前にも
+    const tgt = await pg.evaluate(() => { const p = document.querySelector('#talkLog .picks'); return { label: p.getAttribute('aria-label'), line: p.querySelector('.for')?.textContent || '', first: p.firstElementChild?.className }; });
+    check(tgt.label === `「${q1}」に答える` && tgt.line.includes(q1.slice(0, 24)) && tgt.first === 'for', `押して答えるボタンの上に、どのカードに効くかを1行出し、組の名前にもする（${JSON.stringify(tgt)}）`);
+    await pg.click('#talkLog .picks button:first-of-type');
     await waitCards((cs) => cs.find((c) => c.title === q1)?.lane === 'done', `押して答える：「済み」を押すと1枚目（${q1}）を済みにする`);
     const after = await pg.evaluate(() => ({ you: [...document.querySelectorAll('#talkLog .you')].map((d) => d.textContent.replace(/^あなた：/, '')), n: document.querySelectorAll('#talkLog .picks').length }));
+    const undo = await pg.evaluate(() => !![...document.querySelectorAll('#talkLog .ai')].slice(-2).find((d) => d.querySelector('button.undo')));
+    check(undo, '押して答えるで「済み」にしたら、ポチの返事に「戻す」が付く（11/5 の点検）');
     check(after.you.includes('済み') && after.n === 1, `押した言葉が会話に残り、ボタンは最後の問いの下の1組だけ（${JSON.stringify(after)}）`);
     // 雑談が続いたあとの「カードも見る？」には「見る」「今はいい」。「今はいい」を押すとカードの話に戻らない
     let offer = [];
@@ -1059,7 +1074,7 @@ try {
     check(offer.join('|') === '見る|今はいい', `雑談のあとの「カードも見る？」に「見る」「今はいい」のボタン（${offer.join('|')}）`);
     if (offer.length) {
       // キーで押したら、フォーカスは打つ欄へ（消えたボタンから飛ばない。WCAG 2.4.3）。カードを残すため「今はいい」で見る（10/24 から確認のカードは聞かないので、聞くカードは2枚）
-      await pg.focus('#talkLog .picks button:nth-child(2)'); await pg.keyboard.press('Enter'); await pg.waitForTimeout(300);
+      await pg.focus('#talkLog .picks button:nth-of-type(2)'); await pg.keyboard.press('Enter'); await pg.waitForTimeout(300);
       check(await pg.evaluate(() => document.activeElement?.id === 'talkIn'), 'キーで答えのボタンを押したら、フォーカスは打つ欄へ移る');
       const last = await pg.evaluate(() => [...document.querySelectorAll('#talkLog .ai')].pop()?.textContent || '');
       check(/またあとで|ゆっくり話そ/.test(last), `「今はいい」を押すと、カードの話にしない（${last.slice(0, 40)}）`);

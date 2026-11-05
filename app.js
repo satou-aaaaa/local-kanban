@@ -502,7 +502,11 @@
     // ポチが聞いたときは、押して答えるボタンを出す（打たなくても話さなくても答えられる。押した言葉は会話に残る）
     const opts = who === 'ai' ? (talk?.choices || []) : [];
     if (opts.length) {
-      const p = document.createElement('div'); p.className = 'picks'; p.setAttribute('role', 'group'); p.setAttribute('aria-label', 'ポチに答える'); p.setAttribute('aria-live', 'off'); // ボタンの字を発言の続きとして読み上げない
+      const p = document.createElement('div'); p.className = 'picks'; p.setAttribute('role', 'group'); p.setAttribute('aria-live', 'off'); // ボタンの字を発言の続きとして読み上げない
+      // どのカードに効くかをボタンの上に1行（直前に2枚の名前が出ることがあり、分からなかった。11/5 の定期点検 重さ3）
+      const on = talk?.state?.card || '';
+      p.setAttribute('aria-label', on ? `「${on}」に答える` : 'ポチに答える');
+      if (on) { const f = document.createElement('p'); f.className = 'for'; f.setAttribute('aria-hidden', 'true'); f.textContent = `「${on.length > 24 ? on.slice(0, 24) + '…' : on}」を`; p.appendChild(f); }
       for (const o of opts) { const b = document.createElement('button'); b.type = 'button'; b.textContent = o; if (o === '次') b.setAttribute('aria-label', '次のカードへ');
         b.onclick = (e) => { p.remove(); if (!e.pointerType) $('#talkIn')?.focus({ preventScroll: true }); talk?.hear(o, { voice: false }); }; p.appendChild(b); } // キーで押したときは打つ欄へ（消えたボタンからフォーカスが飛ばない）
       box.appendChild(p);
@@ -1078,21 +1082,28 @@
   // 数え方は前の定期実行と同じ：消した・済み・保留・予定待ち以外で、答えていない確認がある／担当が自分で期限切れ／担当が自分で「今やる」。
   // 昨日（日本の日付）済んだものも数える（担当が agent なら AI、ほかは自分）。日本時間の 7 時を過ぎて、その日初めて数えたときに1回だけ出す
   // （開いていれば 7 時に、閉じていれば次に開いたときに）。知らせを入にしていれば端末の通知でも出す。どちらも 0 件なら何も出さない
-  function morningText(cs, nowMs = Date.now()) {
+  function morningText(cs, nowMs = Date.now(), shown = []) {
     const jst = ms => new Date(ms + 9 * 3600e3).toISOString().slice(0, 10);
     const day = jst(nowMs), yday = jst(nowMs - 864e5);
     const live = (cs || []).filter(c => c && !c.deleted && !['done', 'hold', 'wait'].includes(c.lane));
     const ask = c => !!c.decision && !c.answer;
     const late = c => c.owner !== 'agent' && !!c.due && c.due < day;
     const mine = live.filter(c => ask(c) || late(c) || (c.owner !== 'agent' && c.lane === 'now'));
-    const top = [...mine].sort((a, b) => (a.lane === 'now' ? 0 : 1) - (b.lane === 'now' ? 0 : 1) || (a.order || 0) - (b.order || 0))[0];
+    // いちばん上は、画面の「今やる」の列で見えている順（shown＝画面の並びの doc_id）を先に使う。ボードの並べ方（答え待ち・期限が先など）と
+    // order だけの並びが食い違い、あいさつの「いちばん上」と列の一番上が別のカードになっていた（11/5 の定期点検 重さ3）
+    const pos = new Map((shown || []).map((id, i) => [id, i]));
+    const rank = c => pos.has(c.doc_id) ? pos.get(c.doc_id) : 1e6;
+    const top = [...mine].sort((a, b) => (a.lane === 'now' ? 0 : 1) - (b.lane === 'now' ? 0 : 1) || rank(a) - rank(b) || (a.order || 0) - (b.order || 0))[0];
+    // あいさつは時刻に合わせる（夜に初めて開くと「おはようございます」とポチの「こんばんは」が並んでいた。ポチと同じ区切り＝talk.js の partOfDay）
+    const h = new Date(nowMs + 9 * 3600e3).getUTCHours();
+    const hi = h >= 5 && h < 11 ? 'おはようございます' : h >= 11 && h < 17 ? 'こんにちは' : 'こんばんは';
     const done = (cs || []).filter(c => c && !c.deleted && c.lane === 'done' && c.done_at && jst(Date.parse(c.done_at)) === yday);
     // 言葉はボードの「satouさんがやること」とそろえる（数え方も同じ）。画面の1行は短く、昨日の分は通知だけ（画面には「✓ 済み 昨日N」がある）
     const lines = [], short = [];
     if (mine.length) {
       const t = String(top.title || ''), name = t.length > 24 ? t.slice(0, 24) + '…' : t;
-      lines.push(`おはようございます。satouさんがやることが ${mine.length} 件（答える ${mine.filter(ask).length}・期限切れ ${mine.filter(late).length}）。いちばん上は「${name}」です。`);
-      short.push(`おはようございます。やること ${mine.length} 件。いちばん上「${name}」（押すと開く）`);
+      lines.push(`${hi}。satouさんがやることが ${mine.length} 件（答える ${mine.filter(ask).length}・期限切れ ${mine.filter(late).length}）。いちばん上は「${name}」です。`);
+      short.push(`${hi}。やること ${mine.length} 件。いちばん上「${name}」（押すと開く）`);
     }
     if (done.length) {
       const ai = done.filter(c => c.owner === 'agent').length;
@@ -1103,7 +1114,8 @@
   function morningTick(now = Date.now()) {
     if (!L.ready || !Array.isArray(L.cards) || !L.cards.length) return;
     const hour = new Date(now + 9 * 3600e3).getUTCHours();
-    const m = morningText(L.cards, now);
+    const shown = [...document.querySelectorAll('#lane-now .card[data-id]')].map(e => e.dataset.id).filter(Boolean); // 画面の今やるの並び
+    const m = morningText(L.cards, now, shown);
     if (hour < 7 || ls.get('morning') === m.day) return;
     ls.set('morning', m.day);
     if (!m.lines.length) return;
