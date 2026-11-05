@@ -1111,8 +1111,12 @@
     }
     return { day, lines, short: short[0] || '', top: top?.doc_id };
   }
+  let morningWait = 0;
   function morningTick(now = Date.now()) {
     if (!L.ready || !Array.isArray(L.cards) || !L.cards.length) return;
+    // 届いたカードを画面が描く前に数えると、画面の並び（shown）が空で別のカードを「いちばん上」と言う（v60 の点検）。描くまで少し待つ
+    if (!document.querySelector('#lane-now .card[data-id]') && L.cards.some(c => c && !c.deleted && c.lane === 'now') && morningWait < 20) { morningWait++; setTimeout(() => { try { morningTick(now); } catch {} }, 250); return; }
+    morningWait = 0;
     const hour = new Date(now + 9 * 3600e3).getUTCHours();
     const shown = [...document.querySelectorAll('#lane-now .card[data-id]')].map(e => e.dataset.id).filter(Boolean); // 画面の今やるの並び
     const m = morningText(L.cards, now, shown);
@@ -1120,7 +1124,11 @@
     ls.set('morning', m.day);
     if (!m.lines.length) return;
     // 画面の1行は押すまで残す（1日1回なので、6秒で消すと読み切れない。v58 の点検）。押すといちばん上のカードを開く
-    if (m.short) { setStatus(m.short, 'morning'); $('#lkStatus').dataset.card = m.top; }
+    if (m.short) {
+      setStatus(m.short, 'morning'); const s = $('#lkStatus'); s.dataset.card = m.top;
+      // キーでも押せるよう、中身はボタンにする（role=status の入れ物は知らせるだけ。v60 の点検・WCAG 2.1.1・4.1.2）
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'lk-morning'; b.textContent = m.short; s.replaceChildren(b);
+    }
     if (notifyOn()) {
       const opt = { body: m.lines.slice(1).join('\n') || ' ', tag: 'morning:' + m.day, icon: 'icon-192.png', badge: 'icon-192.png', data: { url: './', card: m.top } };
       const head = m.lines[0] || m.lines[1];
@@ -1141,7 +1149,7 @@
     window.claude.use('db').then(db => { let first = true; db.collection('cards').onSnapshot(() => {
       scanNotify(L.cards, first && !ls.get('notified')); first = false;
       try { pochiTick(); } catch {}
-      try { morningTick(); } catch {}
+      setTimeout(() => { try { morningTick(); } catch {} }, 0); // ボードが同じ知らせで描き直したあとに数える
       // インストールしたアプリのアイコンに数を出す（Badging API。対応していない端末では何もしない）。
       // ボードに「返事が来た」の印（repliedToYou・ボード版44）があれば、「返事あり＋答える」の枚数（ボード版45）。無い古いボードでは「今やる」の枚数
       const ask = c => !c.deleted && c.decision && !c.answer && !['done', 'hold', 'wait'].includes(c.lane);

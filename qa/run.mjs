@@ -573,8 +573,9 @@ try {
       check(day === '"2026-10-29"' && /(おはようございます|こんにちは|こんばんは)。やること \d+ 件/.test(text), `7時を過ぎたら朝のまとめを状態の1行に出し、日付を覚える（${day}｜${text}）`);
       await pg.waitForTimeout(6500);
       check(await pg.$eval('#lkStatus', (e) => e.classList.contains('morning') && !e.classList.contains('gone')), '朝のまとめは6秒で消さない（押すまで残す）');
-      await pg.click('#lkStatus');
-      check(await pg.waitForFunction(() => document.querySelector('dialog#detail')?.open, null, { timeout: 5000 }).then(() => true, () => false) && await pg.$eval('#lkStatus', (e) => e.classList.contains('gone')), '朝のまとめを押すと、いちばん上のカードが開いて1行は消える');
+      check(await pg.$eval('#lkStatus', (e) => !!e.querySelector('button.lk-morning') && e.querySelector('button.lk-morning').textContent === e.textContent), '朝のまとめの1行の中身はボタン（キーでも押せる。v60 の点検）');
+      await pg.focus('#lkStatus button.lk-morning'); await pg.keyboard.press('Enter'); // キーで押す
+      check(await pg.waitForFunction(() => document.querySelector('dialog#detail')?.open, null, { timeout: 5000 }).then(() => true, () => false) && await pg.$eval('#lkStatus', (e) => e.classList.contains('gone')), '朝のまとめをキー（Enter）で押すと、いちばん上のカードが開いて1行は消える');
       await pg.keyboard.press('Escape');
       await pg.evaluate(() => { document.querySelector('#lkStatus').textContent = ''; });
       await pg.evaluate((ms) => LK.morningTick(ms), now);
@@ -2538,6 +2539,15 @@ try {
   {
     const r = await page.evaluate(() => { const shown = [...document.querySelectorAll('#lane-now .card[data-id]')].map((e) => e.dataset.id); const m = LK.morning(LK.cards, Date.now(), shown); const mine = new Set(LK.morning.length ? LK.cards.filter((c) => c && !c.deleted && ((c.decision && !c.answer) || (c.owner !== 'agent' && c.lane === 'now'))).map((c) => c.doc_id) : []); return { top: m.top, first: shown.find((id) => mine.has(id)) || null }; });
     check(!r.first || r.top === r.first, `朝のまとめの「いちばん上」は、画面の今やるの列の一番上と同じカード（${JSON.stringify(r)}）`);
+    // 実際に出す1行（morningTick。画面の並びを読む）でも同じか。日本時間の7時より前は出ないので見ない
+    if (new Date(Date.now() + 9 * 3600e3).getUTCHours() >= 7) {
+      const pm = await context.newPage(); await pm.goto(base); await ready(pm); await pm.waitForTimeout(1500);
+      await pm.evaluate(() => { localStorage.removeItem('lk.morning'); LK.morningTick(); });
+      await pm.waitForFunction(() => document.querySelector('#lkStatus')?.classList.contains('morning'), null, { timeout: 8000 }).catch(() => {});
+      const st = await pm.evaluate(() => { const first = [...document.querySelectorAll('#lane-now .card[data-id]')].map((e) => LK.cards.find((c) => c.doc_id === e.dataset.id)).find((c) => c && !c.deleted && ((c.decision && !c.answer) || (c.owner !== 'agent' && c.lane === 'now'))); return { text: document.querySelector('#lkStatus').textContent, first: first?.title || '' }; });
+      check(!st.first || st.text.includes(`「${st.first.length > 24 ? st.first.slice(0, 24) + '…' : st.first}」`), `開いたときの朝のまとめの1行も、今やるの列の一番上のカードを言う（${st.first}｜${st.text}）`);
+      await pm.close();
+    }
   }
   // ボード v64「まとめて選ぶ」のあいだ（body.selecting）は、下に固定の帯が出るので隅のポチを出さない（帯の下に隠れて重なる。v50）
   {
