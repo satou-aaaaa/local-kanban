@@ -4,13 +4,15 @@
 # Claude Code のクラウドセッションでは .claude/settings.json の SessionStart フックが自動で呼ぶ。
 # CI の Setup check（共通部品）が、まっさらな環境でこれが通るかを確かめる。
 # ひな形: satou-aaaaa/shared-workflows の template/scripts/setup.sh。アプリ本体はビルド不要なので、要るのは検査（qa/）の部品だけ。
-# ひな形の版: 3（ブラウザの探し方と名前 PW_CHROMIUM だけこのリポジトリ用）
+# ひな形の版: 4（ブラウザの探し方と名前 PW_CHROMIUM だけこのリポジトリ用）
 #   2: 依存は毎回 npm ci・ブラウザが無ければ止める・このシェルで要る操作（nvm use・export）を最後に出す（shared-workflows incidents/2026-11-03-setup-false-ready.md）
 #   3: nvm.sh を --no-use で読む（.nvmrc の版が入っていないと、読んだだけで何も言わずに止まっていた。shared-workflows incidents/2026-11-04-setup-nvm-silent-stop.md）
+#   4: ブラウザの場所はファイルかも見る（-x だけだとフォルダでも通った。2026-11-05 CodeRabbit が bunshi-tsukuri #1 で指摘）
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 fail() { echo "✗ $*" >&2; exit 1; }
+runnable() { [ -f "$1" ] && [ -x "$1" ]; }   # 動かせるファイルか（フォルダも -x では通るので -f も見る）
 # 準備のあと、このシェルで打つ必要がある操作。1つでもあれば最後に「✓」を出さない
 todo=()
 # 環境変数を以後のコマンドに渡す。クラウドセッションは CLAUDE_ENV_FILE に書く。
@@ -44,15 +46,15 @@ if [ "${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-}" = 1 ]; then
   # 名前は Playwright の版で違う（headless_shell・chrome-headless-shell）。CI と同じ headless shell を優先し、無ければ普通の chromium
   hs=''
   for f in /opt/pw-browsers/chromium_headless_shell-*/*/headless_shell /opt/pw-browsers/chromium_headless_shell-*/*/chrome-headless-shell /opt/pw-browsers/chromium; do
-    if [ -x "$f" ]; then hs=$f; break; fi
+    if runnable "$f"; then hs=$f; break; fi
   done
   if [ -n "${PW_CHROMIUM:-}" ]; then
-    [ -x "$PW_CHROMIUM" ] || fail "PW_CHROMIUM=$PW_CHROMIUM が動かせない（ブラウザの場所を直すか、unset PW_CHROMIUM）"
+    runnable "$PW_CHROMIUM" || fail "PW_CHROMIUM=$PW_CHROMIUM が動かせない（ブラウザの場所を直すか、unset PW_CHROMIUM）"
   elif [ -n "$hs" ]; then
     session_env "PW_CHROMIUM=$hs"
   else
     def=$(cd qa && node -e 'try{process.stdout.write(require("playwright").chromium.executablePath())}catch{}' 2>/dev/null || true)
-    [ -n "$def" ] && [ -x "$def" ] || fail "使えるブラウザが無い（PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 で取ってこない設定）。PW_CHROMIUM にブラウザの場所を入れるか、(cd qa && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD= npx playwright install chromium)"
+    [ -n "$def" ] && runnable "$def" || fail "使えるブラウザが無い（PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 で取ってこない設定）。PW_CHROMIUM にブラウザの場所を入れるか、(cd qa && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD= npx playwright install chromium)"
   fi
 else
   (cd qa && npx playwright install chromium)
