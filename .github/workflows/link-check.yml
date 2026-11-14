@@ -11,6 +11,17 @@ on:
   pull_request:
     paths:
       - .github/workflows/link-check.yml
+  # 直した設定がマージされたら main でも1回動かす。動かさないと main の最新の実行は赤のまま残り、
+  # PR の「Closes #N」で閉じた Issue を見回りが開き直す（2026-11-05 shared-workflows incidents/2026-11-05-link-check-not-rerun-on-main.md）
+  # 調べるファイルのリンクを直したときも動かす
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/link-check.yml
+      - "*.html"
+      - "notes/*.html"
+      - "*.md"
+      - "vendor/*.md"
 
 permissions:
   contents: read
